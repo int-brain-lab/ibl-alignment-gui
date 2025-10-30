@@ -1,7 +1,7 @@
 [project]
 name = "ibl_alignment_gui"
 version = "0.1.0"
-description = "Default template for PDM package"
+description = "Electrophysiology and histology alignment tool"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]

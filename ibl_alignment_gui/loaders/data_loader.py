@@ -292,7 +292,7 @@ class DataLoader(ABC):
             spikes, clusters = self.filter_spikes_by_fr(spikes, clusters)
 
         if spikes['exists']:
-            spikes = self.filter_spikes_by_chns(spikes, clusters, channels)
+            spikes, *_ = self.filter_spikes_by_chns(spikes, clusters, channels)
 
         return spikes, clusters, channels
 
@@ -301,9 +301,9 @@ class DataLoader(ABC):
             spikes: Bunch[str, Any],
             clusters: Bunch[str, Any],
             channels: Bunch[str, Any]
-    ) -> Bunch[str, Any]:
+    ) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
-        Filter spikes only include data relevant to channels present on selected shank.
+        Filter spikes to only include data relevant to channels present on selected shank.
 
         Returns
         -------
@@ -322,7 +322,7 @@ class DataLoader(ABC):
                 continue
             spikes[key] = spikes[key][spikes_idx]
 
-        return spikes
+        return spikes, clusters, channels
 
     def filter_raw_by_chns(self, data: Bunch[str, Any]) -> Bunch[str, Any]:
         """

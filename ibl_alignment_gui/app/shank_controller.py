@@ -4,7 +4,6 @@ import pyqtgraph as pg
 from ibl_alignment_gui.app.shank_view import ShankView
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
 from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
-from ibl_alignment_gui.plugins.cluster_popup import callback as cluster_callback
 from iblutil.util import Bunch
 
 

@@ -1,14 +1,16 @@
 import numpy as np
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
 from brainbox.population.decode import xcorr
 from ibl_alignment_gui.utils.qt.custom_widgets import set_axis
 from ibl_alignment_gui.utils.qt.custom_widgets import PopupWindow
-from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-from ibl_alignment_gui.app.shank_controller import ShankController
-from ibl_alignment_gui.loaders.plot_loader import PlotLoader
+
+if TYPE_CHECKING:
+    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.loaders.plot_loader import PlotLoader
 
 PLUGIN_NAME = 'Cluster Features'
 
@@ -16,7 +18,7 @@ AUTOCORR_BIN_SIZE = 0.5 / 1000
 AUTOCORR_WIN_SIZE = 20 / 1000
 FS = 30000
 
-def setup(controller: AlignmentGUIController) -> None:
+def setup(controller: 'AlignmentGUIController') -> None:
     """
     Set up the Cluster Feature plugin
 
@@ -49,7 +51,7 @@ def setup(controller: AlignmentGUIController) -> None:
     plugin_menu.addAction(action)
 
 
-def callback(controller: AlignmentGUIController, items: ShankController , _ , point: pg.ScatterPlotItem) -> None:
+def callback(controller: 'AlignmentGUIController', items: 'ShankController' , _ , point: pg.ScatterPlotItem) -> None:
     """
     Callback function triggered when a cluster in a scatter plot is clicked.
 
@@ -133,7 +135,7 @@ class ClusterPopupManager:
     popup_status : bool
         Status indicating whether popups are minimised or shown.
     """
-    def __init__(self, controller: AlignmentGUIController):
+    def __init__(self, controller: 'AlignmentGUIController'):
         self.parent_view = controller.view
         self.cluster_popups = []
         self.popup_status = True
@@ -206,7 +208,7 @@ class ClusterPopupManager:
         self.close_popups()
 
 
-def compute_timescales(plot_loader: PlotLoader) -> tuple[np.ndarray, np.ndarray]:
+def compute_timescales(plot_loader: 'PlotLoader') -> tuple[np.ndarray, np.ndarray]:
     """
     Compute time vectors for autocorrelogram and template waveform plots.
 
@@ -230,7 +232,7 @@ def compute_timescales(plot_loader: PlotLoader) -> tuple[np.ndarray, np.ndarray]
 
     return t_autocorr, t_template
 
-def get_autocorr(plot_loader: PlotLoader, clust_idx: int) -> tuple[np.ndarray, int]:
+def get_autocorr(plot_loader: 'PlotLoader', clust_idx: int) -> tuple[np.ndarray, int]:
     """
     Compute the autocorrelogram for a specific cluster.
 
@@ -257,7 +259,7 @@ def get_autocorr(plot_loader: PlotLoader, clust_idx: int) -> tuple[np.ndarray, i
 
     return autocorr[0, 0, :], clust_id
 
-def get_template_wf(plot_loader: PlotLoader, clust_idx: int) -> np.ndarray:
+def get_template_wf(plot_loader: 'PlotLoader', clust_idx: int) -> np.ndarray:
     """
     Retrieve the template waveform for a specific cluster.
 

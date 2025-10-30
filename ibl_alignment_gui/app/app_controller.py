@@ -1,8 +1,7 @@
 import time
 from collections import defaultdict
-from collections.abc import Callable
 from functools import wraps
-from typing import Any
+from typing import Any, Callable
 
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
@@ -16,8 +15,10 @@ from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerONE,
 )
 from ibl_alignment_gui.plugins.qc_dialog import display as display_qc
+from ibl_alignment_gui.plugins.add_plugins import Plugins
 from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
 from iblutil.util import Bunch
+
 
 
 def shank_loop(func: Callable) -> Callable:
@@ -143,7 +144,7 @@ class AlignmentGUIController:
             self.model = ProbeHandlerCSV(csv)
             self.view.populate_selection_dropdown('subject', self.model.get_subjects())
         else:
-            self.model= ProbeHandlerONE()
+            self.model = ProbeHandlerONE()
             self.view.populate_selection_dropdown('subject', self.model.get_subjects())
 
         # Keep track of whether data has been loaded or not
@@ -187,10 +188,12 @@ class AlignmentGUIController:
 
         # Plugin management
         self.blockPlugins: bool = False
-        self.plugins: dict = dict()
 
         # Setup all callbacks
         self.setup_connections()
+
+        # Setup plugins
+        plugins = Plugins(self)
 
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
@@ -309,6 +312,14 @@ class AlignmentGUIController:
             plug_func = plug.get(func, None)
             if plug_func is not None:
                 plug_func(self, *args, **kwargs)
+
+    def connect_cluster_plugin(self, items: ShankController) -> None:
+        """Connect the cluster popup plugin to the scatter plot."""
+        if 'Cluster Popup' in self.plugins and items.cluster:
+            scatter = items.view.ephys_plot
+            scatter.sigClicked.connect(
+                lambda plot, points: self.plugins['Cluster Popup']['callback'](self, items, plot, points)
+            )
 
     # --------------------------------------------------------------------------------------------
     # Shank controllers
@@ -535,12 +546,12 @@ class AlignmentGUIController:
         if self.model.selected_config == 'both':
             levels = self.get_normalised_levels(f"{plot_type}_plots", plot_key)
             setattr(self, level_attr, levels)
-            results = self._plot_panels(plot_key, plot_func, level_attr, data_only, **kwargs)
+            results = self._plot_panels(plot_key, plot_type, plot_func, level_attr, data_only, **kwargs)
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
             setattr(self, level_attr, Bunch.fromkeys(self.all_shanks, None))
-            self._plot_panels(plot_key, plot_func, level_attr, data_only, **kwargs)
+            self._plot_panels(plot_key,plot_type, plot_func, level_attr, data_only, **kwargs)
 
         # Optional plugin event
         if plugin_event:
@@ -551,6 +562,7 @@ class AlignmentGUIController:
             self,
             items: ShankController,
             plot_key: str,
+            plot_type: str,
             plot_func: str,
             level_attr: str,
             data_only: bool = True,
@@ -567,6 +579,10 @@ class AlignmentGUIController:
         plot_func = getattr(items, plot_func)
         levels = getattr(self, level_attr)[kwargs.get('shank')]
         cbar = plot_func(plot_key, levels=levels)
+
+        if plot_type == 'scatter':
+            self.connect_cluster_plugin(items)
+
         return Bunch(shank=kwargs.get('shank'), config=kwargs.get('config'), cbar=cbar)
 
     def plot_scatter_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:

@@ -255,8 +255,6 @@ class ShankHandler:
             self.cluster_chns = self.raw_data['clusters']['channels']
         elif self.chn_depths is not None:
             self.cluster_chns = np.arange(self.chn_depths.size)
-        else:
-            self.cluster_chns = None
 
         if self.chn_coords is not None and self.loaders['align'].xyz_picks is not None:
             # Load the alignment handler
@@ -288,7 +286,7 @@ class ShankHandler:
         self.loaders['plots'].compute_rasters()
         self.loaders['plots'].get_plots()
 
-    def upload_data(self) -> None:
+    def upload_data(self) -> str:
         """Upload the data, save the channels and the alignments."""
         data = {'chn_coords': self.chn_coords,
                 'xyz_channels': self.align_handle.xyz_channels,

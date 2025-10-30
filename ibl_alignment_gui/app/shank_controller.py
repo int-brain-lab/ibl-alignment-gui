@@ -4,6 +4,7 @@ import pyqtgraph as pg
 from ibl_alignment_gui.app.shank_view import ShankView
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
 from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
+from ibl_alignment_gui.plugins.cluster_popup import callback as cluster_callback
 from iblutil.util import Bunch
 
 
@@ -34,6 +35,10 @@ class ShankController:
         The model containing all the data for the shank and config combination
     view: ShankView
         The view containing all the plots for the shank and config combination
+    cluster: bool
+        Whether the chosen scatter plot contains cluster data
+    cluster_data: np.ndarray | None
+        The cluster data for the chosen scatter plot if it exists
     """
 
     def __init__(self, model: ShankHandler, name: str, index: int, config: str):
@@ -43,6 +48,8 @@ class ShankController:
         self.config: str = config
         self.model: ShankHandler = model
         self.view: ShankView = ShankView(self.name, self.index, self.config)
+        self.cluster: bool = False
+        self.cluster_data: np.ndarray | None = None
 
     def init_reference_line_arrays(self):
         """" See :meth:`ShankView.init_reference_line_arrays` for details."""
@@ -163,6 +170,12 @@ class ShankController:
         """
         data = self.model.scatter_plots.get(plot_key, None)
         cbar = self.view.plot_scatter(data, levels=levels)
+
+        if data and data.cluster:
+            self.cluster_data = data.x
+            self.cluster = True
+        else:
+            self.cluster = False
 
         return cbar
 

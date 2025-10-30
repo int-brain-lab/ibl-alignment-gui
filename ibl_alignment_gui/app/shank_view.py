@@ -553,7 +553,7 @@ class ShankView:
 
     def plot_scatter(
             self,
-            data: ScatterData,
+            data: ScatterData | None,
             levels: list | np.ndarray | None = None
     ) -> ColorBar | None:
         """
@@ -610,7 +610,7 @@ class ShankView:
         """Clear items from the scatter plot."""
         self.line_item = self.remove_items(self.fig_line, self.line_item)
 
-    def plot_line(self, data: LineData) -> None:
+    def plot_line(self, data: LineData | None) -> None:
         """
         Plot a 1D line plot of electrophysiology data.
 
@@ -642,7 +642,7 @@ class ShankView:
 
     def plot_probe(
             self,
-            data: ProbeData,
+            data: ProbeData | None,
             levels: list | np.ndarray | None = None
     ) -> ColorBar | None:
         """

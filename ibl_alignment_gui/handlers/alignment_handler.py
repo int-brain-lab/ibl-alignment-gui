@@ -360,7 +360,8 @@ class AlignmentHandler:
 
 
     def scale_hist_data(
-            self, line_track: np.ndarray,
+            self,
+            line_track: np.ndarray,
             line_feature: np.ndarray,
             extend_feature: int = 1,
             lin_fit: bool = True
@@ -381,7 +382,7 @@ class AlignmentHandler:
             Factor for extending the feature alignment beyond original extremes.
         lin_fit : bool, optional
             Whether to apply linear fitting to adjust extremes. Only applied when number of
-            fit lines > 5
+            fit lines >= 5
         """
         self.buffer.next_idx_to_fill()
 

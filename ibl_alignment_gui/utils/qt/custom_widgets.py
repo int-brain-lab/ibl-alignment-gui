@@ -1,7 +1,7 @@
 import random
 from abc import abstractmethod
 from collections import defaultdict
-from collections.abc import Callable
+from typing import Callable
 
 import matplotlib as mpl
 import numpy as np

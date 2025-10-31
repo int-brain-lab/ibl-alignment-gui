@@ -131,7 +131,7 @@ class ClusterPopupManager:
     parent_view : QtWidgets.QMainWindow
         The main window of the application.
     cluster_popups : list
-        List of currently open cluster popups.
+        A list of currently open cluster popups.
     popup_status : bool
         Status indicating whether popups are minimised or shown.
     """
@@ -142,7 +142,7 @@ class ClusterPopupManager:
 
     def add_popup(self, shank: str, clust_no: int, config: str, data: dict[str, Any]) -> None:
         """
-        Add a new cluster popup to the manager and setup its signals.
+        Add a new cluster popup to the manager and set up its signals.
 
         Parameters
         ----------

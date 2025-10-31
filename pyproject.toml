@@ -5,7 +5,18 @@ description = "Electrophysiology and histology alignment tool"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
-dependencies = []
+dependencies = [
+  "qtpy>=2.4.1",
+  "numpy",
+  "pyqtgraph>=0.13.7",
+  "ONE-api>=3.0.0",
+  "iblutil>=1.20.0",
+  "ibl-neuropixel>=1.9.0",
+  "ibllib",
+  "iblatlas",
+  "matplotlib"
+]
+
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}

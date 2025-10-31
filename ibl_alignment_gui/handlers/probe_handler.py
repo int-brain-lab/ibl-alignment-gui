@@ -675,7 +675,7 @@ class ProbeHandlerCSV(ProbeHandler):
         return NrrdSliceLoader(hist_path, self.brain_atlas)
 
     def initialise_shanks(self) -> None:
-        """Initiliase each shank and config with with the selected loaders."""
+        """Initialise each shank and config with the selected loaders."""
         self.shanks = defaultdict(Bunch)
         user = params.get().ALYX_LOGIN
 

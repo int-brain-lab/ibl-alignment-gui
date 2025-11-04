@@ -14,7 +14,8 @@ dependencies = [
   "ibl-neuropixel>=1.9.0",
   "ibllib",
   "iblatlas",
-  "matplotlib"
+  "matplotlib",
+  "simpleitk"
 ]
 
 requires-python = ">=3.10"

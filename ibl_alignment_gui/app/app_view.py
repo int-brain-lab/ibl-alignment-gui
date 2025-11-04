@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np

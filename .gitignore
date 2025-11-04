@@ -168,3 +168,9 @@ cython_debug/
 #  want CI to mimic the installation on user site to ensure that the current
 #  version on PyPI doesn't break anything, then do not submit the pdm.lock file.
 pdm.lock
+
+# macOS
+# General
+.DS_Store
+.AppleDouble
+.LSOverride

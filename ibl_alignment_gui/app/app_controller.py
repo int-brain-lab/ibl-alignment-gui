@@ -1,7 +1,6 @@
 import time
 from collections import defaultdict
-from functools import wraps
-from typing import Any, Callable
+from collections.abc import Callable
 
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
@@ -14,61 +13,11 @@ from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerLocal,
     ProbeHandlerONE,
 )
-from ibl_alignment_gui.plugins.qc_dialog import display as display_qc
 from ibl_alignment_gui.plugins.add_plugins import Plugins
+from ibl_alignment_gui.plugins.qc_dialog import display as display_qc
 from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
+from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
-
-
-
-def shank_loop(func: Callable) -> Callable:
-    """
-    Iterate over multiple shanks and configurations.
-
-    This decorator allows a method to be called automatically for each
-    combination of shank and configuration, collecting the results.
-
-    Behavior
-    --------
-    - If no `shanks` are provided in `kwargs`, `self.all_shanks` is used.
-    - If no `configs` are provided in `kwargs`, `self.model.configs` is used.
-    - If `data_only` is False, shanks without alignment (`align_exists`) are skipped.
-    - The decorated function is called with additional keyword arguments
-
-    Parameters
-    ----------
-    func : Callable
-        The instance method to decorate. It must accept:
-        `self, items, *args, **kwargs` (with `shank` and `config` in kwargs).
-
-    Returns
-    -------
-    Callable
-        A wrapped method that, when called, loops over the specified (or default)
-        shanks and configurations, calling the original method for each, and
-        returning a list of results.
-    """
-    @wraps(func)
-    def wrapper(self, *args, **kwargs) -> Any:
-
-        shanks = kwargs.pop('shanks', self.all_shanks)
-        shanks = self.all_shanks if shanks is None else shanks
-        configs = kwargs.pop('configs', self.model.configs)
-        configs = self.model.configs if configs is None else configs
-        data_only = kwargs.pop('data_only', False)
-
-        results = []
-        for config in configs:
-            for shank in shanks:
-                if not self.model.get_current_shank(shank, config).align_exists and not data_only:
-                    continue
-
-                result = func(self, self.shank_items[shank][config], *args, **kwargs,
-                              shank=shank, config=config)
-                results.append(result)
-        return results
-
-    return wrapper
 
 
 class AlignmentGUIController:
@@ -193,7 +142,7 @@ class AlignmentGUIController:
         self.setup_connections()
 
         # Setup plugins
-        plugins = Plugins(self)
+        Plugins(self)
 
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
@@ -311,14 +260,15 @@ class AlignmentGUIController:
         for _, plug in self.plugins.items():
             plug_func = plug.get(func, None)
             if plug_func is not None:
-                plug_func(self, *args, **kwargs)
+                plug_func(*args, **kwargs)
 
     def connect_cluster_plugin(self, items: ShankController) -> None:
-        """Connect the cluster popup plugin to the scatter plot."""
-        if 'Cluster Popup' in self.plugins and items.cluster:
+        """Connect the cluster feature plugin to the scatter plot."""
+        if 'Cluster Features' in self.plugins and items.cluster:
             scatter = items.view.ephys_plot
             scatter.sigClicked.connect(
-                lambda plot, points: self.plugins['Cluster Popup']['callback'](self, items, plot, points)
+                lambda plot, points:
+                self.plugins['Cluster Features']['callback'](self, items, plot, points)
             )
 
     # --------------------------------------------------------------------------------------------
@@ -489,8 +439,8 @@ class AlignmentGUIController:
             items: ShankController,
             plot_key: str,
             data_only: bool = True,
-            **kwargs)\
-            -> None:
+            **kwargs
+    )-> None:
         """
         Plot line panels per shank and config.
 
@@ -546,7 +496,8 @@ class AlignmentGUIController:
         if self.model.selected_config == 'both':
             levels = self.get_normalised_levels(f"{plot_type}_plots", plot_key)
             setattr(self, level_attr, levels)
-            results = self._plot_panels(plot_key, plot_type, plot_func, level_attr, data_only, **kwargs)
+            results = self._plot_panels(plot_key, plot_type, plot_func, level_attr,
+                                        data_only, **kwargs)
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
@@ -983,7 +934,7 @@ class AlignmentGUIController:
         Saves channel locations and alignments.
         """
         if not self.offline:
-            display_qc(self.view)
+            display_qc(self)
 
         upload = self.view.upload_prompt()
         if upload:

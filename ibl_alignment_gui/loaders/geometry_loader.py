@@ -296,7 +296,7 @@ class GeometryLoader(ABC):
     def load_channels(self, **kwargs) -> Bunch[str, np.ndarray] | None:
         """Load spike sorting channels data."""
 
-    def get_sites_for_shank(self, shank_idx, sites=None) -> Bunch[str, Any]:
+    def get_sites_for_shank(self, shank_idx: int, sites=None) -> Bunch[str, Any]:
         """
         Get the sites information for a given shank.
 

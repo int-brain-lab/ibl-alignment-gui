@@ -33,7 +33,7 @@ class AlignmentUploader(ABC):
         self.brain_atlas = brain_atlas
 
     @abstractmethod
-    def upload_data(self, *args) -> str:
+    def upload_data(self, *args, **kwargs) -> str:
         """Upload alignment data."""
 
 
@@ -66,7 +66,7 @@ class AlignmentUploaderOne(AlignmentUploader):
 
         super().__init__(brain_atlas)
 
-    def upload_data(self, data: dict[str, Any]) -> str:
+    def upload_data(self, data: dict[str, Any], **kwargs) -> str:
         """
         Upload channels, alignments, and QC to Alyx.
 
@@ -207,7 +207,7 @@ class AlignmentUploaderOne(AlignmentUploader):
         self.one.alyx.rest('trajectories', 'partial_update', id=traj[0]['id'],
                            data={'probe_insertion': self.pid, 'json': alignments})
 
-    def get_user_qc(
+    def set_user_qc(
             self,
             align_qc: str,
             ephys_qc: str,
@@ -314,7 +314,11 @@ class AlignmentUploaderLocal(AlignmentUploader):
         self.orig_idx: np.ndarray | None = None
         super().__init__(brain_atlas)
 
-    def upload_data(self, data: dict[str, Any], shank_sites: Bunch[str, Any]) -> str:
+    def upload_data(
+            self,
+            data: dict[str, Any],
+            shank_sites: Bunch[str, Any] | None = None
+    ) -> str:
         """
         Save channels and alignments to local files.
 

@@ -1,14 +1,14 @@
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
-from typing import Any, TYPE_CHECKING
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
 from brainbox.population.decode import xcorr
-from ibl_alignment_gui.utils.qt.custom_widgets import set_axis
-from ibl_alignment_gui.utils.qt.custom_widgets import PopupWindow
+from ibl_alignment_gui.utils.qt.custom_widgets import PopupWindow, set_axis
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView
     from ibl_alignment_gui.app.shank_controller import ShankController
     from ibl_alignment_gui.loaders.plot_loader import PlotLoader
 
@@ -20,7 +20,7 @@ FS = 30000
 
 def setup(controller: 'AlignmentGUIController') -> None:
     """
-    Set up the Cluster Feature plugin
+    Set up the Cluster Features plugin.
 
     Adds a submenu to the main GUI for managing the cluster popups.
 
@@ -51,9 +51,14 @@ def setup(controller: 'AlignmentGUIController') -> None:
     plugin_menu.addAction(action)
 
 
-def callback(controller: 'AlignmentGUIController', items: 'ShankController' , _ , point: pg.ScatterPlotItem) -> None:
+def callback(
+        controller: 'AlignmentGUIController',
+        items: 'ShankController' ,
+        _ ,
+        point: pg.ScatterPlotItem
+) -> None:
     """
-    Callback function triggered when a cluster in a scatter plot is clicked.
+    Triggered when a cluster in a scatter plot is clicked.
 
     Computes autocorrelation and template waveform for the selected cluster
     and opens a popup showing the plots.
@@ -85,7 +90,9 @@ def callback(controller: 'AlignmentGUIController', items: 'ShankController' , _ 
 
 class ClusterPopup(PopupWindow):
     """
-    A popup qt window per cluster showing plots of the cluster autocorrelogram and template waveform.
+    A popup qt window per cluster.
+
+    Shows plots of the cluster autocorrelogram and template waveform.
 
     Parameters
     ----------
@@ -96,26 +103,31 @@ class ClusterPopup(PopupWindow):
     parent: QtWidgets.QMainWindow or None
         The parent window of the popup.
     """
-    def __init__(self, title, data=None, parent=None):
-        self.data = data
-        super().__init__(title, parent=parent, size=(300, 300), graphics=True)
 
-    def setup(self):
-        """ Configure the plots inside the popup window. """
+    def __init__(self, title: str, view: 'AlignmentGUIView' , data: dict | None =None):
+        self.data = data
+        super().__init__(title, parent=view, size=(300, 300), graphics=True)
+
+    def setup(self) -> None:
+        """Configure the plots inside the popup window."""
         autocorr_plot = pg.PlotItem()
-        autocorr_plot.setXRange(min=np.min(self.data['t_autocorr']), max=np.max(self.data['t_autocorr']))
+        autocorr_plot.setXRange(min=np.min(self.data['t_autocorr']),
+                                max=np.max(self.data['t_autocorr']))
         autocorr_plot.setYRange(min=0, max=1.05 * np.max(self.data['autocorr']))
         set_axis(autocorr_plot, 'bottom', label='T (ms)')
         set_axis(autocorr_plot, 'left', label='Number of spikes')
-        plot = pg.BarGraphItem(x=self.data['t_autocorr'], height=self.data['autocorr'], width=0.24, brush=QtGui.QColor(160, 160, 160))
+        plot = pg.BarGraphItem(x=self.data['t_autocorr'], height=self.data['autocorr'], width=0.24,
+                               brush=QtGui.QColor(160, 160, 160))
         autocorr_plot.addItem(plot)
 
         template_plot = pg.PlotItem()
         plot = pg.PlotCurveItem()
-        template_plot.setXRange(min=np.min(self.data['t_template']), max=np.max(self.data['t_template']))
+        template_plot.setXRange(min=np.min(self.data['t_template']),
+                                max=np.max(self.data['t_template']))
         set_axis(template_plot, 'bottom', label='T (ms)')
         set_axis(template_plot, 'left', label='Amplitude (a.u.)')
-        plot.setData(x=self.data['t_template'], y=self.data['template_wf'], pen=pg.mkPen(color='k', style=QtCore.Qt.SolidLine, width=2))
+        plot.setData(x=self.data['t_template'], y=self.data['template_wf'],
+                     pen=pg.mkPen(color='k', style=QtCore.Qt.SolidLine, width=2))
         template_plot.addItem(plot)
 
         self.popup_widget.addItem(autocorr_plot, 0, 0)
@@ -135,8 +147,9 @@ class ClusterPopupManager:
     popup_status : bool
         Status indicating whether popups are minimised or shown.
     """
+
     def __init__(self, controller: 'AlignmentGUIController'):
-        self.parent_view = controller.view
+        self.view = controller.view
         self.cluster_popups = []
         self.popup_status = True
 
@@ -156,15 +169,15 @@ class ClusterPopupManager:
             A dict containing data to be plotted in the popup.
         """
         name = f'{shank}_{config}' if config else shank
-        clust_popup = ClusterPopup._get_or_create(f'{name}: cluster {clust_no}', data=data,
-                                                  parent=self.parent_view)
+        clust_popup = ClusterPopup._get_or_create(
+            f'{name}: cluster {clust_no}', self.view, data=data)
         clust_popup.closed.connect(self.popup_closed)
         clust_popup.leave.connect(self.popup_left)
         clust_popup.enter.connect(self.popup_entered)
         self.cluster_popups.append(clust_popup)
 
     def minimise_popups(self) -> None:
-        """ Toggle between minimizing and restoring all cluster popups. """
+        """Toggle between minimizing and restoring all cluster popups."""
         self.popup_status = not self.popup_status
         if self.popup_status:
             for pop in self.cluster_popups:
@@ -174,7 +187,7 @@ class ClusterPopupManager:
                 pop.showMinimized()
 
     def close_popups(self) -> None:
-        """ Close all cluster popups and reset the list. """
+        """Close all cluster popups and reset the list."""
         for pop in self.cluster_popups:
             pop.blockSignals(True)
             pop.close()
@@ -194,17 +207,17 @@ class ClusterPopupManager:
             self.cluster_popups.pop(popup_idx)
 
     def popup_left(self) -> None:
-        """ Triggered when the mouse leaves a popup. """
+        """Triggered when the mouse leaves a popup."""
         self.parent_view.raise_()
         self.parent_view.activateWindow()
 
     def popup_entered(self, popup: ClusterPopup) -> None:
-        """ Triggered when the mouse enters a popup. """
+        """Triggered when the mouse enters a popup."""
         popup.raise_()
         popup.activateWindow()
 
     def reset(self) -> None:
-        """ Triggered when the main GUI is closed. Closes all popups and resets the manager. """
+        """Triggered when the main GUI is closed. Closes all popups and resets the manager."""
         self.close_popups()
 
 
@@ -251,11 +264,13 @@ def get_autocorr(plot_loader: 'PlotLoader', clust_idx: int) -> tuple[np.ndarray,
         The cluster id of the selected cluster
     """
     idx = plot_loader.spike_clusters == plot_loader.cluster_idx[clust_idx]
-    autocorr = xcorr(plot_loader.spike_times[idx], plot_loader.spike_clusters[idx], AUTOCORR_BIN_SIZE, AUTOCORR_WIN_SIZE)
+    autocorr = xcorr(plot_loader.spike_times[idx], plot_loader.spike_clusters[idx],
+                     AUTOCORR_BIN_SIZE, AUTOCORR_WIN_SIZE)
     if plot_loader.data['clusters'].get('metrics', {}).get('cluster_id', None) is None:
         clust_id = plot_loader.cluster_idx[clust_idx]
     else:
-        clust_id = plot_loader.data['clusters'].metrics.cluster_id[plot_loader.cluster_idx[clust_idx]]
+        clust_id = plot_loader.data['clusters'].metrics.cluster_id[
+            plot_loader.cluster_idx[clust_idx]]
 
     return autocorr[0, 0, :], clust_id
 
@@ -275,5 +290,6 @@ def get_template_wf(plot_loader: 'PlotLoader', clust_idx: int) -> np.ndarray:
     template_wf: np.ndarray
         The template waveform of the selected cluster
     """
-    template_wf = (plot_loader.data['clusters']['waveforms'][plot_loader.cluster_idx[clust_idx], :, 0])
+    template_wf = (plot_loader.data['clusters']['waveforms'][
+                   plot_loader.cluster_idx[clust_idx], :, 0])
     return template_wf * 1e6

@@ -299,4 +299,4 @@ class ShankHandler:
                 'chn_depths': self.chn_depths,
                 'xyz_picks': self.loaders['align'].xyz_picks,
                 }
-        return self.loaders['upload'].upload_data(data, self.chn_sites)
+        return self.loaders['upload'].upload_data(data, shank_sites=self.chn_sites)

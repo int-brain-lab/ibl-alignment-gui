@@ -1,7 +1,7 @@
 import random
 from abc import abstractmethod
 from collections import defaultdict
-from typing import Callable
+from collections.abc import Callable
 
 import matplotlib as mpl
 import numpy as np
@@ -153,7 +153,7 @@ class PopupWindow(QtWidgets.QWidget):
         return [w for w in app.topLevelWidgets() if isinstance(w, cls)]
 
     @classmethod
-    def _get_or_create(cls, title: str, **kwargs):
+    def _get_or_create(cls, title: str, *args, **kwargs):
         """
         Retrieve an existing PopupWindow with the given title or create a new one.
 
@@ -164,6 +164,8 @@ class PopupWindow(QtWidgets.QWidget):
         ----------
         title : str
             The title of the popup window to retrieve or create.
+        *args
+            Additional args passed to the constructor.
         **kwargs
             Additional keyword arguments passed to the constructor.
 
@@ -175,7 +177,7 @@ class PopupWindow(QtWidgets.QWidget):
         window = next((w for w in cls._instances() if w.isVisible() and
                        w.windowTitle() == title), None)
         if window is None:
-            window = cls(title, **kwargs)
+            window = cls(title, *args, **kwargs)
         else:
             window.showNormal()
             window.activateWindow()

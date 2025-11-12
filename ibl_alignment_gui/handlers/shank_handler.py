@@ -209,6 +209,12 @@ class ShankHandler:
         """
         return self.loaders['plots'].slice_plots
 
+    def reset_levels(self) -> None:
+        """Reset the levels for all image, scatter, line and probe plots."""
+        for plot in [self.image_plots, self.scatter_plots, self.line_plots, self.probe_plots]:
+            for _, data in plot.items():
+                data.levels = np.copy(data.default_levels)
+
     # -------------------------------------------------------------------------
     # Methods of current class
     # -------------------------------------------------------------------------

@@ -9,7 +9,8 @@ if TYPE_CHECKING:
 
 PLUGIN_NAME = "QC dialog"
 
-def setup(controller: 'AlignmentGUIController'):
+
+def setup(controller: 'AlignmentGUIController') -> None:
     """
     Set up the QC dialog and connect its accepted signal to the callback.
 
@@ -22,7 +23,7 @@ def setup(controller: 'AlignmentGUIController'):
     controller.qc_dialog.accepted.connect(lambda: callback(controller))
 
 
-def display(controller: 'AlignmentGUIController'):
+def display(controller: 'AlignmentGUIController', shank: str) -> None:
     """
     Show the QC dialog.
 
@@ -30,7 +31,10 @@ def display(controller: 'AlignmentGUIController'):
     ----------
     controller:
         The main application controller.
+    shank: str
+        The shank identifier for which the QC dialog is displayed.
     """
+    controller.qc_dialog.setWindowTitle(f"QC assessment {shank}")
     controller.qc_dialog.exec_()
 
 
@@ -144,4 +148,3 @@ class QCDialog(QtWidgets.QDialog):
         force_resolve = self.resolve.currentData()
 
         return align_qc, ephys_qc, ephys_desc, force_resolve
-

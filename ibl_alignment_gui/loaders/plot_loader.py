@@ -46,7 +46,9 @@ class ScatterData:
     y : np.ndarray
         y-coordinates of points.
     levels : list or np.ndarray
-        Levels for the color map range.
+        Levels for colormap scaling. These can be updated by the user
+    default_levels : list or np.ndarray
+        Default levels for colormap scaling.
     colours : np.ndarray
         Hex colour or data values for each point.
     pen : string or None
@@ -70,6 +72,7 @@ class ScatterData:
     x: np.ndarray
     y: np.ndarray
     levels: list | np.ndarray
+    default_levels: list | np.ndarray
     colours: np.ndarray
     pen: str | None
     size: np.ndarray
@@ -92,8 +95,10 @@ class ImageData:
         2D array representing image values.
     scale : np.ndarray
         Scaling factors for axes (x and y).
-    levels : np.ndarray
-        Levels for colormap scaling.
+    levels : list or np.ndarray
+        Levels for colormap scaling. These can be updated by the user
+    default_levels : list or np.ndarray
+        Default levels for colormap scaling.
     offset : np.ndarray
         Offset for axes (x and y).
     xrange : np.ndarray
@@ -109,6 +114,7 @@ class ImageData:
     img: np.ndarray
     scale: np.ndarray
     levels: np.ndarray
+    default_levels: list | np.ndarray
     offset: np.ndarray
     xrange: np.ndarray
     xaxis: str
@@ -127,6 +133,10 @@ class LineData:
         x-coordinates of the line.
     y : np.ndarray
         y-coordinates of the line.
+    levels : list or np.ndarray
+        Levels for colormap scaling. These can be updated by the user
+    default_levels : list or np.ndarray
+        Default levels for colormap scaling.
     xrange : np.ndarray
         Range of the x-axis.
     xaxis : str
@@ -135,6 +145,8 @@ class LineData:
 
     x: np.ndarray
     y: np.ndarray
+    levels: np.ndarray
+    default_levels: list | np.ndarray
     xrange: np.ndarray
     xaxis: str
 
@@ -152,8 +164,10 @@ class ProbeData:
         List of channel indices for each bank.
     scale : list of np.ndarray
         List of scaling factors for each bank (x, y).
-    levels : np.ndarray
-        Levels for color mapping.
+    levels : list or np.ndarray
+        Levels for colormap scaling. These can be updated by the user
+    default_levels : list or np.ndarray
+        Default levels for colormap scaling.
     offset : list of np.ndarray
         List of offsets (x, y) for each bank.
     xrange : np.ndarray
@@ -169,7 +183,8 @@ class ProbeData:
     img: list[np.ndarray]
     idx: list[np.ndarray]
     scale: list[np.ndarray]
-    levels: np.ndarray
+    levels: list | np.ndarray
+    default_levels: list | np.ndarray
     offset: list[np.ndarray]
     xrange: np.ndarray
     cmap: str
@@ -364,7 +379,7 @@ class PlotLoader:
         shank_sites: Bunch
             A bunch containing electrode geometry information for given shank
         """
-        self.data =  data
+        self.data = data
         self.shank_sites = shank_sites
 
         self.chn_min = self.shank_sites['sites_min']
@@ -593,6 +608,7 @@ class PlotLoader:
             x=times,
             y=depths,
             levels=amp_range * 1e6,
+            default_levels=amp_range * 1e6,
             colours=spikes_colours,
             pen=None,
             size=spikes_size,
@@ -618,10 +634,13 @@ class PlotLoader:
         Dict
             A dict containing a ScatterData object with key 'Cluster Amp vs Depth vs FR'.
         """
+        levels = np.nanquantile(self.avg_fr[self.cluster_idx], [0, 1])
+
         scatter = ScatterData(
             x=self.avg_amp[self.cluster_idx],
             y=self.avg_depth[self.cluster_idx],
-            levels=np.nanquantile(self.avg_fr[self.cluster_idx], [0, 1]),
+            levels=levels,
+            default_levels=np.copy(levels),
             colours=self.avg_fr[self.cluster_idx],
             pen='k',
             size=np.array(8),
@@ -648,10 +667,13 @@ class PlotLoader:
         Dict
             A dict containing a ScatterData object with key 'Cluster Amp vs Depth vs Duration'.
         """
+        levels = np.array([-1.5, 1.5])
+
         scatter = ScatterData(
             x=self.avg_amp[self.cluster_idx],
             y=self.avg_depth[self.cluster_idx],
-            levels=np.array([-1.5, 1.5]),
+            levels=levels,
+            default_levels=np.copy(levels),
             colours=self.data['clusters']['peakToTrough'][self.cluster_idx],
             pen='k',
             size=np.array(8),
@@ -678,10 +700,13 @@ class PlotLoader:
         Dict
             A dict containing a ScatterData object with key 'Cluster FR vs Depth vs Amp'.
         """
+        levels = np.nanquantile(self.avg_amp[self.cluster_idx], [0, 1])
+
         scatter = ScatterData(
             x=self.avg_fr[self.cluster_idx],
             y=self.avg_depth[self.cluster_idx],
-            levels=np.nanquantile(self.avg_amp[self.cluster_idx], [0, 1]),
+            levels=levels,
+            default_levels=np.copy(levels),
             colours=self.avg_amp[self.cluster_idx],
             pen='k',
             size=np.array(8),
@@ -711,11 +736,13 @@ class PlotLoader:
         """
         xscale = (self.times[-1] - self.times[0]) / self.fr.shape[1]
         yscale = (self.depths[-1] - self.depths[0]) / self.fr.shape[0]
+        levels = np.quantile(np.mean(self.fr.T, axis=0), [0, 1])
 
         img = ImageData(
             img=self.fr.T,
             scale=np.array([xscale, yscale]),
-            levels=np.quantile(np.mean(self.fr.T, axis=0), [0, 1]),
+            levels=levels,
+            default_levels=np.copy(levels),
             offset=np.array([0, self.chn_min]),
             xrange=np.array([self.times[0], self.times[-1]]),
             xaxis='Time (s)',
@@ -744,11 +771,13 @@ class PlotLoader:
         corr = np.corrcoef(bincount)
         corr[np.isnan(corr)] = 0
         scale = (np.max(depths) - np.min(depths)) / corr.shape[0]
+        levels = np.array([np.min(corr), np.max(corr)])
 
         img = ImageData(
             img=corr,
             scale=np.array([scale, scale]),
-            levels=np.array([np.min(corr), np.max(corr)]),
+            levels=levels,
+            default_levels=np.copy(levels),
             offset=np.array([self.chn_min, self.chn_min]),
             xrange=np.array([self.chn_min, self.chn_max]),
             cmap='viridis',
@@ -816,10 +845,10 @@ class PlotLoader:
         img_full = pad_data_to_full_chn_map(self.shank_sites, img)
 
         # Scaling for plotting
-        levels = np.quantile(img, [0.1, 0.9])
         timestamps = self.data[f"rms_{band}"]["timestamps"]
         xscale = (timestamps[-1] - timestamps[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
+        levels = np.quantile(img, [0.1, 0.9])
 
         cmap = "plasma" if band == "AP" else "inferno"
 
@@ -827,6 +856,7 @@ class PlotLoader:
             img=img_full,
             scale=np.array([xscale, yscale]),
             levels=levels,
+            default_levels=np.copy(levels),
             offset=np.array([0, self.chn_min]),
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
@@ -868,14 +898,15 @@ class PlotLoader:
         img_full = pad_data_to_full_chn_map(self.shank_sites, img)
 
         # Scaling for plotting
-        levels = np.quantile(img, [0.1, 0.9])
         xscale = (freq_range[-1] - freq_range[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
+        levels = np.quantile(img, [0.1, 0.9])
 
         img = ImageData(
             img=img_full,
             scale=np.array([xscale, yscale]),
             levels=levels,
+            default_levels=np.copy(levels),
             offset=np.array([0, self.chn_min]),
             cmap='viridis',
             xrange=np.array([freq_range[0], freq_range[-1]]),
@@ -915,7 +946,6 @@ class PlotLoader:
             stims.update({stim_type: self.data['gabor'][stim_type]
                           for stim_type in stim_types[3:]})
 
-
         # Compute normalised event aligned psths
         base_stim = 1
         pre_stim = 0.4
@@ -929,11 +959,13 @@ class PlotLoader:
         for stim_type, aligned_img in stim_events.items():
             xscale = (post_stim + pre_stim) / aligned_img.shape[1]
             yscale = ((self.chn_max - self.chn_min) / aligned_img.shape[0])
+            levels = np.array([-10, 10])
 
             img = ImageData(
                 img=aligned_img.T,
                 scale=np.array([xscale, yscale]),
-                levels=np.array([-10, 10]),
+                levels=levels,
+                default_levels=np.copy(levels),
                 offset=np.array([-1 * pre_stim, self.chn_min]),
                 cmap='bwr',
                 xrange=np.array([-1 * pre_stim, post_stim]),
@@ -962,11 +994,13 @@ class PlotLoader:
             x_range = np.array([0, raw_img.shape[0] - 1]) / self.data['raw_snippets']['fs'] * 1e3
             xscale = (x_range[1] - x_range[0]) / raw_img.shape[0]
             yscale = (self.chn_max - self.chn_min) / raw_img.shape[1]
+            levels = 10 ** (-90 / 20) * 4 * np.array([-1, 1])
 
             img = ImageData(
                 img=raw_img,
                 scale=np.array([xscale, yscale]),
-                levels=10 ** (-90 / 20) * 4 * np.array([-1, 1]),
+                levels=levels,
+                default_levels=np.copy(levels),
                 offset=np.array([0, self.chn_min]),
                 cmap='bone',
                 xrange=x_range,
@@ -1002,6 +1036,8 @@ class PlotLoader:
             x=mean_fr,
             y=depths,
             xrange=np.array([0, np.max(mean_fr)]),
+            levels=np.array([0, np.max(mean_fr)]),
+            default_levels=np.array([0, np.max(mean_fr)]),
             xaxis='Firing Rate (Sp/s)'
         )
 
@@ -1029,6 +1065,8 @@ class PlotLoader:
             x=mean_amp,
             y=depths,
             xrange=np.array([0, np.max(mean_amp)]),
+            levels=np.array([0, np.max(mean_amp)]),
+            default_levels=np.array([0, np.max(mean_amp)]),
             xaxis='Amplitude (uV)'
         )
 
@@ -1077,7 +1115,7 @@ class PlotLoader:
         """
         # Average data across time
         rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
-        probe_levels = np.quantile(rms_avg, [0.1, 0.9])
+        levels = np.quantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
         probe_img, probe_scale, probe_offset, probe_idx = (
             arrange_channels_into_banks(self.shank_sites, rms_avg, bnk_width=BNK_SIZE))
@@ -1089,7 +1127,8 @@ class PlotLoader:
             idx=probe_idx,
             scale=probe_scale,
             offset=probe_offset,
-            levels=probe_levels,
+            levels=levels,
+            default_levels=np.copy(levels),
             cmap=cmap,
             xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
             title=band + ' RMS (uV)'
@@ -1110,7 +1149,6 @@ class PlotLoader:
         # Define frequency bands
         freq_bands = np.vstack(([0, 4], [4, 10], [10, 30], [30, 80], [80, 200]))
 
-
         data_probe = dict()
         for freq in freq_bands:
             freq_idx = np.where((self.data['psd_LF']['freqs'] >= freq[0])
@@ -1119,14 +1157,15 @@ class PlotLoader:
             lfp_power = 10 * np.log10(lfp_power)
             probe_img, probe_scale, probe_offset, probe_idx = (
                 arrange_channels_into_banks(self.shank_sites, lfp_power, bnk_width=BNK_SIZE))
-            probe_levels = np.quantile(lfp_power, [0.1, 0.9])
+            levels = np.quantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
                 img=probe_img,
                 idx=probe_idx,
                 scale=probe_scale,
                 offset=probe_offset,
-                levels=probe_levels,
+                levels=levels,
+                default_levels=np.copy(levels),
                 cmap='viridis',
                 xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
                 title=f'{freq[0]}-{freq[1]} Hz (dB)'
@@ -1167,11 +1206,11 @@ class PlotLoader:
         img['on'] = np.vstack(rfs_svd['on'])
         img['off'] = np.vstack(rfs_svd['off'])
 
-        # Scaling and levels
+        # Scaling
         yscale = ((self.chn_max - self.chn_min) / img['on'].shape[0])
         xscale = 1
-        levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
         depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
+        levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
 
         data_img = dict()
         sub_type = ['on', 'off']
@@ -1180,9 +1219,10 @@ class PlotLoader:
                 f'RF Map - {sub}':
                     ProbeData(
                         img=[img[sub].T],
-                        idx = [np.arange(img[sub].shape[0])],
+                        idx=[np.arange(img[sub].shape[0])],
                         scale=[np.array([xscale, yscale])],
                         levels=levels,
+                        default_levels=np.copy(levels),
                         offset=[np.array([0, self.chn_min])],
                         cmap='viridis',
                         xrange=np.array([0, 15]),

@@ -111,8 +111,8 @@ class AlignmentUploaderOne(AlignmentUploader):
                     '\nAlignment not resolved')
         if channels and resolved:
             # channels saved alignment resolved, writen to flatiron
-            return  (f'Channel locations for {self.pname} saved to Alyx.'
-                     '\nAlignment resolved and channels datasets written to flatiron')
+            return (f'Channel locations for {self.pname} saved to Alyx.'
+                    '\nAlignment resolved and channels datasets written to flatiron')
         if not channels and resolved:
             # alignment already resolved, save alignment but channels not written
             return (f'Channel locations for {self.pname} not saved to Alyx as alignment '
@@ -189,7 +189,6 @@ class AlignmentUploaderOne(AlignmentUploader):
                 alignments.pop(old)
 
         return alignments
-
 
     def save_alignments(self, alignments: dict[str, Any]) -> None:
         """
@@ -440,7 +439,6 @@ class AlignmentUploaderLocal(AlignmentUploader):
         brain_regions = self.get_brain_regions(data)
         channels = self.get_channels(brain_regions)
         self.save_channels(channels)
-
 
     def save_alignments(self, alignments: dict[str, Any]) -> None:
         """

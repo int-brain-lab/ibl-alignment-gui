@@ -4,7 +4,6 @@ import unittest
 import uuid
 from json.decoder import JSONDecodeError
 from pathlib import Path
-from typing import Union
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -168,7 +167,7 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def create_temp_file(self, fname: str, data: Union[dict, str]):
+    def create_temp_file(self, fname: str, data: dict | str):
         file_path = self.temp_path.joinpath(fname)
         with open(file_path, 'w') as f:
             json.dump(data, f)

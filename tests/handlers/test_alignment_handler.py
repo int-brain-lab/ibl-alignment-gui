@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 import numpy as np
 
 from ibl_alignment_gui.handlers.alignment_handler import AlignmentHandler, CircularIndexTracker
+
 
 class TestCircularIndexTracker(unittest.TestCase):
 

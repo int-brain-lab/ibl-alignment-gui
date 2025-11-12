@@ -20,6 +20,7 @@ from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class CollectionData:
     """
@@ -46,7 +47,6 @@ class CollectionData:
     task_collection: str | None = ''
     raw_task_collection: str | None = ''
     meta_collection: str | None = ''
-
 
 
 class DataLoader(ABC):

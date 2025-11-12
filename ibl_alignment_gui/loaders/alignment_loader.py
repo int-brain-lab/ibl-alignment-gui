@@ -154,7 +154,7 @@ class AlignmentLoaderOne(AlignmentLoader):
         xyz_picks = self.insertion['json'].get('xyz_picks', None)
         return np.array(xyz_picks) / 1e6 if xyz_picks is not None else None
 
-    def load_alignments(self) ->  dict[str, Any] | None:
+    def load_alignments(self) -> dict[str, Any] | None:
         """
         Load previous alignments from the Alyx database.
 

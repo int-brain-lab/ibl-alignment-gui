@@ -220,7 +220,7 @@ class ShankView:
             plot.setMaximumHeight(max_height)
 
         set_axis(plot, 'bottom', show=False)
-        set_axis(plot, 'left', pen='w')
+        set_axis(plot, 'left', show=False)
         set_axis(plot, 'top', pen='w')
 
         return plot
@@ -332,7 +332,7 @@ class ShankView:
     # --------------------------------------------------------------------------------------------
     # Plot functions
     # --------------------------------------------------------------------------------------------
-    def clear_fit(self) -> None :
+    def clear_fit(self) -> None:
         """Clear the data from fit lines."""
         self.fit_plot.setData()
         self.fit_scatter.setData()
@@ -363,7 +363,7 @@ class ShankView:
         fig.clear()
         self.hist_regions = []
 
-    def plot_histology(self, fig: pg.PlotItem, data: Bunch, ax: str ='left') -> None:
+    def plot_histology(self, fig: pg.PlotItem, data: Bunch, ax: str = 'left') -> None:
         """
         Plot histology regions on the given figure.
 
@@ -630,7 +630,7 @@ class ShankView:
         set_axis(self.fig_line, 'bottom', pen='k')
         set_axis(self.fig_line, 'bottom', label=data.xaxis)
 
-        self.set_xaxis_range(self.fig_line, data.xrange)
+        self.set_xaxis_range(self.fig_line, data.levels)
         self.set_yaxis_range(self.fig_line)
 
     def clear_probe(self) -> None:
@@ -638,7 +638,6 @@ class ShankView:
         self.probe_items = self.remove_items(self.fig_probe, self.probe_items)
         self.probe_cbar = self.remove_items(self.fig_probe_cb, self.probe_cbar)
         self.probe_bounds = self.remove_items(self.fig_probe, self.probe_bounds)
-
 
     def plot_probe(
             self,
@@ -869,7 +868,7 @@ class ShankView:
         for line in self.slice_lines:
             func(line)
 
-    def set_header_style(self, selected : bool) -> None:
+    def set_header_style(self, selected: bool) -> None:
         """
         Set the stylesheet of the header item.
 
@@ -929,7 +928,6 @@ class ShankView:
             to two decimal places before updating the label.
         """
         self.fig_scale_ax.setLabel('Scale = ' + str(np.around(value, 2)))
-
 
     def match_linear_region(self, hover_item: pg.LinearRegionItem) -> int | None:
         """
@@ -994,7 +992,7 @@ class ShankView:
         if idx[0].size == 0:
             return None, None
         line_idx = idx[0][0]
-        fig_idx = np.setdiff1d(np.arange(0, 3), idx[1][0]) # indices of two other plots
+        fig_idx = np.setdiff1d(np.arange(0, 3), idx[1][0])  # indices of two other plots
         return line_idx, fig_idx
 
     def match_track_line(self, track_line: pg.InfiniteLine) -> int | None:
@@ -1064,15 +1062,15 @@ class ShankView:
         self.lines_features.append(line_features)
 
         # Scatter point to be added to fit figure
-        point= pg.PlotDataItem(x=[line_track.pos().y()], y=[line_features[0].pos().y()],
-                               symbolBrush=brush, symbol='o', symbolSize=10)
+        point = pg.PlotDataItem(x=[line_track.pos().y()], y=[line_features[0].pos().y()],
+                                symbolBrush=brush, symbol='o', symbolSize=10)
         self.points.append(point)
 
         return line_track, line_features, point
 
     @staticmethod
     def create_line_style(
-            colour: QtGui.QColor | None =None
+            colour: QtGui.QColor | None = None
     ) -> tuple[QtGui.QPen, QtGui.QBrush]:
         """
         Generate a random line style (color and dash style) for reference lines.

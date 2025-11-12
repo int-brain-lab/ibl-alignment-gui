@@ -114,10 +114,10 @@ class ProbeHandler(ABC):
         # Set the previous alignments from the non default configuration to the default
         # one (if it exists)
         if self.non_default_config is not None:
-            self.get_selected_shank()[self.non_default_config].loaders['align'].alignments = \
-            self.get_selected_shank()[self.default_config].loaders['align'].alignments
-            (self.get_selected_shank()[self.non_default_config].loaders['align']
-             .get_previous_alignments())
+            self.get_selected_shank()[self.non_default_config].loaders['align'].alignments = (
+                self.get_selected_shank()[self.default_config].loaders['align'].alignments(
+                    self.get_selected_shank()[
+                        self.non_default_config].loaders['align'].get_previous_alignments()))
 
         return (self.get_selected_shank()[self.default_config].loaders['align']
                 .get_previous_alignments())
@@ -442,7 +442,7 @@ class ProbeHandlerONE(ProbeHandler):
     def __init__(
             self,
             one: ONE = None,
-            brain_atlas: AllenAtlas | None =None,
+            brain_atlas: AllenAtlas | None = None,
             spike_collection: str | None = None):
 
         self.one = one or ONE()
@@ -694,14 +694,14 @@ class ProbeHandlerCSV(ProbeHandler):
             xyz_picks = ins['json'].get('xyz_picks', None)
             xyz_picks = np.array(xyz_picks) / 1e6 if xyz_picks is not None else None
 
-            if shank.is_quarter: # Quarter is offline
+            if shank.is_quarter:  # Quarter is offline
                 loaders['data'] = DataLoaderLocal(local_path, collections)
                 loaders['geom'] = GeometryLoaderLocal(local_path, collections)
                 loaders['align'] = AlignmentLoaderLocal(
-                    local_path.joinpath(collections.spike_collection),0, 1,
+                    local_path.joinpath(collections.spike_collection), 0, 1,
                     user=user, xyz_picks=xyz_picks)
                 loaders['upload'] = AlignmentUploaderLocal(
-                    local_path.joinpath(collections.spike_collection),0, loaders['geom'],
+                    local_path.joinpath(collections.spike_collection), 0, loaders['geom'],
                     self.brain_atlas, user=user)
                 loaders['ephys'] = SpikeGLXLoaderLocal(local_path, collections.meta_collection)
                 loaders['plots'] = PlotLoader()
@@ -715,7 +715,7 @@ class ProbeHandlerCSV(ProbeHandler):
                 # Otherwise we load from local
                 else:
                     loaders['data'] = DataLoaderLocal(local_path, collections)
-                    loaders['geom'] =  GeometryLoaderLocal(local_path, collections)
+                    loaders['geom'] = GeometryLoaderLocal(local_path, collections)
 
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
@@ -754,6 +754,7 @@ class ProbeHandlerCSV(ProbeHandler):
         """Get the alyx probe insertion for the shank."""
         ins = self.one.alyx.rest('insertions', 'list', id=shank.pid, expires=timedelta(days=1))
         return ins[0]
+
 
 class ProbeHandlerLocal(ProbeHandler):
     """

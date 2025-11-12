@@ -18,6 +18,7 @@ AUTOCORR_BIN_SIZE = 0.5 / 1000
 AUTOCORR_WIN_SIZE = 20 / 1000
 FS = 30000
 
+
 def setup(controller: 'AlignmentGUIController') -> None:
     """
     Set up the Cluster Features plugin.
@@ -32,6 +33,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME] = dict()
     controller.plugins[PLUGIN_NAME]['loader'] = ClusterPopupManager(controller)
     controller.plugins[PLUGIN_NAME]['callback'] = callback
+    controller.plugins[PLUGIN_NAME]['activate'] = True
 
     # Add a submenu to the main menu
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
@@ -53,8 +55,8 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
 def callback(
         controller: 'AlignmentGUIController',
-        items: 'ShankController' ,
-        _ ,
+        items: 'ShankController',
+        _,
         point: pg.ScatterPlotItem
 ) -> None:
     """
@@ -104,7 +106,7 @@ class ClusterPopup(PopupWindow):
         The parent window of the popup.
     """
 
-    def __init__(self, title: str, view: 'AlignmentGUIView' , data: dict | None =None):
+    def __init__(self, title: str, view: 'AlignmentGUIView', data: dict | None = None):
         self.data = data
         super().__init__(title, parent=view, size=(300, 300), graphics=True)
 
@@ -208,8 +210,8 @@ class ClusterPopupManager:
 
     def popup_left(self) -> None:
         """Triggered when the mouse leaves a popup."""
-        self.parent_view.raise_()
-        self.parent_view.activateWindow()
+        self.view.raise_()
+        self.view.activateWindow()
 
     def popup_entered(self, popup: ClusterPopup) -> None:
         """Triggered when the mouse enters a popup."""
@@ -238,12 +240,13 @@ def compute_timescales(plot_loader: 'PlotLoader') -> tuple[np.ndarray, np.ndarra
         The time vector for template waveform (ms).
     """
     t_autocorr = 1e3 * np.arange((AUTOCORR_WIN_SIZE / 2) - AUTOCORR_WIN_SIZE,
-                                      (AUTOCORR_WIN_SIZE / 2) + AUTOCORR_BIN_SIZE,
-                                      AUTOCORR_BIN_SIZE)
+                                 (AUTOCORR_WIN_SIZE / 2) + AUTOCORR_BIN_SIZE,
+                                 AUTOCORR_BIN_SIZE)
     n_template = plot_loader.data['clusters']['waveforms'][0, :, 0].size
     t_template = 1e3 * (np.arange(n_template)) / FS
 
     return t_autocorr, t_template
+
 
 def get_autocorr(plot_loader: 'PlotLoader', clust_idx: int) -> tuple[np.ndarray, int]:
     """
@@ -273,6 +276,7 @@ def get_autocorr(plot_loader: 'PlotLoader', clust_idx: int) -> tuple[np.ndarray,
             plot_loader.cluster_idx[clust_idx]]
 
     return autocorr[0, 0, :], clust_id
+
 
 def get_template_wf(plot_loader: 'PlotLoader', clust_idx: int) -> np.ndarray:
     """

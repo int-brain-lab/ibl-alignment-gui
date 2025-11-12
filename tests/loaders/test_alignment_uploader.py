@@ -147,31 +147,31 @@ class TestAlignmentUploaderOne(unittest.TestCase):
 
 
     @patch('ibl_alignment_gui.loaders.alignment_uploader.critical_note.main_gui')
-    def test_get_user_qc(self, mock_note):
-        """ Test the get_user_qc method """
+    def test_set_user_qc(self, mock_note):
+        """ Test the set_user_qc method """
         with self.subTest('QC pass no reasons'):
-            self.uploader.get_user_qc('High', 'Pass', [], False)
+            self.uploader.set_user_qc('High', 'Pass', [], False)
             self.assertEqual(self.uploader.qc_str, 'PASS: None')
             self.assertEqual(self.uploader.confidence_str, 'Confidence: High')
             self.assertFalse(self.uploader.force_resolve)
             mock_note.assert_not_called()
 
         with self.subTest('QC warning with reasons'):
-            self.uploader.get_user_qc('Medium', 'Warning', ['reason1', 'reason2'], False)
+            self.uploader.set_user_qc('Medium', 'Warning', ['reason1', 'reason2'], False)
             self.assertEqual(self.uploader.qc_str, 'WARNING: reason1, reason2')
             self.assertEqual(self.uploader.confidence_str, 'Confidence: Medium')
             self.assertFalse(self.uploader.force_resolve)
             mock_note.assert_not_called()
 
         with self.subTest('QC critical with reasons'):
-            self.uploader.get_user_qc('Low', 'Critical', ['critical1'], False)
+            self.uploader.set_user_qc('Low', 'Critical', ['critical1'], False)
             self.assertEqual(self.uploader.qc_str, 'CRITICAL: critical1')
             self.assertEqual(self.uploader.confidence_str, 'Confidence: Low')
             self.assertFalse(self.uploader.force_resolve)
             mock_note.assert_called_once()
 
         with self.subTest('Force resolve'):
-            self.uploader.get_user_qc('High', 'Pass', [], True)
+            self.uploader.set_user_qc('High', 'Pass', [], True)
             self.assertTrue(self.uploader.force_resolve)
 
     @patch('ibl_alignment_gui.loaders.alignment_uploader.AlignmentQC')
@@ -213,7 +213,6 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
         }
         self.mock_atlas.get_lables.return_value = np.array([1, 2])
 
-        #
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
 

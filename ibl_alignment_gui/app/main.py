@@ -3,7 +3,6 @@ from qtpy import QtWidgets
 from ibl_alignment_gui.app.app_controller import AlignmentGUIController
 
 if __name__ == '__main__':
-
     import argparse
 
     parser = argparse.ArgumentParser(description='Offline vs online mode')
@@ -27,3 +26,7 @@ if __name__ == '__main__':
     mainapp = AlignmentGUIController(offline=args.offline, csv=args.csv)
     mainapp.view.show()
     app.exec_()
+
+
+# TODO:
+# To run use: python .\ibl_alignment_gui\app\main.py

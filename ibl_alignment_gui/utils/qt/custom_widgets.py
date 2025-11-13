@@ -9,6 +9,7 @@ import pyqtgraph as pg
 from pyqtgraph.functions import makeARGB
 from qtpy import QtCore, QtGui, QtWidgets
 
+from ibl_alignment_gui.utils.qt.qrange_slider import QRangeSlider
 from iblutil.util import Bunch
 
 
@@ -17,7 +18,7 @@ def set_axis(
         ax: str,
         show: bool = True,
         label: str | None = None,
-        pen: str = 'k',
+        pen: str | None = 'k',
         ticks: bool = True
 ) -> pg.AxisItem:
     """
@@ -186,7 +187,7 @@ class PopupWindow(QtWidgets.QWidget):
     def __init__(
             self,
             title: str,
-            parent: QtWidgets.QMainWindow=None,
+            parent: QtWidgets.QMainWindow = None,
             size: tuple | list = (300, 300),
             graphics: bool = True
     ):
@@ -222,7 +223,7 @@ class PopupWindow(QtWidgets.QWidget):
     def setup(self):
         """Abstract method to be implemented by subclasses."""
 
-    def close_event(self, event: QtCore.QEvent, *args, **kwargs) -> None:
+    def closeEvent(self, event: QtCore.QEvent, *args, **kwargs) -> None:
         """
         Handle the window close event.
 
@@ -236,7 +237,7 @@ class PopupWindow(QtWidgets.QWidget):
         self.closed.emit(self)
         super().closeEvent(event, *args, **kwargs)
 
-    def leave_event(self, event: QtCore.QEvent, *args, **kwargs) -> None:
+    def leaveEvent(self, event: QtCore.QEvent, *args, **kwargs) -> None:
         """
         Handle the mouse leave event.
 
@@ -250,7 +251,7 @@ class PopupWindow(QtWidgets.QWidget):
         self.leave.emit(self)
         super().leaveEvent(event, *args, **kwargs)
 
-    def enter_event(self, event: QtCore.QEvent, *args, **kwargs) -> None:
+    def enterEvent(self, event: QtCore.QEvent, *args, **kwargs) -> None:
         """
         Handle the mouse enter event.
 
@@ -329,7 +330,7 @@ class ColorBar(pg.GraphicsWidget):
     @staticmethod
     def get_color(
             cmap_name: str,
-            cbin: int=256
+            cbin: int = 256
     ) -> tuple[pg.ColorMap, np.ndarray, QtGui.QLinearGradient]:
         """
         Generate a pyqtgraph-compatible color map, LUT, and gradient from a given colormap.
@@ -760,7 +761,7 @@ class ButtonWidget(QtWidgets.QWidget):
         # String to display total number of moves
         self.labels['total'] = QtWidgets.QLabel()
         # Button to reset GUI to initial state
-        self.buttons['reset']= QtWidgets.QPushButton('Reset')
+        self.buttons['reset'] = QtWidgets.QPushButton('Reset')
         # Button to upload final state to Alyx/ to local file
         self.buttons['upload'] = QtWidgets.QPushButton('Upload')
         # Button to go to next move
@@ -774,7 +775,7 @@ class ButtonWidget(QtWidgets.QWidget):
         hlayout1 = QtWidgets.QHBoxLayout()
         hlayout1.addWidget(self.buttons['fit'], stretch=1)
         hlayout1.addWidget(self.buttons['offset'], stretch=1)
-        hlayout1.addWidget(QtWidgets.QLabel(), stretch=2) # Placeholder to push buttons to the left
+        hlayout1.addWidget(QtWidgets.QLabel(), stretch=2)
         hlayout2 = QtWidgets.QHBoxLayout()
         hlayout2.addWidget(self.buttons['previous'], stretch=1)
         hlayout2.addWidget(self.buttons['next'], stretch=1)
@@ -1059,8 +1060,6 @@ class FitWidget(QtWidgets.QWidget):
         self.lin_fit_option.move(70, 10)
 
 
-
-
 class LutWidget(pg.GraphicsLayoutWidget):
     """
     A widget that creates and manages a Histogram-based Lookup Table (LUT).
@@ -1223,7 +1222,7 @@ class MenuWidget(QtWidgets.QMenuBar):
             self,
             name: str,
             callback: Callable,
-            options: list[str] =None,
+            options: list[str] = None,
             set_checked: bool = True
     ) -> str | None:
         """
@@ -1369,7 +1368,7 @@ class MenuWidget(QtWidgets.QMenuBar):
         return None
 
     @staticmethod
-    def toggle_action(action_group: QtWidgets.QActionGroup) -> None:
+    def toggle_action(action_group: QtWidgets.QActionGroup, direction: int) -> None:
         """
         Toggle through the actions in a QActionGroup, activating the next action in sequence.
 
@@ -1377,11 +1376,13 @@ class MenuWidget(QtWidgets.QMenuBar):
         ----------
         action_group : QtWidgets.QActionGroup
             The group of QAction items representing plots to toggle through
+        direction: int
+            The direction to toggle (1 for next, -1 for previous)
         """
         current_act = action_group.checkedAction()
         actions = action_group.actions()
         current_idx = next(i for i, act in enumerate(actions) if act == current_act)
-        next_idx = np.mod(current_idx + 1, len(actions))
+        next_idx = np.mod(current_idx + direction, len(actions))
         actions[next_idx].setChecked(True)
         actions[next_idx].trigger()
 
@@ -1539,6 +1540,7 @@ class ConfigWidget(QtWidgets.QWidget):
         self.hist_area.scene().sigMouseHover.connect(
             lambda hover_items, n=self.name, i=self.idx, c=self.config:
             func_hover(hover_items, n, i, c))
+
 
 class SingleConfigWidget(ConfigWidget):
     """
@@ -1767,3 +1769,248 @@ class DualConfigWidget(ConfigWidget):
         hist_layout = self.create_hist_figure_layout(self.items_default)
 
         return ephys_layout, hist_layout
+
+
+class SliderWidget(QtWidgets.QGroupBox):
+    """
+    A custom widget that contains a range slider with labels and a reset button.
+
+    Parameters
+    ----------
+    steps : int
+        The number of discrete steps for the slider.
+    slider_type : str, optional
+        An optional identifier for the slider type.
+    parent : QtWidgets.QMainWindow, optional
+        The parent window.
+
+    Attributes
+    ----------
+    slider : QRangeSlider
+        The range slider widget.
+    slider_labels : Bunch
+        A Bunch containing QLabel widgets for min, max, low, and high labels.
+    slider_type : str or None
+        An optional identifier for the slider type.
+    intervals : np.ndarray or None
+        The array of values corresponding to slider positions.
+    max_levels : list or None
+        The maximum levels for the slider.
+    reset_button : QtWidgets.QPushButton
+        The button to reset the levels.
+
+    Signals
+    -------
+    released : QtCore.Signal(QtWidgets.QWidget, str)
+        Emitted when the slider is released. Returns the slider widget and its type.
+    reset : QtCore.Signal(QtWidgets.QWidget, str)
+        Emitted when the reset button is pressed. Returns the slider widget and its type.
+    """
+
+    released = QtCore.Signal(QtWidgets.QWidget, str)
+    reset = QtCore.Signal(QtWidgets.QWidget, str)
+
+    def __init__(
+            self,
+            steps: int = 100,
+            slider_type: str | None = None,
+            parent: QtWidgets.QMainWindow | None = None):
+        super().__init__(parent)
+
+        self.slider_type: str | None = slider_type
+        self.intervals: np.ndarray | None = None
+        self.max_levels: list | None = None
+        self.steps: int = steps
+
+        self.create_widgets()
+        self.layout_widgets()
+
+    def create_widgets(self) -> None:
+        """Create the slider, labels and buttons."""
+        self.slider = QRangeSlider(QtCore.Qt.Horizontal)
+        self.slider.sliderReleased.connect(self.slider_released)
+        self.slider_labels = Bunch()
+        self.slider_labels['min'] = QtWidgets.QLabel('Min')
+        self.slider_labels['max'] = QtWidgets.QLabel('Max')
+        self.slider_labels['low'] = QtWidgets.QLabel('Low')
+        self.slider_labels['high'] = QtWidgets.QLabel('High')
+        self.reset_button = QtWidgets.QPushButton('Reset')
+        self.reset_button.clicked.connect(self.reset_pressed)
+
+    def layout_widgets(self) -> None:
+        """Layout the slider, labels and buttons."""
+        layout = QtWidgets.QGridLayout()
+        layout.addWidget(self.reset_button, 1, 0)
+        layout.addWidget(self.slider_labels['min'], 0, 5, 1, 1)
+        layout.addWidget(self.slider_labels['max'], 0, 10, 1, 1)
+        layout.addWidget(self.slider, 1, 5, 1, 5)
+        layout.addWidget(self.slider_labels['low'], 2, 5, 1, 1)
+        layout.addWidget(self.slider_labels['high'], 2, 10, 1, 1)
+
+        self.setLayout(layout)
+
+    def slider_released(self) -> None:
+        """Emit signal when slider is released."""
+        self.released.emit(self, self.slider_type)
+
+    def reset_pressed(self):
+        """Emit signal when reset button is pressed."""
+        self.reset.emit(self, self.slider_type)
+
+    @staticmethod
+    def format_label(val: float) -> str:
+        """
+        Format a float value for display on the slider labels.
+
+        Parameters
+        ----------
+        val: float
+            The value to format
+
+        Returns
+        -------
+        str:
+            The formatted value as a string.
+        """
+        if abs(val) >= 1e4 or abs(val) <= 1e-3:
+            return f"{val:.2e}"
+        else:
+            return str(np.round(val, 2))
+
+    def get_slider_values(self) -> tuple[float, float]:
+        """
+        Get the current slider values.
+
+        Returns
+        -------
+        tuple of float:
+            The low and high values of the slider.
+        """
+        low_val = self.intervals[self.slider.low()]
+        high_val = self.intervals[self.slider.high()]
+        return low_val, high_val
+
+    def set_slider_intervals(self, min_max: list | tuple | np.ndarray) -> None:
+        """
+        Set the intervals and min and max values for the slider.
+
+        Parameters
+        ----------
+        min_max: list or np.ndarray
+            The min and max values for the slider
+        """
+        self.max_levels = min_max
+        self.intervals = np.linspace(min_max[0], min_max[1], self.steps)
+        self.slider.setMinimum(0)
+        self.slider_labels['min'].setText(f'Min: {self.format_label(min_max[0])}')
+        self.slider.setMaximum(self.steps - 1)
+        self.slider_labels['max'].setText(f'Min: {self.format_label(min_max[1])}')
+
+    def set_slider_values(self, low_high: list | tuple | np.ndarray) -> None:
+        """
+        Set the slider values and update the labels.
+
+        Parameters
+        ----------
+        low_high: list or np.ndarray
+            The low and high values for the slider
+        """
+        idx_lowhigh = np.searchsorted(self.intervals, low_high)
+        self.slider.setLow(idx_lowhigh[0])
+        self.slider.setHigh(idx_lowhigh[1])
+        self.slider_labels['low'].setText(f'Low Val: {self.format_label(low_high[0])}')
+        self.slider_labels['high'].setText(f'High Val: {self.format_label(low_high[1])}')
+
+
+class CheckBoxGroup(QtWidgets.QGroupBox):
+    """
+    A custom widget that contains a group of checkboxes with a title.
+
+    Parameters
+    ----------
+    title : str
+        The title of the checkbox group.
+    options : list of str
+        The labels for each checkbox.
+    parent : QtWidgets.QMainWindow, optional
+        The parent window.
+
+    Attributes
+    ----------
+    checkboxes : dict
+        A dictionary mapping option labels to their corresponding QCheckBox widgets.
+    """
+
+    def __init__(
+            self,
+            options: list[str],
+            title: str | None = None,
+            orientation: str = 'horizontal',
+            parent: QtWidgets.QMainWindow | None = None):
+        super().__init__(title, parent)
+
+        self.checkboxes: dict[str, QtWidgets.QCheckBox] = Bunch()
+        self.options = options
+        self.orientation = orientation
+
+        self.create_widgets()
+
+    def create_widgets(self) -> None:
+        """Create the checkboxes for each option and layout."""
+        group = QtWidgets.QButtonGroup()
+        group.setExclusive(False)
+        layout = QtWidgets.QHBoxLayout() if self.orientation == 'horizontal' \
+            else QtWidgets.QVBoxLayout()
+
+        for option in self.options:
+            checkbox = QtWidgets.QCheckBox(option)
+            checkbox.setChecked(False)
+            self.checkboxes[option] = checkbox
+            group.addButton(checkbox)
+            layout.addWidget(checkbox)
+
+        self.setLayout(layout)
+
+    def set_checked(self, options: list[str]) -> None:
+        """
+        Set the checked state of the checkboxes based on the provided options.
+
+        If an option is in the list, its checkbox will be checked; otherwise, it will be unchecked.
+
+        Parameters
+        ----------
+        options: list of str
+            The list of options to be checked.
+        """
+        for option, checkbox in self.checkboxes.items():
+            if option in options:
+                checkbox.setChecked(True)
+            else:
+                checkbox.setChecked(False)
+
+    def get_checked(self) -> list[str]:
+        """
+        Get a list of currently checked options.
+
+        Returns
+        -------
+        list of str
+            The labels of the checked checkboxes.
+        """
+        checked_options = []
+        for option, checkbox in self.checkboxes.items():
+            if checkbox.isChecked():
+                checked_options.append(option)
+        return checked_options
+
+    def setup_callback(self, callback: Callable) -> None:
+        """
+        Connect a callback function to the stateChanged signal of each checkbox.
+
+        Parameters
+        ----------
+        callback : Callable
+            The function to call when a checkbox state changes.
+        """
+        for option, checkbox in self.checkboxes.items():
+            checkbox.clicked.connect(lambda state, cb=option: callback(state, cb))

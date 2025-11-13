@@ -29,6 +29,7 @@ SHANK_COLOURS = {
     'd': '#0000ff'
 }
 
+
 def setup(controller: 'AlignmentGUIController') -> None:
     """
     Set up the 3D Features plugin.
@@ -41,16 +42,17 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller: AlignmentGUIController
         The main application controller.
     """
-    controller.plugins[PLUGIN_NAME]= Bunch()
+    controller.plugins[PLUGIN_NAME] = Bunch()
 
     feature3d_plugin = Features3D(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = feature3d_plugin
+    controller.plugins[PLUGIN_NAME]['activated'] = True
 
     # Attach callbacks to methods in the controller
     controller.plugins[PLUGIN_NAME]['data_button_pressed'] = feature3d_plugin.data_button_pressed
-    controller.plugins[PLUGIN_NAME]['on_config_selected'] =  feature3d_plugin.update_plots
-    controller.plugins[PLUGIN_NAME]['filter_unit_pressed'] =  feature3d_plugin.update_plots
-    controller.plugins[PLUGIN_NAME]['update_plots'] =  feature3d_plugin.update_plots
+    controller.plugins[PLUGIN_NAME]['on_config_selected'] = feature3d_plugin.update_plots
+    controller.plugins[PLUGIN_NAME]['filter_unit_pressed'] = feature3d_plugin.update_plots
+    controller.plugins[PLUGIN_NAME]['update_plots'] = feature3d_plugin.update_plots
     controller.plugins[PLUGIN_NAME]['plot_probe_panels'] = feature3d_plugin.plot_channels
     controller.plugins[PLUGIN_NAME]['plot_scatter_panels'] = feature3d_plugin.plot_clusters
 
@@ -63,7 +65,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     region_action.setCheckable(True)
     region_action.setChecked(False)
     region_action.triggered.connect(
-        lambda a=region_action : feature3d_plugin.toggle_regions(region_action.isChecked()))
+        lambda a=region_action: feature3d_plugin.toggle_regions(region_action.isChecked()))
     plugin_menu.addAction(region_action)
     feature3d_plugin.region_toggle = region_action
 
@@ -272,7 +274,7 @@ class Features3D:
         self.plot_channels(self.plot_type) if self.plot == 'channels' \
             else self.plot_clusters(self.plot_type)
 
-    def plot_channels(self, plot_key: str) -> None:
+    def plot_channels(self, plot_key: str, *args) -> None:
         """
         Plot channel data in the 3D view.
 
@@ -284,7 +286,7 @@ class Features3D:
         self.plot = 'channels'
         self._plot_data(plot_key, update_channels)
 
-    def plot_clusters(self, plot_key: str) -> None:
+    def plot_clusters(self, plot_key: str, *args) -> None:
         """
         Plot cluster data in the 3D view.
 
@@ -355,7 +357,7 @@ def data_to_colors(
         data: list | np.ndarray,
         cmap: str,
         vmin: float,
-        vmax:float
+        vmax: float
 ) -> list:
     """
     Convert data values to hex color codes.
@@ -399,6 +401,7 @@ def get_regions(_, items: 'ShankController', **kwargs):
     """
     return np.unique(items.model.hist_data['axis_label'][:, 1])
 
+
 @shank_loop
 def update_clusters(_, items: 'ShankController', plot_key: str, **kwargs) -> dict[str, Any]:
     """
@@ -424,6 +427,7 @@ def update_clusters(_, items: 'ShankController', plot_key: str, **kwargs) -> dic
     values = data_to_colors(data.colours, data.cmap, data.levels[0], data.levels[1])
 
     return {'xyz': xyz, 'values': values, 'shank': kwargs['shank'], 'config': kwargs['config']}
+
 
 @shank_loop
 def update_channels(_, items: 'ShankController', plot_key: str, **kwargs) -> dict[str, Any]:

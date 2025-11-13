@@ -1,9 +1,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 import numpy as np
 
-from iblutil.util import Bunch
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
+from iblutil.util import Bunch
+
 
 class TestShankHandler(unittest.TestCase):
     """Test the ShankHandler class."""

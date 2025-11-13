@@ -116,7 +116,6 @@ class Geometry(ABC):
             info['n_banks'] = np.unique(info['sites_x']).size
             self.shanks[i] = info
 
-
     def _get_sites_for_shank(self, shank_idx: int) -> Bunch[str, Any]:
         """
         Get the sites information for a given shank.
@@ -258,6 +257,7 @@ class MetaGeometry(Geometry):
 
         return groups
 
+
 class GeometryLoader(ABC):
     """
     Abstract base class for loading probe geometry from metadata or channels.
@@ -316,6 +316,7 @@ class GeometryLoader(ABC):
             Site information for the given shank.
         """
         if sites == 'channels':
+            # TODO add a logger if channels don't exist to say we are using electrodes
             shank_sites = self.channels._get_sites_for_shank(shank_idx) \
                 if self.channels is not None else self.electrodes._get_sites_for_shank(shank_idx)
         else:
@@ -429,9 +430,8 @@ class GeometryLoaderLocal(GeometryLoader):
             A Bunch containing the channels data, or None if not found.
         """
         chns = dloader.DataLoader.load_data(alfio.load_object, self.spike_path, 'channels',
-                              attribute=['localCoordinates', 'rawInd'], **kwargs)
+                                            attribute=['localCoordinates', 'rawInd'], **kwargs)
         return chns if chns['exists'] else None
-
 
 
 def arrange_channels_into_banks(

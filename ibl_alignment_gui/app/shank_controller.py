@@ -151,7 +151,7 @@ class ShankController:
         data['track_lines'] = self.model.track_lines
         self.view.plot_channels(fig_slice, data, colour=colour)
 
-    def plot_scatter(self, plot_key:str, levels: list | None = None) -> ColorBar | None:
+    def plot_scatter(self, plot_key: str, levels: list | None = None) -> ColorBar | None:
         """
         Plot a scatter plot.
 
@@ -190,7 +190,7 @@ class ShankController:
         data = self.model.line_plots.get(plot_key, None)
         self.view.plot_line(data)
 
-    def plot_probe(self, plot_key:str, levels: list | None = None) -> ColorBar | None:
+    def plot_probe(self, plot_key: str, levels: list | None = None) -> ColorBar | None:
         """
         Plot a probe plot.
 
@@ -211,7 +211,7 @@ class ShankController:
 
         return cbar
 
-    def plot_image(self, plot_key:str, levels: list | None = None) -> ColorBar | None:
+    def plot_image(self, plot_key: str, levels: list | None = None) -> ColorBar | None:
         """
         Plot an image plot.
 
@@ -296,6 +296,10 @@ class ShankController:
     def filter_units(self, filter_type: str) -> None:
         """See :meth:`ShankHandler.filter_units` for details."""
         self.model.filter_units(filter_type)
+
+    def reset_levels(self) -> None:
+        """See :meth:`ShankHandler.reset_levels` for details."""
+        self.model.reset_levels()
 
     # --------------------------------------------------------------------------------------------
     # Fitting functions

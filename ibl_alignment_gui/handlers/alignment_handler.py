@@ -279,8 +279,8 @@ class AlignmentHandler:
 
     def set_init_feature_track(
             self,
-            feature: np.ndarray | None =None,
-            track: np.ndarray | None =None
+            feature: np.ndarray | None = None,
+            track: np.ndarray | None = None
     ) -> None:
         """
         Set the initial feature and track values for the current buffer index.
@@ -358,7 +358,6 @@ class AlignmentHandler:
         self.tracks[self.idx] = (self.tracks[self.idx_prev] + offset)
         self.features[self.idx] = (self.features[self.idx_prev])
 
-
     def scale_hist_data(
             self,
             line_track: np.ndarray,
@@ -389,8 +388,8 @@ class AlignmentHandler:
         depths_track = np.sort(np.r_[self.tracks[self.idx_prev][[0, -1]], line_track])
 
         self.tracks[self.idx] = self.ephysalign.feature2track(depths_track,
-                                                             self.features[self.idx_prev],
-                                                             self.tracks[self.idx_prev])
+                                                              self.features[self.idx_prev],
+                                                              self.tracks[self.idx_prev])
         self.features[self.idx] = np.sort(
             np.r_[self.features[self.idx_prev][[0, -1]], line_feature])
 

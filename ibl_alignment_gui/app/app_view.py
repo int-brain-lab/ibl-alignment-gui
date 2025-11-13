@@ -24,7 +24,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         Path to a CSV file containing local sessions on the filesystem.
     """
 
-    def __init__(self, offline: bool = False, csv: bool =False):
+    def __init__(self, offline: bool = False, csv: bool = False):
 
         super().__init__()
         self.offline: bool = offline
@@ -267,11 +267,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     # Menu widget
     # --------------------------------------------------------------------------------------------
     def populate_menu_tab(self, tab: str, callback: Callable, options: list[str],
-                          set_checked:bool = True) -> str | None:
+                          set_checked: bool = True) -> str | None:
         """"See :meth:`MenuWidget.populate_exclusive_tab` for details."""
         return self.menu_widgets.populate_exclusive_tab(
             tab, callback, options, set_checked=set_checked)
-
 
     def add_shortcuts_to_menu(self, tab: str, options: dict) -> None:
         """"See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""
@@ -291,7 +290,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         if option:
             self.menu_widgets.find_actions(option, self.menu_widgets.tabs[tab]['group']).trigger()
 
-    def toggle_menu_option(self, tab: str) -> None:
+    def toggle_menu_option(self, tab: str, direction: int) -> None:
         """
         Toggle through the options in an action group stored in the menubar.
 
@@ -299,8 +298,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         ----------
         tab: str
             The name of the tab
+        direction: int
+            The direction to toggle in the action group (1 for next, -1 for previous)
         """
-        self.menu_widgets.toggle_action(self.menu_widgets.tabs[tab]['group'])
+        self.menu_widgets.toggle_action(self.menu_widgets.tabs[tab]['group'], direction)
 
     # --------------------------------------------------------------------------------------------
     # Button widget
@@ -331,6 +332,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """
         self.button_widgets.labels['current'].setText(f"Current Index = {current_idx}")
         self.button_widgets.labels['total'].setText(f"Total Index = {total_idx}")
+
+    def add_all_button(self) -> None:
+        """See :meth:`ButtonWidget.add_all_button` for details."""
+        self.button_widgets.add_all_button()
 
     # --------------------------------------------------------------------------------------------
     # Selection widget

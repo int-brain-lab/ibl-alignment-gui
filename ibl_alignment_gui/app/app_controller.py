@@ -14,7 +14,8 @@ from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerONE,
 )
 from ibl_alignment_gui.plugins.add_plugins import Plugins
-from ibl_alignment_gui.plugins.qc_dialog import display as display_qc
+from ibl_alignment_gui.plugins.qc_dialog import display as display_qc_dialog
+from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_dialog
 from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
@@ -84,7 +85,7 @@ class AlignmentGUIController:
 
     def __init__(self, offline: bool = False, csv: str | None = None):
 
-        self.csv: str | bool | None  = False if csv is None else csv
+        self.csv: str | bool | None = False if csv is None else csv
         self.offline: bool = offline
         self.view: AlignmentGUIView = AlignmentGUIView(offline=self.offline, csv=self.csv)
         if offline:
@@ -159,10 +160,10 @@ class AlignmentGUIController:
 
         # Setup connections for alignment buttons
         self.view.connect_button('fit', self.fit_button_pressed)
-        self.view.connect_button('offset',self.offset_button_pressed)
-        self.view.connect_button('reset',self.reset_button_pressed)
-        self.view.connect_button('upload',self.complete_button_pressed)
-        self.view.connect_button('next',self.next_button_pressed)
+        self.view.connect_button('offset', self.offset_button_pressed)
+        self.view.connect_button('reset', self.reset_button_pressed)
+        self.view.connect_button('upload', self.complete_button_pressed)
+        self.view.connect_button('next', self.next_button_pressed)
         self.view.connect_button('previous', self.prev_button_pressed)
 
         # Setup connections for tab / grid views
@@ -193,16 +194,24 @@ class AlignmentGUIController:
             # Shortcut to upload final state to Alyx/to local file
             'Upload': {'shortcut': 'Shift+U', 'callback': self.complete_button_pressed},
         }
-        display_options =  {
+        display_options = {
                 # Shortcuts to toggle between plots options
-                'Toggle Image Plots': {'shortcut': 'Alt+1',
-                                       'callback': lambda: self.toggle_plots('image')},
-                'Toggle Line Plots': {'shortcut': 'Alt+2',
-                                      'callback': lambda: self.toggle_plots('line')},
-                'Toggle Probe Plots': {'shortcut': 'Alt+3',
-                                       'callback': lambda: self.toggle_plots('probe')},
-                'Toggle Slice Plots': {'shortcut': 'Alt+4',
-                                       'callback': lambda: self.toggle_plots('slice')},
+                'Toggle Image Plots ->': {'shortcut': 'Alt+1',
+                                          'callback': lambda: self.toggle_plots('image', 1)},
+                'Toggle Line Plots ->': {'shortcut': 'Alt+2',
+                                         'callback': lambda: self.toggle_plots('line', 1)},
+                'Toggle Probe Plots ->': {'shortcut': 'Alt+3',
+                                          'callback': lambda: self.toggle_plots('probe', 1)},
+                'Toggle Slice Plots ->': {'shortcut': 'Alt+4',
+                                          'callback': lambda: self.toggle_plots('slice', 1)},
+                'Toggle Image Plots <-': {'shortcut': 'Shift+Alt+1',
+                                          'callback': lambda: self.toggle_plots('image', -1)},
+                'Toggle Line Plots <-': {'shortcut': 'Shift+Alt+2',
+                                         'callback': lambda: self.toggle_plots('line', -1)},
+                'Toggle Probe Plots <-': {'shortcut': 'Shift+Alt+3',
+                                          'callback': lambda: self.toggle_plots('probe', -1)},
+                'Toggle Slice Plots <-': {'shortcut': 'Shift+Alt+4',
+                                          'callback': lambda: self.toggle_plots('slice', -1)},
                 # Shortcut to reset axis on figures
                 'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
                 # Shortcut to hide/show region labels
@@ -222,6 +231,8 @@ class AlignmentGUIController:
                                    'callback': lambda: self.loop_through_tabs(-1)},
                 # Shortcut to normalise colour bars when multiple configs shown
                 'Normalize': {'shortcut': 'Shift+N', 'callback': self.on_normalise_levels},
+                # Shortcut to reset all plots to their default range
+                'Reset Range': {'shortcut': 'R', 'callback': self.on_reset_levels},
             }
 
         self.view.add_shortcuts_to_menu('fit', fit_options)
@@ -258,9 +269,10 @@ class AlignmentGUIController:
         if self.blockPlugins:
             return
         for _, plug in self.plugins.items():
-            plug_func = plug.get(func, None)
-            if plug_func is not None:
-                plug_func(*args, **kwargs)
+            if plug.get('activated', False):
+                plug_func = plug.get(func, None)
+                if plug_func is not None:
+                    plug_func(*args, **kwargs)
 
     def connect_cluster_plugin(self, items: ShankController) -> None:
         """Connect the cluster feature plugin to the scatter plot."""
@@ -311,7 +323,7 @@ class AlignmentGUIController:
             The config to use
         """
         return (self.model.default_config if self.model.selected_config == 'both'
-               else self.model.selected_config)
+                else self.model.selected_config)
 
     # --------------------------------------------------------------------------------------------
     # Plotting functions
@@ -433,14 +445,29 @@ class AlignmentGUIController:
         c = 'g' if items.config == self.model.default_config else 'r'
         items.plot_channels(self.slice_figs[kwargs.get('shank')], colour=c)
 
+    def plot_line_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
+        """
+        Plot line panels per shank and config.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the line plot to display
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        self._plot_line_panels(plot_key, data_only=data_only, **kwargs)
+
+        self.execute_plugins('plot_line_panels', plot_key, 'line')
+
     @shank_loop
-    def plot_line_panels(
+    def _plot_line_panels(
             self,
             items: ShankController,
             plot_key: str,
             data_only: bool = True,
             **kwargs
-    )-> None:
+    ) -> None:
         """
         Plot line panels per shank and config.
 
@@ -502,11 +529,11 @@ class AlignmentGUIController:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
             setattr(self, level_attr, Bunch.fromkeys(self.all_shanks, None))
-            self._plot_panels(plot_key,plot_type, plot_func, level_attr, data_only, **kwargs)
+            self._plot_panels(plot_key, plot_type, plot_func, level_attr, data_only, **kwargs)
 
         # Optional plugin event
         if plugin_event:
-            self.execute_plugins(plugin_event, plot_key)
+            self.execute_plugins(plugin_event, plot_key, plot_type)
 
     @shank_loop
     def _plot_panels(
@@ -580,7 +607,7 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='probe', plot_func='plot_probe',
-                         level_attr='probe_levels',init_attr='probe_init',
+                         level_attr='probe_levels', init_attr='probe_init',
                          dual_cb_name='fig_dual_probe_cb', plugin_event='plot_probe_panels',
                          data_only=data_only, **kwargs)
 
@@ -933,17 +960,28 @@ class AlignmentGUIController:
 
         Saves channel locations and alignments.
         """
-        if not self.offline:
-            display_qc(self)
-
-        upload = self.view.upload_prompt()
-        if upload:
-            info = self.model.upload_data()
-            self.view.populate_selection_dropdown('align', self.model.load_previous_alignments())
-            self.model.get_starting_alignment(0)
-            self.view.upload_info(upload, info)
+        if len(self.all_shanks) > 1:
+            shanks_to_upload = display_upload_dialog(self)
         else:
-            self.view.upload_info(upload)
+            shanks_to_upload = self.all_shanks
+
+        for shank in shanks_to_upload:
+
+            self.model.selected_shank = shank
+            self.model.current_shank = shank
+
+            if not self.offline:
+                display_qc_dialog(self, shank)
+
+            upload = self.view.upload_prompt()
+            if upload:
+                info = self.model.upload_data()
+                self.view.populate_selection_dropdown('align',
+                                                      self.model.load_previous_alignments())
+                self.model.get_starting_alignment(0)
+                self.view.upload_info(upload, info)
+            else:
+                self.view.upload_info(upload)
 
     # --------------------------------------------------------------------------------------------
     # Fitting functions
@@ -1185,7 +1223,7 @@ class AlignmentGUIController:
         """See :meth:`ShankController.toggle_channels` for details."""
         items.toggle_channels(self.slice_figs[kwargs.get('shank')], self.show_channels)
 
-    def toggle_plots(self, plot_type) -> None:
+    def toggle_plots(self, plot_type: str, direction: int) -> None:
         """
         Toggle through the different plot types.
 
@@ -1196,8 +1234,10 @@ class AlignmentGUIController:
         ----------
         plot_type: str
             The type of plot to toggle through e.g. image, probe, scatter
+        direction: int
+            The direction to toggle in, -1 for previous, +1 for next
         """
-        self.view.toggle_menu_option(plot_type)
+        self.view.toggle_menu_option(plot_type, direction)
 
     # --------------------------------------------------------------------------------------------
     # Plot display interactions
@@ -1219,6 +1259,19 @@ class AlignmentGUIController:
         # Trigger the plotting of the image and probe plots to which these levels apply
         self.view.trigger_menu_option('image', self.img_init)
         self.view.trigger_menu_option('probe', self.probe_init)
+
+    def on_reset_levels(self) -> None:
+        """
+        Reset the levels of all plots to the default range.
+
+        Triggered by pressing Shift+R.
+        """
+        self.reset_levels()
+
+    @shank_loop
+    def reset_levels(self, items: ShankController, **kwargs) -> None:
+        """See :meth:`ShankController.reset_levels` for details."""
+        items.reset_levels()
 
     def reset_axis_button_pressed(self) -> None:
         """
@@ -1267,7 +1320,7 @@ class AlignmentGUIController:
     @shank_loop
     def set_shank_header(self, items: ShankController, **kwargs) -> None:
         """See :meth:`ShankController.set_header_style` for details."""
-        items.set_header_style(kwargs.get('shank')==self.model.selected_shank)
+        items.set_header_style(kwargs.get('shank') == self.model.selected_shank)
 
     def loop_through_tabs(self, direction: int):
         """

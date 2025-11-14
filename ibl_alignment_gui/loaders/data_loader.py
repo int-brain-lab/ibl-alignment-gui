@@ -344,8 +344,7 @@ class DataLoader(ABC):
                 continue
             if data[key].ndim == 1:
                 continue
-            if self.shank_sites['unsort'] is not None:
-                data[key] = data[key][:, self.shank_sites['unsort']]
+
             data[key] = data[key][:, self.shank_sites['raw_ind']]
 
         return data

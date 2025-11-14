@@ -506,7 +506,8 @@ class ProbeHandlerONE(ProbeHandler):
         """
         self.chosen_probe = self.sessions[idx]
 
-        sess_idx = [i for i, e in enumerate(self.sess) if self.get_session_probe_name(e) == self.chosen_probe]
+        sess_idx = [i for i, e in enumerate(self.sess) if
+                    self.get_session_probe_name(e) == self.chosen_probe]
         self.shank_labels = [self.sess[idx] for idx in sess_idx]
         shanks = [s['name'] for s in self.shank_labels]
         idx = np.argsort(shanks)
@@ -571,6 +572,7 @@ class ProbeHandlerONE(ProbeHandler):
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
     def load_data(self) -> None:
+        """Load data for all configs and shanks."""
         print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
         super().load_data()
 

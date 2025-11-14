@@ -212,6 +212,9 @@ class RangeController:
             slider_widget.reset.connect(self.on_reset_button_pressed)
 
         self.set_init_levels()
+        if self.controller.model.selected_config == 'both':
+            self.view.on_config_button_clicked(True, 'both')
+
 
     def on_close(self) -> None:
         """
@@ -334,6 +337,7 @@ class RangeController:
         plot_key = self.plot_keys[plot_type]
         if plot_type == 'image':
             plot_type = self.get_image_plot_type(plot_key)
+
 
         set_levels(self.controller, plot_key, plot_type, levels,
                    shanks=self.view.get_selected_shanks(),

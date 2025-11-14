@@ -474,13 +474,20 @@ def arrange_channels_into_banks(
     bnk_offset = list()
     bnk_index = list()
 
+    # Find the minimum spacing between channels in each bank
+    x_coords = np.unique(shank_geom['sites_x'])
+    bnk_diff = []
+    for x in x_coords:
+        bnk_chns = np.where(shank_geom['sites_x'] == x)[0]
+        bnk_ycoords = shank_geom['sites_y'][bnk_chns]
+        bnk_diff.append(np.min(np.abs(np.diff(bnk_ycoords))))
+    bnk_diff = np.min(bnk_diff)
+
     for ibank, bank in enumerate(np.unique(shank_geom['sites_x'])):
 
         # Find the channels in the current bank
         bnk_chns = np.where(shank_geom['sites_x'] == bank)[0]
         bnk_ycoords = shank_geom['sites_y'][bnk_chns]
-        # Find the spacing between the channels in the current bank
-        bnk_diff = np.min(np.abs(np.diff(bnk_ycoords)))
 
         # NP1.0 checkerboard
         if bnk_diff != shank_geom['sites_pitch']:

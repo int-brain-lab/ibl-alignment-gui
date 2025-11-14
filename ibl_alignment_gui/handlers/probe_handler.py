@@ -482,8 +482,8 @@ class ProbeHandlerONE(ProbeHandler):
         np.ndarray
             All probes with spikesorting data for the chosen subject
         """
-        subj = self.subjects[idx]
-        sess_idx = [i for i, e in enumerate(self.subj_ins) if e == subj]
+        self.chosen_sess = self.subjects[idx]
+        sess_idx = [i for i, e in enumerate(self.subj_ins) if e == self.chosen_sess]
         self.sess = [self.sess_ins[idx] for idx in sess_idx]
         self.sessions = [self.get_session_probe_name(sess) for sess in self.sess]
         self.sessions = np.unique(self.sessions)
@@ -504,9 +504,9 @@ class ProbeHandlerONE(ProbeHandler):
         np.ndarray
             All shanks for the chosen probe
         """
-        sess = self.sessions[idx]
+        self.chosen_probe = self.sessions[idx]
 
-        sess_idx = [i for i, e in enumerate(self.sess) if self.get_session_probe_name(e) == sess]
+        sess_idx = [i for i, e in enumerate(self.sess) if self.get_session_probe_name(e) == self.chosen_probe]
         self.shank_labels = [self.sess[idx] for idx in sess_idx]
         shanks = [s['name'] for s in self.shank_labels]
         idx = np.argsort(shanks)
@@ -569,6 +569,10 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
+
+    def load_data(self) -> None:
+        print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
+        super().load_data()
 
 
 class ProbeHandlerCSV(ProbeHandler):

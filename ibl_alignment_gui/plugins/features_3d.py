@@ -46,7 +46,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     feature3d_plugin = Features3D(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = feature3d_plugin
-    controller.plugins[PLUGIN_NAME]['activated'] = True
+    controller.plugins[PLUGIN_NAME]['activated'] = False
 
     # Attach callbacks to methods in the controller
     controller.plugins[PLUGIN_NAME]['data_button_pressed'] = feature3d_plugin.data_button_pressed
@@ -59,6 +59,13 @@ def setup(controller: 'AlignmentGUIController') -> None:
     # Add a submenu to the main menu
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
+
+    # Show the 3D viewer setup
+    show_action = QtWidgets.QAction('Show 3D Viewer', controller.view)
+    show_action.triggered.connect(lambda _, c=controller: callback(_, c))
+    show_action.setCheckable(True)
+    show_action.setChecked(False)
+    plugin_menu.addAction(show_action)
 
     # Toggle action to show / hide regions
     region_action = QtWidgets.QAction('Show Regions', controller.view)
@@ -90,6 +97,13 @@ def setup(controller: 'AlignmentGUIController') -> None:
     slider_action = QtWidgets.QWidgetAction(controller.view)
     slider_action.setDefaultWidget(slider_widget)
     plugin_menu.addAction(slider_action)
+
+
+def callback(_, controller: 'AlignmentGUIController') -> None:
+    """Open the 3D viewer."""
+    if not controller.plugins[PLUGIN_NAME]['activated']:
+        controller.plugins[PLUGIN_NAME]['activated'] = True
+        controller.plugins[PLUGIN_NAME]['loader'].setup()
 
 
 class Features3D:
@@ -130,17 +144,6 @@ class Features3D:
     def __init__(self, controller: 'AlignmentGUIController'):
         self.controller = controller
 
-        # Initialize urchin
-        urchin.setup()
-        time.sleep(5)
-        # Load the CCF25 brain atlas
-        urchin.ccf25.load()
-        time.sleep(5)
-        # Add the brain root
-        urchin.ccf25.root.set_visibility(True)
-        urchin.ccf25.root.set_material('transparent-lit')
-        urchin.ccf25.root.set_alpha(0.5)
-
         # Initialize variables
         self.particles: urchin.particles.ParticleSystem | None = None
         self.markers: urchin.particles.ParticleSystem | None = None
@@ -152,6 +155,21 @@ class Features3D:
         self.side: urchin.utils.Side = urchin.utils.Side.LEFT
         self.region_toggle: QtWidgets.QAction | None = None
         self.ba: AllenAtlas = self.controller.model.brain_atlas
+
+    def setup(self):
+        """Launch the 3D Urchin viewer and display the initial probe channels."""
+        # Initialize urchin
+        urchin.setup()
+        time.sleep(5)
+        # Load the CCF25 brain atlas
+        urchin.ccf25.load()
+        time.sleep(5)
+        # Add the brain root
+        urchin.ccf25.root.set_visibility(True)
+        urchin.ccf25.root.set_material('transparent-lit')
+        urchin.ccf25.root.set_alpha(0.5)
+
+        self.plot_channels(self.controller.probe_init)
 
     def data_button_pressed(self) -> None:
         """

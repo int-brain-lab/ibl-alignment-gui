@@ -28,8 +28,6 @@ class Geometry(ABC):
         y coordinates of the sites
     chn_ind
         Map of spike-sorting channels to raw data
-    sort_ind
-        Map of sorted raw ephys data to unsorted index
     """
 
     def __init__(
@@ -37,13 +35,11 @@ class Geometry(ABC):
             x_coords: np.ndarray,
             y_coords: np.ndarray,
             chn_ind: np.ndarray,
-            sort_ind: np.ndarray | None
     ) -> None:
 
         self.x_coords: np.ndarray = x_coords
         self.y_coords: np.ndarray = y_coords
         self.chn_ind: np.ndarray = chn_ind
-        self.sort_ind: np.ndarray | None = sort_ind
         self.n_shanks: int | None = None
         self.shank_groups: Bunch | None = None
         self.shanks: Bunch | None = None
@@ -87,8 +83,6 @@ class Geometry(ABC):
         for i in range(self.n_shanks):
             info = Bunch()
 
-            # TODO we want this to be somewhere else as it isn't strictly per shank
-            info['unsort'] = self.sort_ind
             orig_idx = self.shank_groups[i]
             x_coords = self.x_coords[orig_idx]
             y_coords = self.y_coords[orig_idx]
@@ -102,7 +96,6 @@ class Geometry(ABC):
             # These are the sites that match into the spike sorting per shank
             info['spikes_ind'] = self.chn_ind[idx_sort]
             # These are the sites that match into the raw_data per shank
-            # TODO should apply unsort here
             info['raw_ind'] = self.chn_ind[idx_sort]
             info['sites_x'] = x_coords[y_sort]
             info['sites_y'] = y_coords[y_sort]
@@ -153,9 +146,8 @@ class ChannelGeometry(Geometry):
         chn_x = channels['localCoordinates'][:, 0]
         chn_y = channels['localCoordinates'][:, 1]
         chn_ind = channels['rawInd']
-        sort_ind = None
 
-        super().__init__(chn_x, chn_y, chn_ind, sort_ind)
+        super().__init__(chn_x, chn_y, chn_ind)
 
     def _get_n_shanks(self) -> int:
         """
@@ -207,25 +199,17 @@ class MetaGeometry(Geometry):
     ----------
     meta: Bunch
         A Bunch object containing spikeglx metadata
-    sorted: bool
-        Whether the ephys data has already been sorted or not.
     """
 
-    def __init__(self, meta: Bunch[str, Any], sort: bool = False) -> None:
+    def __init__(self, meta: Bunch[str, Any]) -> None:
 
         self.meta = spikeglx.geometry_from_meta(meta, sort=False)
         elec_x = self.meta['x']
         elec_y = self.meta['y']
-        if sort:
-            _, sort_vals = spikeglx.geometry_from_meta(meta, sort=True, return_index=True)
-            sort_ind = np.empty_like(sort_vals)
-            sort_ind[sort_vals] = np.arange(sort_vals.size)
-        else:
-            sort_ind = np.arange(elec_x.size)
 
         chn_ind = np.arange(elec_x.size)
 
-        super().__init__(elec_x, elec_y, chn_ind, sort_ind)
+        super().__init__(elec_x, elec_y, chn_ind)
 
     def _get_n_shanks(self) -> int:
         """
@@ -274,7 +258,7 @@ class GeometryLoader(ABC):
         """Load probe geometry from both the metadata and the channels."""
         meta = self.load_meta_data()
         if meta is not None:
-            self.electrodes = MetaGeometry(meta, sort=sort)
+            self.electrodes = MetaGeometry(meta)
             self.electrodes.split_sites_per_shank()
 
         chns = self.load_channels()
@@ -474,13 +458,20 @@ def arrange_channels_into_banks(
     bnk_offset = list()
     bnk_index = list()
 
+    # Find the minimum spacing between channels in each bank
+    x_coords = np.unique(shank_geom['sites_x'])
+    bnk_diff = []
+    for x in x_coords:
+        bnk_chns = np.where(shank_geom['sites_x'] == x)[0]
+        bnk_ycoords = shank_geom['sites_y'][bnk_chns]
+        bnk_diff.append(np.min(np.abs(np.diff(bnk_ycoords))))
+    bnk_diff = np.min(bnk_diff)
+
     for ibank, bank in enumerate(np.unique(shank_geom['sites_x'])):
 
         # Find the channels in the current bank
         bnk_chns = np.where(shank_geom['sites_x'] == bank)[0]
         bnk_ycoords = shank_geom['sites_y'][bnk_chns]
-        # Find the spacing between the channels in the current bank
-        bnk_diff = np.min(np.abs(np.diff(bnk_ycoords)))
 
         # NP1.0 checkerboard
         if bnk_diff != shank_geom['sites_pitch']:

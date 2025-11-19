@@ -1,10 +1,11 @@
-import json, os, gc
+import os
+import time
 
+import numpy as np
 import pandas as pd
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, ConcatDataset, Dataset
 
 import ephysatlas.data
@@ -13,33 +14,13 @@ import ephysatlas.fixtures
 
 from ephysatlas.data import download_tables, read_features_from_disk
 
-from dataclasses import asdict
-
-from typing import Optional, Tuple
-
-import numpy as np
-from qtpy import QtWidgets
-
-from iblutil.util import Bunch
-from typing import TYPE_CHECKING
-
-from iblatlas.genomics import agea, merfish
 from iblatlas.atlas import AllenAtlas
 from one.api import ONE
 
 from pathlib import Path
-
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-
-from collections import defaultdict, Counter
-
-if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
-    from iblatlas.atlas import AllenAtlas
-
-from ibl_alignment_gui.utils.utils import shank_loop
+from typing import Tuple, Optional, Dict
+from collections import Counter
+from dataclasses import dataclass
 
 FEATURE_LIST = [
     'rms_lf', 'psd_lfp', 'psd_alpha', 'psd_beta', 'psd_gamma', 'psd_delta', 'psd_theta',
@@ -50,321 +31,90 @@ FEATURE_LIST = [
     'tip_time_secs', 'recovery_time_secs', 'peak_time_secs', 'trough_time_secs',
     'trough_val', 'tip_val', 'peak_val',
     'recovery_slope', 'depolarisation_slope', 'repolarisation_slope', 'polarity',
-     #'channel_labels'
 ]
 
-PLUGIN_NAME = "Automatic Alignment"
+@dataclass
+class AlignmentEngine:
+    device: str
+    cfg: 'AtlasPCAConfig'
+    ctx_manager: 'ContextAtlasManager'
+    model: 'NeighborInpaintingModel'
+    handles: dict
+    e_mean: 'torch.Tensor'
+    e_std:  'torch.Tensor'
+    ctx_mean: 'torch.Tensor'
+    ctx_std:  'torch.Tensor'
+    ephys: np.ndarray
+    probe_positions: np.ndarray
+    probe_planned_positions: np.ndarray
+    pid_str: np.ndarray
+    M_MAX: int
+    RADIUS_UM: float
+    optimization_features: np.ndarray
 
-SHANK_COLOURS = {
-    '0': '#000000',
-    '1': '#000000',
-    'a': '#000000',
-    'b': '#30B666',
-    'c': '#ff0044',
-    'd': '#0000ff'
-}
+def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngine:
+    print('Data loading and model initialization (one-time)')
+    t0 = time.time()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def setup(controller: 'AlignmentGUIController') -> None:
-    """
-    Set up the Automatic Alignment plugin.
+    auto_align_path = 'ibl_alignment_gui/plugins/auto_align_files/'
+    optimization_features = np.arange(len(FEATURE_LIST))
 
-    Also attaches necessary callbacks to the controller.
+    # Context manager + config
+    cfg = AtlasPCAConfig()
+    ctx_manager = ContextAtlasManager(cfg, auto_align_path, regenerate_context=False)
 
-    Parameters
-    ----------
-    controller: AlignmentGUIController
-        The main application controller.
-    """
-    controller.plugins[PLUGIN_NAME] = Bunch()
+    # Load ephys & probe positions
+    pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData()
 
-    auto_align_plugin = AutoAlign(controller)
-    controller.plugins[PLUGIN_NAME]['loader'] = auto_align_plugin
+    # Build dataset & splits ONCE
+    M_MAX = 8
+    RADIUS_UM = 500
+    train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std = build_channels_plus_emptyvoxels_with_neighbors(
+        ctx_manager=ctx_manager,
+        ephys=ephys,
+        probe_positions=probe_positions,
+        RADIUS_UM=RADIUS_UM,
+        M_MAX=M_MAX
+    )
 
-    # Attach callbacks to methods in the controller
-    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = auto_align_plugin.data_button_pressed
+    handles = alignment_handles_from_loader(train_loader)
 
-    # Add a submenu to the main menu
-    plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
-    controller.plugin_options.addMenu(plugin_menu)
+    # Model (reuse across calls)
+    F_ctx = cfg.n_cell_pcs + cfg.n_gene_pcs
+    F_e = ephys.shape[-1]
+    F_REG = 0
+    heteroscedastic = False
+    model = NeighborInpaintingModel(
+        f_ctx=F_ctx, f_ephys=F_e, f_out=F_e, f_region=F_REG,
+        e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
+        d_model=128, nhead=8, depth=2, neighbor_self_attn=False,
+        heteroscedastic=heteroscedastic, drop=0.15
+    ).to(device)
+    model.load_state_dict(torch.load(os.path.join(auto_align_path, 'SE_model.pth'), map_location=device))
+    model.eval()
+    torch.set_grad_enabled(False)
 
-    # Checkable menu option for using the automatic alignment
-    align_checkbox = QtWidgets.QAction('Automatic Alignment', controller.view)
-    align_checkbox.setCheckable(True)
-    align_checkbox.setChecked(False)
-    align_checkbox.toggled.connect(auto_align_plugin.predict_alignment)
-    plugin_menu.addAction(align_checkbox)
-    auto_align_plugin.predict_alignment = align_checkbox
+    print(f"[Alignment engine ready] build time: {time.time() - t0:.2f}s")
 
-class RecDS(Dataset):
-    """Recorded voxels: (context, allen, xyz_m, ephys, pid, vox_count, has_ephys=True)."""
-    def __init__(self, ctx, allen, xyz_m, ephys, pid, vox_count):
-        self.ctx, self.allen, self.xyz = ctx, allen, xyz_m
-        self.ephys, self.pid = ephys, pid
-        self.vox_count = vox_count
-        self.has = torch.ones(len(self.ctx), dtype=torch.bool)
-    def __len__(self): return self.ctx.shape[0]
-    def __getitem__(self, i):
-        return (i, self.ctx[i], self.allen[i], self.xyz[i],
-                self.ephys[i], self.pid[i], self.has[i], self.vox_count[i])
+    return AlignmentEngine(
+        device=device, cfg=cfg, ctx_manager=ctx_manager, model=model,
+        handles=handles, e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
+        ephys=ephys, probe_positions=probe_positions, probe_planned_positions=probe_planned_positions,
+        pid_str=pid_str, M_MAX=M_MAX, RADIUS_UM=RADIUS_UM, optimization_features=optimization_features
+    )
 
-class GridDS(Dataset):
-    """Grid-only voxels: (context, allen, xyz_m, empty ephys, pid=0, vox_count=1, has_ephys=False)."""
-    def __init__(self, ctx, allen, xyz_m, f_e):
-        self.ctx, self.allen, self.xyz = ctx, allen, xyz_m
-        self._empty = torch.zeros(f_e, dtype=torch.float32)
-        self._empty_pid = torch.tensor(0.0, dtype=torch.float32)   # scalar, not [1]
-        self._count = torch.tensor(1.0, dtype=torch.float32)       # scalar, not [1]
-        self.has = torch.zeros(len(self.ctx), dtype=torch.bool)
-    def __len__(self): return self.ctx.shape[0]
-    def __getitem__(self, i):
-        return (i, self.ctx[i], self.allen[i], self.xyz[i],
-                self._empty, self._empty_pid, self.has[i], self._count)
+def ensure_engine(controller: 'AlignmentGUIController') -> AlignmentEngine:
+    plug = controller.plugins['Channel Prediction']
+    if 'engine' not in plug or plug['engine'] is None:
+        plug['engine'] = load_alignment_engine(controller)
+    return plug['engine']
 
-# ---------- small utilities ----------
-def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
-    Xh, Zh, Yh = ctx_manager.cell_pca.shape[1:]
-    ijk = ctx_manager.bc.xyz2i(xyz_m, mode='clip')
-    xi = np.clip(np.round(ijk[:,0] / ds_rate).astype(int), 0, Xh-1)
-    yi = np.clip(np.round(ijk[:,1] / ds_rate).astype(int), 0, Yh-1)
-    zi = np.clip(np.round(ijk[:,2] / ds_rate).astype(int), 0, Zh-1)
-    return xi, zi, yi
-
-def compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi):
-    N = xi.size
-    if(len(probe_positions.shape) == 2):
-        P, _ = probe_positions.shape
-        ch_xyz = probe_positions
-    else:
-        P, C, _ = probe_positions.shape
-        ch_xyz = probe_positions.reshape(P*C, 3)
-
-    xic, zic, yic = downsample_keys_from_xyz(ctx_manager, ch_xyz)
-    has = np.zeros(N, dtype=bool)
-
-    # Map grid tuple -> flat index
-    key2flat = { (int(xi[i]), int(zi[i]), int(yi[i])): i for i in range(N) }
-
-    for x, z, y in zip(xic, zic, yic):
-        if (x,z,y) in key2flat:
-            has[key2flat[(x,z,y)]] = True
-    return has
-
-# ---------- KDTree neighbors (train bank) ----------
-try:
-    from sklearn.neighbors import KDTree
-    _HAS_KDT = True
-except Exception:
-    _HAS_KDT = False
-
-class ChannelNN:
-    def __init__(self, ch_xyz_m: np.ndarray):
-        self.X = ch_xyz_m.astype(np.float64)
-        self.tree = KDTree(self.X, leaf_size=40) if (self.X.shape[0] and _HAS_KDT) else None
-    def query_radius(self, q_xyz_m: np.ndarray, r_m: float, k_cap: int = 8):
-        if self.tree is not None:
-            inds, _ = self.tree.query_radius(q_xyz_m, r=r_m, return_distance=True, sort_results=True)
-            return [ii[:k_cap] for ii in inds]
-        # brute force
-        out = []
-        X = self.X
-        for q in q_xyz_m:
-            if X.shape[0]==0: out.append(np.array([], dtype=int)); continue
-            d2 = np.sum((X - q[None,:])**2, axis=1)
-            I = np.where(d2 <= (r_m**2))[0]
-            if I.size > 8:
-                J = np.argpartition(d2[I], 8)[:8]
-                I = I[J]
-            out.append(I)
-        return out
-
-# ---------- collate that injects neighbors ----------
-class NeighborCollate:
-    """
-    Takes per-sample (idx, ctx, allen, xyz_m, ephys, has_ephys) and adds:
-      - e_n [B,M,F_e], p_n [B,M,3], mask [B,M]
-      - y_e [B,F_e] from dataset
-    Uses a TRAIN-ONLY neighbor bank and excludes same-probe neighbors for recorded voxels.
-    Assumes inputs are already standardized.
-    """
-    def __init__(self,
-                 ctx_manager,
-                 bank_xyz_m, bank_feat_stdzd, bank_pid, kdtree_bank,
-                 e_feat_dim: int,
-                 M_max=64, radius_um=600.0, allow_same_probe=False):
-        self.ctx_manager = ctx_manager
-        self.bank_xyz  = bank_xyz_m
-        self.bank_feat = bank_feat_stdzd
-        self.bank_pid  = bank_pid
-        self.nn        = kdtree_bank
-        self.F_e       = int(e_feat_dim)
-        self.M         = int(M_max)
-        self.r_m       = float(radius_um) * 1e-6
-        self.F_reg     = 0
-        self.allow_same_probe = allow_same_probe
-    def __call__(self, batch_items):
-        # unpack
-        (idxs, ctxs, allens, xyzs, ephys, pids, has, counts) = zip(*batch_items)
-
-        B = len(idxs)
-        ctx_q  = torch.stack(ctxs,   dim=0)        # [B,F_ctx] (already standardized)
-        allen  = torch.stack(allens, dim=0)        # [B]
-        p_q    = torch.stack(xyzs,   dim=0)        # [B,3] m
-        y_e    = torch.stack([
-                   t if t.numel() else torch.zeros(self.F_e, dtype=torch.float32)
-                 for t in ephys], dim=0)           # [B,F_e]
-        has_ephys = torch.stack(has, dim=0).bool() # [B]
-        vox_count = torch.stack(counts, dim=0).float().clamp_min(1.0)  # [B]
-
-        # placeholders
-        e_n   = torch.zeros(B, self.M, self.F_e, dtype=torch.float32)
-        reg_q = torch.zeros(B, self.F_reg, dtype=torch.float32)
-        reg_n = torch.zeros(B, self.M, self.F_reg, dtype=torch.float32)
-        p_n   = torch.zeros(B, self.M, 3, dtype=torch.float32)
-        mask  = torch.zeros(B, self.M, dtype=torch.bool)
-
-        # voxel keys for exclusion / target lookup
-        xi, zi, yi = downsample_keys_from_xyz(self.ctx_manager, p_q.numpy())
-
-        # neighbor candidates from train bank
-        neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8*self.M)
-
-        for b in range(B):
-            key = (xi[b], zi[b], yi[b])
-
-            # Exclude same-probe neighbors for recorded voxels
-            exclude_pids = set()
-            if has_ephys[b] and self.allow_same_probe == False:
-                exclude_pids = {pids[b].item()}
-
-            # build neighbor set
-            cand = [ci for ci in neigh_lists[b] if int(self.bank_pid[ci]) not in exclude_pids]
-            L = len(cand)
-
-            if L > self.M:
-                # random subset, not just first-M
-                sel = np.random.choice(cand, size=self.M, replace=False)
-                cand = sel.tolist()
-
-            # neighbor dropout
-            keep = []
-            for ci in cand:
-                if np.random.rand() > 0.3:
-                    keep.append(ci)
-            cand = keep
-
-            L = len(cand)
-
-            if L > 0:
-                e_n[b, :L] = torch.from_numpy(self.bank_feat[cand])
-                p_n[b, :L] = torch.from_numpy(self.bank_xyz[cand])
-                mask[b, :L] = True
-
-            # If recorded voxel but dataset provided empty ephys (edge), fall back to full map mean
-            if has_ephys[b] and (y_e[b].abs().sum() == 0):
-                chs_here = self.vox2chs.get(key, [])
-                if chs_here:
-                    y_e[b] = torch.from_numpy(self.bank_feat[chs_here].mean(axis=0))
-
-        batch = (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y_e, vox_count, allen, pids)
-        return batch
-
-# ---------- channel catalog (good probes only) ----------
-def build_channel_catalog(ephys_np: np.ndarray, probe_xyz_np: np.ndarray):
-    """
-    ephys_np: [P, C, F], probe_xyz_np: [P, C, 3], good_idx: [Pg]
-    Returns flat arrays:
-      ch_xyz: [Nch,3] (meters), ch_feat: [Nch,F], ch_pid: [Nch] int
-    Filters out channels whose xyz are all-zero.
-    """
-    feats, xyzs, pids = [], [], []
-    for p in range(probe_xyz_np.shape[0]):
-        xyz = probe_xyz_np[p]          # [C,3]
-        ef  = ephys_np[p]              # [C,F]
-        valid = ~(np.all(xyz == 0.0, axis=1))
-        if not valid.any():
-            continue
-        xyzs.append(xyz[valid])
-        feats.append(ef[valid])
-        pids.append(np.full(valid.sum(), p, dtype=np.int32))
-
-    if len(xyzs) == 0:
-        return (np.zeros((0,3), np.float32),
-                np.zeros((0, ephys_np.shape[-1]), np.float32),
-                np.zeros((0,), np.int32))
-    ch_xyz  = np.concatenate(xyzs, axis=0).astype(np.float32)
-    ch_feat = np.concatenate(feats, axis=0).astype(np.float32)
-    ch_pid  = np.concatenate(pids,  axis=0).astype(np.int32)
-    return ch_xyz, ch_feat, ch_pid
-
-# ---------- voxel↔channels index ----------
-def build_voxel_to_channels(ctx_manager, ch_xyz_m: np.ndarray):
-    """
-    Map each rounded atlas voxel (xi,zi,yi) to list of channel indices.
-    """
-    from collections import defaultdict
-
-    if ch_xyz_m.shape[0] == 0:
-        return defaultdict(list)
-    ijk = ctx_manager.bc.xyz2i(ch_xyz_m) # float indices (x,y,z)
-    Xh, Zh, Yh = ctx_manager.cell_pca.shape[1:]
-    xi = np.clip(np.round(ijk[:,0] / 8).astype(int), 0, Xh-1)
-    yi = np.clip(np.round(ijk[:,1] / 8).astype(int), 0, Yh-1)
-    zi = np.clip(np.round(ijk[:,2] / 8).astype(int), 0, Zh-1)
-    vox2chs = defaultdict(list)
-    for ci,(x, z, y) in enumerate(zip(xi, zi, yi)):
-        vox2chs[(x,z,y)].append(ci)
-    return vox2chs
-
-# ---------- KDTree (optional, falls back to numpy) ----------
-try:
-    from sklearn.neighbors import KDTree
-    _HAS_KDT = True
-except Exception:
-    _HAS_KDT = False
-
-class ChannelNN:
-    def __init__(self, ch_xyz_m: np.ndarray):
-        self.X = ch_xyz_m.astype(np.float64)
-        if self.X.shape[0] and _HAS_KDT:
-            self.tree = KDTree(self.X, leaf_size=40)
-        else:
-            self.tree = None
-    def query_radius(self, q_xyz_m: np.ndarray, r_m: float, k_cap: int = 8):
-        if self.tree is not None:
-            inds, _ = self.tree.query_radius(q_xyz_m, r=r_m, return_distance=True, sort_results=True)
-            # cap K to avoid gigantic neighbor sets:
-            capped = [ii[:k_cap] for ii in inds]
-            return capped
-        # fallback: brute force (batch)
-        out = []
-        X = self.X
-        for q in q_xyz_m:
-            if X.shape[0]==0:
-                out.append(np.array([], dtype=int)); continue
-            d2 = np.sum((X - q[None,:])**2, axis=1)
-            I = np.where(d2 <= (r_m**2))[0]
-            if I.size > k_cap:
-                # keep closest k_cap
-                J = np.argpartition(d2[I], k_cap)[:k_cap]
-                I = I[J]
-            out.append(I)
-        return out
-
-# ---------- dataset wrapper so collate knows index ----------
-class IndexedVoxelDataset(Dataset):
-    def __init__(self, base_ds: torch.utils.data.TensorDataset):
-        assert len(base_ds.tensors) == 4
-        self.base = base_ds
-    def __len__(self): return len(self.base.tensors[0])
-    def __getitem__(self, idx):
-        context, allen_ix, xyz_m, has_ephys = (t[idx] for t in self.base.tensors)
-        return idx, context, allen_ix, xyz_m, has_ephys
-
+# ==== Context manager class and utils ====
 class AtlasPCAConfig:
     n_cell_pcs: int = 50  # 338
     n_gene_pcs: int = 50  # 4345
     batch_size_vox: int = 2_000_000
-    blur_features: bool = False
     no_pca: bool = False
 
 class ContextAtlasManager:
@@ -373,7 +123,7 @@ class ContextAtlasManager:
     and now: saving/loading precomputed context to/from disk.
     """
 
-    def __init__(self, cfg: AtlasPCAConfig, regenerate_context: bool = False):
+    def __init__(self, cfg: AtlasPCAConfig, auto_align_path, regenerate_context: bool = False):
         brain_atlas = AllenAtlas()
         self.bc = brain_atlas.bc
         self.cfg = cfg
@@ -385,52 +135,9 @@ class ContextAtlasManager:
 
         # -------- Load brain regions --------
         Allen_regions = brain_atlas._get_mapping(mapping='Allen')[brain_atlas.label]
-        np.save('ibl_alignment_gui/plugins/auto_align_data/Allen_regions.npy', Allen_regions)
 
-        suffix = '_blur' if cfg.blur_features else ''
-
-        if regenerate_context:
-            # -------- AGEA → PCA --------
-            df_genes, gene_vols, atlas = agea.load(label='processed')  # [G, Xc, Zc, Yc]
-            if cfg.blur_features:
-                gene_vols = apply_3d_gaussian_blur(torch.tensor(gene_vols, device='cuda'),
-                                                   kernel_size=15, sigma=3).cpu().numpy()
-            size_x, size_z, size_y = gene_vols.shape[1:]
-            xgenes = gene_vols.reshape(gene_vols.shape[0], -1).T.astype(np.float32)
-            scaler = StandardScaler().fit(xgenes)
-            xgenes = scaler.transform(xgenes)
-            pca = PCA(n_components=cfg.n_gene_pcs).fit(xgenes)
-            X_pca = pca.transform(xgenes).reshape(size_x, size_z, size_y, cfg.n_gene_pcs)
-            gene_exp_vol = np.moveaxis(X_pca, -1, 0).astype(np.float32)  # [P_gene, Xc, Zc, Yc]
-
-            # -------- MERFISH → PCA --------
-            merfish.load()
-            LEVEL = 'subclass'
-            path = AllenAtlas._get_cache_dir().joinpath('merfish')
-            cell_type_vol = torch.tensor(np.load(path.joinpath(f'merfish_{LEVEL}.npy')))
-            zero_ind = torch.where(cell_type_vol.sum(dim=0) == 0)
-            if cfg.blur_features:
-                cell_type_vol = apply_3d_gaussian_blur(cell_type_vol.to(device='cuda'),
-                                                       kernel_size=9, sigma=3.0).detach().cpu()
-            cell_type_vol = cell_type_vol.numpy()
-            size_x, size_z, size_y = cell_type_vol.shape[1:]
-
-            xcells = cell_type_vol.reshape(cell_type_vol.shape[0], -1).T.astype(np.float32)
-            scaler = StandardScaler().fit(xcells)
-            xcells = scaler.transform(xcells)
-            pca = PCA(n_components=cfg.n_cell_pcs).fit(xcells)
-            X_pca = pca.transform(xcells).reshape(size_x, size_z, size_y, cfg.n_cell_pcs)
-            cell_type_vol = np.moveaxis(X_pca, -1, 0).astype(np.float32)  # [P_cell, Xc, Zc, Yc]
-
-            # zero out empty MERFISH sites in both modalities
-            cell_type_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
-            gene_exp_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
-
-            np.save(f'auto_align_data/agea_vol_pca{suffix}', gene_exp_vol)
-            np.save(f'auto_align_data/merfish_vol_pca{suffix}', cell_type_vol)
-        else:
-            gene_exp_vol = np.load(f'ibl_alignment_gui/plugins/auto_align_data/agea_vol_pca{suffix}.npy')
-            cell_type_vol = np.load(f'ibl_alignment_gui/plugins/auto_align_data/merfish_vol_pca{suffix}.npy')
+        gene_exp_vol = np.load(os.path.join(auto_align_path, f'agea_vol_pca.npy'))
+        cell_type_vol = np.load(os.path.join(auto_align_path, f'merfish_vol_pca.npy'))
 
         self.cell_pca = cell_type_vol  # [P_cell, Xh, Zh, Yh]
         self.gene_pca = gene_exp_vol  # [P_gene, Xh, Zh, Yh]
@@ -478,337 +185,32 @@ class ContextAtlasManager:
             'allen_ix': self.allen_idx[iy, ix, iz].astype(np.int32),
         }
 
-def mlp(d_in, d_hidden, d_out, n_layers=2, drop=0.0):
-    layers = [nn.Linear(d_in, d_hidden), nn.GELU()]
-    for _ in range(n_layers - 1):
-        layers += [nn.Linear(d_hidden, d_hidden), nn.GELU(), nn.Dropout(drop)]
-    layers += [nn.Linear(d_hidden, d_out)]
-    return nn.Sequential(*layers)
+class RecDS(Dataset):
+    """Recorded voxels: (context, allen, xyz_m, ephys, pid, vox_count, has_ephys=True)."""
+    def __init__(self, ctx, allen, xyz_m, ephys, pid, vox_count):
+        self.ctx, self.allen, self.xyz = ctx, allen, xyz_m
+        self.ephys, self.pid = ephys, pid
+        self.vox_count = vox_count
+        self.has = torch.ones(len(self.ctx), dtype=torch.bool)
+    def __len__(self): return self.ctx.shape[0]
+    def __getitem__(self, i):
+        return (i, self.ctx[i], self.allen[i], self.xyz[i],
+                self.ephys[i], self.pid[i], self.has[i], self.vox_count[i])
 
-class PosEnc3D(nn.Module):
-    """Encode absolute and relative 3D positions."""
-    def __init__(self, d_out):
-        super().__init__()
-        self.pe = mlp(6, max(64, d_out), d_out)  # [xyz_abs(3), xyz_rel(3)] -> d_out
+class GridDS(Dataset):
+    """Grid-only voxels: (context, allen, xyz_m, empty ephys, pid=0, vox_count=1, has_ephys=False)."""
+    def __init__(self, ctx, allen, xyz_m, f_e):
+        self.ctx, self.allen, self.xyz = ctx, allen, xyz_m
+        self._empty = torch.zeros(f_e, dtype=torch.float32)
+        self._empty_pid = torch.tensor(0.0, dtype=torch.float32)   # scalar, not [1]
+        self._count = torch.tensor(1.0, dtype=torch.float32)       # scalar, not [1]
+        self.has = torch.zeros(len(self.ctx), dtype=torch.bool)
+    def __len__(self): return self.ctx.shape[0]
+    def __getitem__(self, i):
+        return (i, self.ctx[i], self.allen[i], self.xyz[i],
+                self._empty, self._empty_pid, self.has[i], self._count)
 
-    def forward(self, p_abs, p_rel):
-        # p_abs, p_rel: [B, M, 3] (for neighbors) or [B, 1, 3] (for query)
-        x = torch.cat([p_abs, p_rel], dim=-1)
-        return self.pe(x)
-
-class NeighborEncoder(nn.Module):
-    def __init__(self, f_ephys, f_region, d_model, d_pos=64, drop=0.1):
-        super().__init__()
-        self.pos = PosEnc3D(d_pos)
-        self.embed = mlp(f_ephys + f_region + d_pos, d_model, d_model, n_layers=2, drop=drop)
-
-    def forward(self, e_n, reg_n, p_n_abs, p_n_rel, mask):  # e_n: [B,M,Fe]
-        pos = self.pos(p_n_abs, p_n_rel)                     # [B,M,d_pos]
-        x = torch.cat([e_n, reg_n, pos], dim=-1)
-        h = self.embed(x)                                    # [B,M,d_model]
-        h = h * mask[..., None]                              # zero out pads
-        return h
-
-class QueryEncoder(nn.Module):
-    def __init__(self, f_ctx, f_region, d_model, d_pos=64, drop=0.1):
-        super().__init__()
-        self.pos = PosEnc3D(d_pos)
-        self.embed = mlp(f_ctx + f_region + d_pos, d_model, d_model, n_layers=2, drop=drop)
-
-    def forward(self, ctx_q, reg_q, p_q_abs):
-        # broadcast rel=0 for the query token
-        B = ctx_q.size(0)
-        p_rel0 = torch.zeros(B, 1, 3, device=ctx_q.device, dtype=ctx_q.dtype)
-        p_abs = p_q_abs[:, None, :]
-        pos = self.pos(p_abs, p_rel0)                        # [B,1,d_pos]
-        x = torch.cat([ctx_q[:, None, :], reg_q[:, None, :], pos], dim=-1)
-        h = self.embed(x)                                    # [B,1,d_model]
-        return h
-
-class CrossBlock(nn.Module):
-    """Optional neighbor self-attn, then query->neighbor cross-attn."""
-    def __init__(self, d_model, nhead=8, drop=0.1, neighbor_self_attn=True):
-        super().__init__()
-        self.nei_self = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=4*d_model,
-            dropout=drop, batch_first=True
-        ) if neighbor_self_attn else None
-        self.cross = nn.MultiheadAttention(d_model, nhead, dropout=drop, batch_first=True)
-        self.ff = mlp(d_model, 4*d_model, d_model, n_layers=2, drop=drop)
-        self.norm_q1 = nn.LayerNorm(d_model)
-        self.norm_q2 = nn.LayerNorm(d_model)
-
-    def forward(self, h_q, h_n, mask_nei):
-        # h_q: [B,1,D], h_n: [B,M,D], mask_nei: [B,M] (True=real, False=pad)
-        B, M, D = h_n.shape
-        no_nei = ~mask_nei.any(dim=1)          # [B]
-        if no_nei.any():
-            # append a dummy zero neighbor and mark it valid ONLY for empty rows
-            dummy = h_n.new_zeros(B, 1, D)
-            h_n = torch.cat([h_n, dummy], dim=1)               # [B, M+1, D]
-            pad = mask_nei.new_zeros(B, 1)
-            pad[no_nei, 0] = True
-            mask_nei = torch.cat([mask_nei, pad], dim=1)       # [B, M+1]
-
-        # neighbor self-attn (optional)
-        if self.nei_self is not None:
-            key_padding_mask = (~mask_nei.bool())              # True=ignore
-            h_n = self.nei_self(h_n, src_key_padding_mask=key_padding_mask)
-
-        # query <- neighbors cross-attn
-        key_padding_mask = (~mask_nei.bool())
-        h_q2, _ = self.cross(h_q, h_n, h_n, key_padding_mask=key_padding_mask)
-        h_q = self.norm_q1(h_q + h_q2)
-        h_q = self.norm_q2(h_q + self.ff(h_q))
-        return h_q
-
-class EphysPredictor(nn.Module):
-    def __init__(self, d_model, f_out, heteroscedastic=True):
-        super().__init__()
-        self.mu_head = mlp(d_model, 2*d_model, f_out, n_layers=2, drop=0.0)
-        self.het = heteroscedastic
-        if heteroscedastic:
-            self.logvar_head = mlp(d_model, 2*d_model, f_out, n_layers=2, drop=0.0)
-
-    def forward(self, h_q):  # [B,1,D]
-        h = h_q.squeeze(1)   # [B,D]
-        mu = self.mu_head(h)
-        if self.het:
-            logvar = self.logvar_head(h).clamp(-6.0, 4.0)
-            return mu, logvar
-        return mu, None
-
-class NeighborInpaintingModel(nn.Module):
-    """
-    Predict ephys for a single query channel using context of that channel
-    and a variable-size set of neighbor ephys from *other* probes.
-    """
-    def __init__(self, f_ctx, f_ephys, f_region, f_out, e_mean=None, e_std=None, ctx_mean=None, ctx_std=None,
-                 d_model=256, nhead=8, depth=2, neighbor_self_attn=True, heteroscedastic=True, drop=0.1):
-        super().__init__()
-        self.qenc = QueryEncoder(f_ctx, f_region, d_model, drop=drop)
-        self.nenc = NeighborEncoder(f_ephys, f_region, d_model, drop=drop)
-        self.blocks = nn.ModuleList([
-            CrossBlock(d_model, nhead=nhead, drop=drop, neighbor_self_attn=neighbor_self_attn)
-            for _ in range(depth)
-        ])
-        self.pred = EphysPredictor(d_model, f_out, heteroscedastic=heteroscedastic)
-
-        if(e_mean is not None and e_std is not None and ctx_mean is not None and ctx_std is not None):
-            # register as buffers so they're saved/loaded with state_dict
-            self.register_buffer("e_mean", e_mean.clone().detach())
-            self.register_buffer("e_std",  e_std.clone().detach())
-            self.register_buffer("ctx_mean", ctx_mean.clone().detach())
-            self.register_buffer("ctx_std", ctx_std.clone().detach())
-
-    def forward(self, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei):
-        """
-        ctx_q: [B, F_ctx]
-        reg_q: [B, F_reg]   (e.g., one-hot Allen/Cosmos or learned emb)
-        p_q:   [B, 3]       absolute (voxel/world) coords
-        e_n:   [B, M, F_e]  neighbor ephys
-        reg_n: [B, M, F_reg]
-        p_n:   [B, M, 3]    neighbor absolute coords
-        mask_nei: [B, M]    1 = real neighbor, 0 = pad
-        """
-        # relative pos of neighbors to query
-        p_q_b = p_q[:, None, :].expand_as(p_n)
-        p_rel = p_n - p_q_b
-
-        h_q = self.qenc(ctx_q, reg_q, p_q)                   # [B,1,D]
-        h_n = self.nenc(e_n, reg_n, p_n, p_rel, mask_nei)    # [B,M,D]
-
-        for blk in self.blocks:
-            h_q = blk(h_q, h_n, mask_nei)
-
-        mu, logvar = self.pred(h_q)                          # [B,F_out], [B,F_out] or None
-        return mu, logvar
-
-def get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei):
-    p_rel = p_n - p_q[:, None, :]
-    h_q = model.qenc(ctx_q, reg_q, p_q)                    # [B,1,D]
-    h_n = model.nenc(e_n, reg_n, p_n, p_rel, mask_nei)     # [B,M,D]
-    for blk in model.blocks:
-        h_q = blk(h_q, h_n, mask_nei)                      # [B,1,D]
-    mu, logvar = model.pred(h_q)                           # [B,F], [B,F] or None
-    return h_q.squeeze(1), mu, logvar
-
-class AutoAlign:
-    """
-    A class to manage viewing the automatic alignment visualizations in Urchin viewer.
-
-    Parameters
-    ----------
-    controller: AlignmentGUIController
-        The main application controller.
-
-    Attributes
-    ----------
-    controller: AlignmentGUIController
-        The main application controller.
-    align_checkbox: QtWidgets.QCheckbox or None
-        Visualize the predicted alignment.
-    ba: AllenAtlas
-        A brain atlas instance.
-    """
-
-    def __init__(self, controller: 'AlignmentGUIController'):
-        self.controller = controller
-
-        # Initialize variables
-        self.align_checkbox: QtWidgets.QCheckBox | None = None
-        self.ba: AllenAtlas = self.controller.model.brain_atlas
-
-    def data_button_pressed(self) -> None:
-        """
-        Prepare NeigborCollate function and VoxelDataset.
-
-        Called when the data button is pressed in the main application.
-        """
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        cfg = AtlasPCAConfig()
-        print("Generating context grid")
-        ctx_manager = ContextAtlasManager(cfg, regenerate_context=False)
-
-        # Load ephys & probe positions and filter indices of MISALIGNED or bad probes
-        print("Loading insertion data")
-        pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData()
-
-        # Build the 200 µm dataset & splits
-        M_MAX = 8
-        RADIUS_UM = 500
-
-        train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std = build_channels_plus_emptyvoxels_with_neighbors(
-            ctx_manager=ctx_manager,
-            ephys=ephys,
-            probe_positions=probe_positions,
-            RADIUS_UM=RADIUS_UM,
-            M_MAX=M_MAX)
-
-        # Instantiate model
-        F_ctx = cfg.n_cell_pcs + cfg.n_gene_pcs
-        F_e = ephys.shape[-1]
-        F_REG = 0
-        heteroscedastic = False
-
-        self.model = NeighborInpaintingModel(
-            f_ctx=F_ctx, f_ephys=F_e, f_out=F_e, f_region=F_REG, e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean,
-            ctx_std=ctx_std,
-            d_model=128, nhead=8, depth=2, neighbor_self_attn=False, heteroscedastic=heteroscedastic, drop=0.15
-        ).to(self.device)
-        self.model.load_state_dict(torch.load('ibl_alignment_gui/plugins/auto_align_data/SE_model.pth'))
-
-        # #TODO: Get estimated xyz from controller
-        # # If we already have a fit, skip this part
-        # est_xyz = self.controller.model.loaders['align'].get_starting_alignment(0)
-        #
-        # # Fit linear line through the estimated xyz positions
-        # p_fit, v_fit = self.fit_line_least_squares(est_xyz)
-        #
-        # bc = ctx_manager.bc
-        # bounds_m = (
-        #     (float(bc.xscale.min()), float(bc.xscale.max())),
-        #     (float(bc.yscale.min()), float(bc.yscale.max())),
-        #     (float(bc.zscale.min()), float(bc.zscale.max())),
-        # )
-        # t_min, t_max = self.line_aabb_intersection(p_fit, v_fit, bounds_m)
-        #
-        # seg_P0 = p_fit + t_min * v_fit
-        # seg_P1 = p_fit + t_max * v_fit
-        # seg_len_m = float(np.linalg.norm(seg_P1 - seg_P0))
-        # v_unit = v_fit / (np.linalg.norm(v_fit) + 1e-20)
-        #
-        # # Build relative positions along true probe (for pitch estimate only)
-        # r_rel, L_ref = self.build_rel_spacing_from_true(est_xyz, p_fit, v_fit)  # r_rel in [0,1] on valid channels
-        #
-        # # TODO: Get the recorded ephys
-        # #self.recorded_ephys_probe = get.......
-        # self.C = int(self.recorded_ephys_probe.shape[0])
-        #
-        # # Sample the FULL top-to-bottom line at (approx) channel pitch to get M points
-        # M = int(np.clip(np.ceil(seg_len_m / L_ref), self.C, 4096))  # cap to avoid extreme M
-        # ts = np.linspace(0.0, seg_len_m, M, dtype=np.float32)
-        # self.xyz_full = (seg_P0[None, :] + ts[:, None] * v_unit[None, :]).astype(np.float32)   # [M,3] meters
-
-    def predict_alignment(self, radius_um=500, M_max=8, lambda_diag=0.0, lambda_vert=50.0, lambda_horz=0.5,
-                          min_overlap_channels=350):
-        # Predict features along the FULL line (standardized space)
-        mu_std_full, logvar_full = self.predict_features_at_xyz(
-            self.model, self.ctx_manager, self.dataset, self.nn_bank, self.bank_xyz, self.bank_feat, self.bank_pid,
-            self.vox2chs_all, self.full_feat, self.full_pid, self.model.e_mean, self.model.e_std, self.model.ctx_stats,
-            self.xyz_full, batch_size=512, radius_um=radius_um, M_max=M_max, device=self.device
-        )  # mu_std_full: [M, F], logvar_full: [M, F] or None
-        B_std = mu_std_full.cpu().numpy().astype(np.float64)  # [M, F]
-
-        # Prepare recorded features in standardized space
-        Y_rec = self.recorded_ephys_probe.astype(np.float32)  # [C, F] original
-        ch_mask = ~(np.all(Y_rec == 0.0, axis=1))  # True where we have data
-        rec_idx = np.where(ch_mask)[0]
-
-        Y_std = ((torch.from_numpy(Y_rec) - self.model.e_mean.cpu()) / (self.model.e_std.cpu() + 1e-8)).numpy().astype(np.float64)  # [C, F]
-        A_std = Y_std  # [N, F] where N = number of recorded channels
-
-        Cmat = self.build_cost_matrix(A_std, B_std, logvar_full, use_nll_cost=True)  # [N,M]
-        N, M = Cmat.shape
-        j_start, j_end, path, total_cost = self.sdtw_subsequence(
-            Cmat, lambda_diag, lambda_vert, lambda_horz
-        )
-
-        # Guard: ensure sufficient overlap
-        if (j_end - j_start + 1) < min_overlap_channels:
-            # Fallback: maximize sliding window MSE as in your old code (simple, robust)
-            # This keeps the function from failing; you can choose to raise instead.
-            best_k = 0
-            best_mse = np.inf
-            Nr = N
-            for k in range(0, M - Nr + 1):
-                m = ((B_std[k:k + Nr] - A_std) ** 2).mean()
-                if m < best_mse:
-                    best_mse = m
-                    best_k = k
-            j_start, j_end = best_k, best_k + Nr - 1
-            path = [(i, best_k + i) for i in range(N)]
-            total_cost = best_mse * N
-            print("Fallback to maximizing sliding window MSE")
-        else:
-            print("Path length: {}".format(len(path)))
-
-        # path: list[(i,j)] from DTW backtrack, i in [0..N-1] for recorded-index order
-        i_seq = np.array([ij[0] for ij in path], dtype=int)
-        j_seq = np.array([ij[1] for ij in path], dtype=int)
-
-        # For each i, take the last j visited at that i (so we advance when i increments)
-        # This yields exactly N pairs (one per recorded index)
-        j_for_i = np.full((A_std.shape[0],), np.nan)  # N
-        for ii, jj in zip(i_seq, j_seq):
-            j_for_i[ii] = jj
-        # Safety: forward/backward fill if any i were skipped (shouldn’t happen, but guard)
-        for ii in range(1, j_for_i.shape[0]):
-            if np.isnan(j_for_i[ii]):
-                j_for_i[ii] = j_for_i[ii - 1]
-        for ii in range(j_for_i.shape[0] - 2, -1, -1):
-            if np.isnan(j_for_i[ii]):
-                j_for_i[ii] = j_for_i[ii + 1]
-
-        j_for_i = np.clip(j_for_i.astype(int), 0, M - 1)  # length N
-
-        # Now interpolate to ALL C channels using absolute channel indices rec_idx
-        j_map_all = np.interp(np.arange(self.C), rec_idx, j_for_i.astype(float))  # float
-        j_map_all_i = np.clip(np.round(j_map_all).astype(int), 0, M - 1)
-        est_xyz = self.xyz_full[j_map_all_i]  # [C,3] meters
-
-        # Predictions for ALIGNED placement to compute visuals & metrics
-        # Build predicted features at the aligned C indices for visual parity w/ your previous code
-        mu_std_aligned = B_std[j_map_all_i]  # [C, F] standardized
-        mu_aligned = (mu_std_aligned * (self.model.e_std.cpu().numpy() + 1e-8) + self.model.e_mean.cpu().numpy())  # original units
-
-        # Overlap window for recorded channels inside aligned array (place recorded where they map)
-        rec_win_idx = rec_idx
-        pred_win_idx = j_map_all_i[rec_idx]  # the corresponding positions in the full line for those channels
-
-        # TODO: Send to the controller the final alignment and update plots
-
+# ==== Insertion data loading ====
 def LoadInsertionData(
     raw_date: bool = False,
     project: str = 'ea_active',
@@ -820,8 +222,8 @@ def LoadInsertionData(
     assigned by nearest channel in xyz for each probe.
 
     Returns:
-      unique_pids, context [N,384,(cell_pc+gene_pc)], allen_ix [N,384],
-      ephys_concat [N,384,F+L], probe_positions [N,384,3], probe_planned_positions [N,384,3], filter_indices
+      unique_pids, context [N,C,(cell_pc+gene_pc)], allen_ix [N,C],
+      ephys_concat [N,C,F+L], probe_positions [N,C,3], probe_planned_positions [N,C,3], filter_indices
     """
 
     print("Loading ephys features")
@@ -844,9 +246,6 @@ def LoadInsertionData(
         pid_str = str(pid)
 
         # --- Prepare channel xyz (actual + planned), preserving your up->down reversal ---
-        xyz = np.zeros((384, 3), dtype=np.float32)
-        xyz_planned = np.zeros((384, 3), dtype=np.float32)
-
         if raw_date:
             channel_indices = channels.loc[pid].index.get_level_values('channel').to_numpy()
             xyz_values = channels.loc[pid][['x', 'y', 'z']].values
@@ -856,6 +255,11 @@ def LoadInsertionData(
             xyz_values = df_pid[['x', 'y', 'z']].values
             xyz_planned_values = df_pid[['x_target', 'y_target', 'z_target']].values
 
+        C = int(channel_indices.max()) + 1  # pad if sparse
+
+        xyz = np.zeros((C, 3), dtype=np.float32)
+        xyz_planned = np.zeros((C, 3), dtype=np.float32)
+
         # Reverse order to be up -> down (same as your existing code)
         xyz[channel_indices] = xyz_values[::-1, :].copy()
         xyz_planned[channel_indices] = xyz_planned_values[::-1, :].copy()
@@ -864,7 +268,7 @@ def LoadInsertionData(
         probe_planned_positions.append(xyz_planned)
 
         # --- Table features per probe ---
-        ephys_probe = np.zeros((384, len(FEATURE_LIST)), dtype=np.float32)
+        ephys_probe = np.zeros((C, len(FEATURE_LIST)), dtype=np.float32)
         channel_idx = df_pid.index.get_level_values('channel').to_numpy()
         values = np.stack([df_pid[feat].values for feat in FEATURE_LIST], axis=-1)
         ephys_probe[channel_idx] = values
@@ -873,9 +277,9 @@ def LoadInsertionData(
         ephys_per_probe.append(ephys_probe[::-1, :].copy())
 
     # Stack all probes
-    ephys = np.stack(ephys_per_probe)  # [N, 384, F(+L)]
+    ephys = np.stack(ephys_per_probe)  # [N, C, F(+L)]
     ephys[np.where(np.isinf(ephys))] = 0.0
-    probe_positions = np.stack(probe_positions)          # [N, 384, 3]
+    probe_positions = np.stack(probe_positions)          # [N, C, 3]
     probe_planned_positions = np.stack(probe_planned_positions)
 
     # PIDs in the df order
@@ -889,6 +293,8 @@ def LoadInsertionData(
         block_extra = []
     block_set = set(MISALIGNED_PIDS + block_extra)
     filter_indices = [i for i, item in enumerate(unique_pids) if item not in block_set]
+
+    filter_indices = [i for i in range(len(unique_pids))] #TODO: Not filtering any probe
 
     filter_pids = unique_pids[filter_indices]
     filter_ephys = ephys[filter_indices]
@@ -1124,29 +530,511 @@ def _axis_step_in_indices(bc, axis: int) -> float:
 def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
     return np.concatenate([cell_pc, gene_pc], axis=-1)
 
-def apply_3d_gaussian_blur(x, kernel_size=5, sigma=1.0):
+def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
+    Xh, Zh, Yh = ctx_manager.cell_pca.shape[1:]
+    ijk = ctx_manager.bc.xyz2i(xyz_m, mode='clip')
+    xi = np.clip(np.round(ijk[:,0] / ds_rate).astype(int), 0, Xh-1)
+    yi = np.clip(np.round(ijk[:,1] / ds_rate).astype(int), 0, Yh-1)
+    zi = np.clip(np.round(ijk[:,2] / ds_rate).astype(int), 0, Zh-1)
+    return xi, zi, yi
+
+def compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi):
+    N = xi.size
+    if(len(probe_positions.shape) == 2):
+        P, _ = probe_positions.shape
+        ch_xyz = probe_positions
+    else:
+        P, C, _ = probe_positions.shape
+        ch_xyz = probe_positions.reshape(P*C, 3)
+
+    xic, zic, yic = downsample_keys_from_xyz(ctx_manager, ch_xyz)
+    has = np.zeros(N, dtype=bool)
+
+    # Map grid tuple -> flat index
+    key2flat = { (int(xi[i]), int(zi[i]), int(yi[i])): i for i in range(N) }
+
+    for x, z, y in zip(xic, zic, yic):
+        if (x,z,y) in key2flat:
+            has[key2flat[(x,z,y)]] = True
+    return has
+
+# ---------- KDTree neighbors (train bank) ----------
+try:
+    from sklearn.neighbors import KDTree
+    _HAS_KDT = True
+except Exception:
+    _HAS_KDT = False
+
+class ChannelNN:
+    def __init__(self, ch_xyz_m: np.ndarray):
+        self.X = ch_xyz_m.astype(np.float64)
+        self.tree = KDTree(self.X, leaf_size=40) if (self.X.shape[0] and _HAS_KDT) else None
+    def query_radius(self, q_xyz_m: np.ndarray, r_m: float, k_cap: int = 8):
+        if self.tree is not None:
+            inds, _ = self.tree.query_radius(q_xyz_m, r=r_m, return_distance=True, sort_results=True)
+            return [ii[:k_cap] for ii in inds]
+        # brute force
+        out = []
+        X = self.X
+        for q in q_xyz_m:
+            if X.shape[0]==0: out.append(np.array([], dtype=int)); continue
+            d2 = np.sum((X - q[None,:])**2, axis=1)
+            I = np.where(d2 <= (r_m**2))[0]
+            if I.size > 8:
+                J = np.argpartition(d2[I], 8)[:8]
+                I = I[J]
+            out.append(I)
+        return out
+
+# ---------- collate that injects neighbors ----------
+class NeighborCollate:
     """
-    x: tensor of shape [C, H, W, D]
-    Returns: blurred tensor of same shape
+    Takes per-sample (idx, ctx, allen, xyz_m, ephys, has_ephys) and adds:
+      - e_n [B,M,F_e], p_n [B,M,3], mask [B,M]
+      - y_e [B,F_e] from dataset
+    Uses a TRAIN-ONLY neighbor bank and excludes same-probe neighbors for recorded voxels.
+    Assumes inputs are already standardized.
     """
-    device = x.device
-    with torch.no_grad():
-        C = x.shape[0]
+    def __init__(self,
+                 ctx_manager,
+                 bank_xyz_m, bank_feat_stdzd, bank_pid, kdtree_bank,
+                 e_feat_dim: int,
+                 M_max=64, radius_um=600.0, allow_same_probe=False):
+        self.ctx_manager = ctx_manager
+        self.bank_xyz  = bank_xyz_m
+        self.bank_feat = bank_feat_stdzd
+        self.bank_pid  = bank_pid
+        self.nn        = kdtree_bank
+        self.F_e       = int(e_feat_dim)
+        self.M         = int(M_max)
+        self.r_m       = float(radius_um) * 1e-6
+        self.F_reg     = 0
+        self.allow_same_probe = allow_same_probe
+    def __call__(self, batch_items):
+        # unpack
+        (idxs, ctxs, allens, xyzs, ephys, pids, has, counts) = zip(*batch_items)
 
-        kernel = get_gaussian_kernel3d(kernel_size, sigma, device=device)  # [K, K, K]
-        kernel = kernel.view(1, 1, kernel_size, kernel_size, kernel_size)  # [1, 1, K, K, K]
-        kernel = kernel.repeat(C, 1, 1, 1, 1)  # [C, 1, K, K, K]
-        kernel = kernel.to(x.dtype)
+        B = len(idxs)
+        ctx_q  = torch.stack(ctxs,   dim=0)        # [B,F_ctx] (already standardized)
+        allen  = torch.stack(allens, dim=0)        # [B]
+        p_q    = torch.stack(xyzs,   dim=0)        # [B,3] m
+        y_e    = torch.stack([
+                   t if t.numel() else torch.zeros(self.F_e, dtype=torch.float32)
+                 for t in ephys], dim=0)           # [B,F_e]
+        has_ephys = torch.stack(has, dim=0).bool() # [B]
+        vox_count = torch.stack(counts, dim=0).float().clamp_min(1.0)  # [B]
 
-        x = x.unsqueeze(0)  # [1, C, H, W, D]
-        padding = kernel_size // 2
-        blurred = F.conv3d(x, kernel, padding=padding, groups=C)  # [1, C, H, W, D]
-    return blurred.squeeze(0)  # [C, H, W, D]
+        # placeholders
+        e_n   = torch.zeros(B, self.M, self.F_e, dtype=torch.float32)
+        reg_q = torch.zeros(B, self.F_reg, dtype=torch.float32)
+        reg_n = torch.zeros(B, self.M, self.F_reg, dtype=torch.float32)
+        p_n   = torch.zeros(B, self.M, 3, dtype=torch.float32)
+        mask  = torch.zeros(B, self.M, dtype=torch.bool)
 
-def get_gaussian_kernel3d(kernel_size, sigma, device='cpu'):
-    """Create a 3D Gaussian kernel."""
-    ax = torch.arange(kernel_size, device=device) - kernel_size // 2
-    xx, yy, zz = torch.meshgrid(ax, ax, ax, indexing='ij')
-    kernel = torch.exp(-(xx**2 + yy**2 + zz**2) / (2. * sigma**2))
-    kernel /= kernel.sum()
-    return kernel
+        # voxel keys for exclusion / target lookup
+        xi, zi, yi = downsample_keys_from_xyz(self.ctx_manager, p_q.numpy())
+
+        # neighbor candidates from train bank
+        neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8*self.M)
+
+        for b in range(B):
+            key = (xi[b], zi[b], yi[b])
+
+            # Exclude same-probe neighbors for recorded voxels
+            exclude_pids = set()
+            if has_ephys[b] and self.allow_same_probe == False:
+                exclude_pids = {pids[b].item()}
+
+            # build neighbor set
+            cand = [ci for ci in neigh_lists[b] if int(self.bank_pid[ci]) not in exclude_pids]
+            L = len(cand)
+
+            if L > self.M:
+                # random subset, not just first-M
+                sel = np.random.choice(cand, size=self.M, replace=False)
+                cand = sel.tolist()
+
+            # neighbor dropout
+            keep = []
+            for ci in cand:
+                if np.random.rand() > 0.3:
+                    keep.append(ci)
+            cand = keep
+
+            L = len(cand)
+
+            if L > 0:
+                e_n[b, :L] = torch.from_numpy(self.bank_feat[cand])
+                p_n[b, :L] = torch.from_numpy(self.bank_xyz[cand])
+                mask[b, :L] = True
+
+            # If recorded voxel but dataset provided empty ephys (edge), fall back to full map mean
+            if has_ephys[b] and (y_e[b].abs().sum() == 0):
+                chs_here = self.vox2chs.get(key, [])
+                if chs_here:
+                    y_e[b] = torch.from_numpy(self.bank_feat[chs_here].mean(axis=0))
+
+        batch = (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y_e, vox_count, allen, pids)
+        return batch
+
+# ---------- channel catalog (good probes only) ----------
+def build_channel_catalog(ephys_np: np.ndarray, probe_xyz_np: np.ndarray):
+    """
+    ephys_np: [P, C, F], probe_xyz_np: [P, C, 3], good_idx: [Pg]
+    Returns flat arrays:
+      ch_xyz: [Nch,3] (meters), ch_feat: [Nch,F], ch_pid: [Nch] int
+    Filters out channels whose xyz are all-zero.
+    """
+    feats, xyzs, pids = [], [], []
+    for p in range(probe_xyz_np.shape[0]):
+        xyz = probe_xyz_np[p]          # [C,3]
+        ef  = ephys_np[p]              # [C,F]
+        valid = ~(np.all(xyz == 0.0, axis=1))
+        if not valid.any():
+            continue
+        xyzs.append(xyz[valid])
+        feats.append(ef[valid])
+        pids.append(np.full(valid.sum(), p, dtype=np.int32))
+
+    if len(xyzs) == 0:
+        return (np.zeros((0,3), np.float32),
+                np.zeros((0, ephys_np.shape[-1]), np.float32),
+                np.zeros((0,), np.int32))
+    ch_xyz  = np.concatenate(xyzs, axis=0).astype(np.float32)
+    ch_feat = np.concatenate(feats, axis=0).astype(np.float32)
+    ch_pid  = np.concatenate(pids,  axis=0).astype(np.int32)
+    return ch_xyz, ch_feat, ch_pid
+
+# ---------- KDTree (optional, falls back to numpy) ----------
+try:
+    from sklearn.neighbors import KDTree
+    _HAS_KDT = True
+except Exception:
+    _HAS_KDT = False
+
+class ChannelNN:
+    def __init__(self, ch_xyz_m: np.ndarray):
+        self.X = ch_xyz_m.astype(np.float64)
+        if self.X.shape[0] and _HAS_KDT:
+            self.tree = KDTree(self.X, leaf_size=40)
+        else:
+            self.tree = None
+    def query_radius(self, q_xyz_m: np.ndarray, r_m: float, k_cap: int = 8):
+        if self.tree is not None:
+            inds, _ = self.tree.query_radius(q_xyz_m, r=r_m, return_distance=True, sort_results=True)
+            # cap K to avoid gigantic neighbor sets:
+            capped = [ii[:k_cap] for ii in inds]
+            return capped
+        # fallback: brute force (batch)
+        out = []
+        X = self.X
+        for q in q_xyz_m:
+            if X.shape[0]==0:
+                out.append(np.array([], dtype=int)); continue
+            d2 = np.sum((X - q[None,:])**2, axis=1)
+            I = np.where(d2 <= (r_m**2))[0]
+            if I.size > k_cap:
+                # keep closest k_cap
+                J = np.argpartition(d2[I], k_cap)[:k_cap]
+                I = I[J]
+            out.append(I)
+        return out
+
+# ==== Model classes and inference function ====
+def mlp(d_in, d_hidden, d_out, n_layers=2, drop=0.0):
+    layers = [nn.Linear(d_in, d_hidden), nn.GELU()]
+    for _ in range(n_layers - 1):
+        layers += [nn.Linear(d_hidden, d_hidden), nn.GELU(), nn.Dropout(drop)]
+    layers += [nn.Linear(d_hidden, d_out)]
+    return nn.Sequential(*layers)
+
+class PosEnc3D(nn.Module):
+    """Encode absolute and relative 3D positions."""
+    def __init__(self, d_out):
+        super().__init__()
+        self.pe = mlp(6, max(64, d_out), d_out)  # [xyz_abs(3), xyz_rel(3)] -> d_out
+
+    def forward(self, p_abs, p_rel):
+        # p_abs, p_rel: [B, M, 3] (for neighbors) or [B, 1, 3] (for query)
+        x = torch.cat([p_abs, p_rel], dim=-1)
+        return self.pe(x)
+
+class NeighborEncoder(nn.Module):
+    def __init__(self, f_ephys, f_region, d_model, d_pos=64, drop=0.1):
+        super().__init__()
+        self.pos = PosEnc3D(d_pos)
+        self.embed = mlp(f_ephys + f_region + d_pos, d_model, d_model, n_layers=2, drop=drop)
+
+    def forward(self, e_n, reg_n, p_n_abs, p_n_rel, mask):  # e_n: [B,M,Fe]
+        pos = self.pos(p_n_abs, p_n_rel)                     # [B,M,d_pos]
+        x = torch.cat([e_n, reg_n, pos], dim=-1)
+        h = self.embed(x)                                    # [B,M,d_model]
+        h = h * mask[..., None]                              # zero out pads
+        return h
+
+class QueryEncoder(nn.Module):
+    def __init__(self, f_ctx, f_region, d_model, d_pos=64, drop=0.1):
+        super().__init__()
+        self.pos = PosEnc3D(d_pos)
+        self.embed = mlp(f_ctx + f_region + d_pos, d_model, d_model, n_layers=2, drop=drop)
+
+    def forward(self, ctx_q, reg_q, p_q_abs):
+        # broadcast rel=0 for the query token
+        B = ctx_q.size(0)
+        p_rel0 = torch.zeros(B, 1, 3, device=ctx_q.device, dtype=ctx_q.dtype)
+        p_abs = p_q_abs[:, None, :]
+        pos = self.pos(p_abs, p_rel0)                        # [B,1,d_pos]
+        x = torch.cat([ctx_q[:, None, :], reg_q[:, None, :], pos], dim=-1)
+        h = self.embed(x)                                    # [B,1,d_model]
+        return h
+
+class CrossBlock(nn.Module):
+    """Optional neighbor self-attn, then query->neighbor cross-attn."""
+    def __init__(self, d_model, nhead=8, drop=0.1, neighbor_self_attn=True):
+        super().__init__()
+        self.nei_self = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=4*d_model,
+            dropout=drop, batch_first=True
+        ) if neighbor_self_attn else None
+        self.cross = nn.MultiheadAttention(d_model, nhead, dropout=drop, batch_first=True)
+        self.ff = mlp(d_model, 4*d_model, d_model, n_layers=2, drop=drop)
+        self.norm_q1 = nn.LayerNorm(d_model)
+        self.norm_q2 = nn.LayerNorm(d_model)
+
+    def forward(self, h_q, h_n, mask_nei):
+        # h_q: [B,1,D], h_n: [B,M,D], mask_nei: [B,M] (True=real, False=pad)
+        B, M, D = h_n.shape
+        no_nei = ~mask_nei.any(dim=1)          # [B]
+        if no_nei.any():
+            # append a dummy zero neighbor and mark it valid ONLY for empty rows
+            dummy = h_n.new_zeros(B, 1, D)
+            h_n = torch.cat([h_n, dummy], dim=1)               # [B, M+1, D]
+            pad = mask_nei.new_zeros(B, 1)
+            pad[no_nei, 0] = True
+            mask_nei = torch.cat([mask_nei, pad], dim=1)       # [B, M+1]
+
+        # neighbor self-attn (optional)
+        if self.nei_self is not None:
+            key_padding_mask = (~mask_nei.bool())              # True=ignore
+            h_n = self.nei_self(h_n, src_key_padding_mask=key_padding_mask)
+
+        # query <- neighbors cross-attn
+        key_padding_mask = (~mask_nei.bool())
+        h_q2, _ = self.cross(h_q, h_n, h_n, key_padding_mask=key_padding_mask)
+        h_q = self.norm_q1(h_q + h_q2)
+        h_q = self.norm_q2(h_q + self.ff(h_q))
+        return h_q
+
+class EphysPredictor(nn.Module):
+    def __init__(self, d_model, f_out, heteroscedastic=True):
+        super().__init__()
+        self.mu_head = mlp(d_model, 2*d_model, f_out, n_layers=2, drop=0.0)
+        self.het = heteroscedastic
+        if heteroscedastic:
+            self.logvar_head = mlp(d_model, 2*d_model, f_out, n_layers=2, drop=0.0)
+
+    def forward(self, h_q):  # [B,1,D]
+        h = h_q.squeeze(1)   # [B,D]
+        mu = self.mu_head(h)
+        if self.het:
+            logvar = self.logvar_head(h).clamp(-6.0, 4.0)
+            return mu, logvar
+        return mu, None
+
+class NeighborInpaintingModel(nn.Module):
+    """
+    Predict ephys for a single query channel using context of that channel
+    and a variable-size set of neighbor ephys from *other* probes.
+    """
+    def __init__(self, f_ctx, f_ephys, f_region, f_out, e_mean=None, e_std=None, ctx_mean=None, ctx_std=None,
+                 d_model=256, nhead=8, depth=2, neighbor_self_attn=True, heteroscedastic=True, drop=0.1):
+        super().__init__()
+        self.qenc = QueryEncoder(f_ctx, f_region, d_model, drop=drop)
+        self.nenc = NeighborEncoder(f_ephys, f_region, d_model, drop=drop)
+        self.blocks = nn.ModuleList([
+            CrossBlock(d_model, nhead=nhead, drop=drop, neighbor_self_attn=neighbor_self_attn)
+            for _ in range(depth)
+        ])
+        self.pred = EphysPredictor(d_model, f_out, heteroscedastic=heteroscedastic)
+
+        if(e_mean is not None and e_std is not None and ctx_mean is not None and ctx_std is not None):
+            # register as buffers so they're saved/loaded with state_dict
+            self.register_buffer("e_mean", e_mean.clone().detach())
+            self.register_buffer("e_std",  e_std.clone().detach())
+            self.register_buffer("ctx_mean", ctx_mean.clone().detach())
+            self.register_buffer("ctx_std", ctx_std.clone().detach())
+
+    def forward(self, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei):
+        """
+        ctx_q: [B, F_ctx]
+        reg_q: [B, F_reg]   (e.g., one-hot Allen/Cosmos or learned emb)
+        p_q:   [B, 3]       absolute (voxel/world) coords
+        e_n:   [B, M, F_e]  neighbor ephys
+        reg_n: [B, M, F_reg]
+        p_n:   [B, M, 3]    neighbor absolute coords
+        mask_nei: [B, M]    1 = real neighbor, 0 = pad
+        """
+        # relative pos of neighbors to query
+        p_q_b = p_q[:, None, :].expand_as(p_n)
+        p_rel = p_n - p_q_b
+
+        h_q = self.qenc(ctx_q, reg_q, p_q)                   # [B,1,D]
+        h_n = self.nenc(e_n, reg_n, p_n, p_rel, mask_nei)    # [B,M,D]
+
+        for blk in self.blocks:
+            h_q = blk(h_q, h_n, mask_nei)
+
+        mu, logvar = self.pred(h_q)                          # [B,F_out], [B,F_out] or None
+        return mu, logvar
+
+def get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei):
+    p_rel = p_n - p_q[:, None, :]
+    h_q = model.qenc(ctx_q, reg_q, p_q)                    # [B,1,D]
+    h_n = model.nenc(e_n, reg_n, p_n, p_rel, mask_nei)     # [B,M,D]
+    for blk in model.blocks:
+        h_q = blk(h_q, h_n, mask_nei)                      # [B,1,D]
+    mu, logvar = model.pred(h_q)                           # [B,F], [B,F] or None
+    return h_q.squeeze(1), mu, logvar
+
+# ==== alignment algorithm utils ====
+@torch.no_grad()
+def predict_features_at_xyz_v2(
+    model,
+    ctx_manager,
+    handles,                     # dict from alignment_handles_from_loader(...)
+    Fe,
+    xyz_m_cand: np.ndarray,      # [K,3] meters
+    batch_size: int = 512,
+    radius_um: float = 500.0,
+    M_max: int = 8,
+    device: Optional[str] = None,
+):
+    """
+    Returns standardized predictions at given XYZ:
+      mu_std: [K, F], logvar: [K, F] or None
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device).eval()
+
+    # Build RAW context at query xyz
+    pack = ctx_manager.sample_context_numpy_m(xyz_m_cand, mode='clip')
+    ctx_raw = torch.from_numpy(np.concatenate([pack['cell_pc'], pack['gene_pc']], axis=1)).float()
+    xyz_t = torch.from_numpy(xyz_m_cand).float()
+
+    C = xyz_t.shape[0]
+
+    allen = torch.ones(C) * pack['allen_ix'][0]
+
+    qds = GridDS(ctx_raw, allen, xyz_t, Fe)
+
+    # Collate with neighbors
+    collate = NeighborCollate(
+        ctx_manager,
+        handles["bank_xyz"], handles["bank_feat"], handles["bank_pid"], handles["nn_bank"],
+        e_feat_dim=Fe, M_max=M_max, radius_um=radius_um
+    )
+
+    dl = DataLoader(
+        qds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=False, drop_last=False, collate_fn=collate
+    )
+
+    mu_std, logvar_list = [], []
+    for batch in dl:
+        (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y_e, vox_count, *_) = [
+            x.to(device) if torch.is_tensor(x) else x for x in batch
+        ]
+        if device == "cuda":
+            with torch.amp.autocast("cuda"):
+                _, mu, logvar = get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask)
+        else:
+            _, mu, logvar = get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask)
+        mu_std.append(mu.detach().float().cpu())
+        logvar_list.append(None if logvar is None else logvar.detach().float().cpu())
+
+    mu_std = torch.cat(mu_std, dim=0)
+    logvar = None if logvar_list[0] is None else torch.cat(logvar_list, dim=0)
+    return mu_std, logvar
+
+def alignment_handles_from_loader(train_loader):
+    """
+    Extract the neighbor bank and full-channel lookup from NeighborCollateV2
+    attached to the train_loader. Also returns ctx stats and ephys stats.
+    """
+    collate = train_loader.collate_fn
+
+    # Neighbor bank (TRAIN-ONLY)
+    bank_xyz = collate.bank_xyz
+    bank_feat = collate.bank_feat
+    bank_pid = collate.bank_pid
+    nn_bank = collate.nn
+
+    return dict(
+        bank_xyz=bank_xyz, bank_feat=bank_feat, bank_pid=bank_pid, nn_bank=nn_bank,
+    )
+
+def build_cost(A, B, logvar, use_nll=False):
+    if use_nll and (logvar is not None):
+        sigma2 = np.exp(logvar.cpu().numpy().astype(np.float64)) # [M,F_all]
+        C = np.empty((A.shape[0], B.shape[0]), dtype=np.float64)
+        for j in range(B.shape[0]):
+            diff2 = (A - B[j])**2
+            C[:, j] = 0.5 * (diff2 / (sigma2[j][:B.shape[1]] + 1e-12) + np.log(sigma2[j][:B.shape[1]] + 1e-12)).sum(axis=1)
+        return C
+
+    # L2 in standardized space
+    AA = np.sum(A*A, axis=1, keepdims=True)
+    BB = np.sum(B*B, axis=1, keepdims=True).T
+    AB = A @ B.T
+    return (AA + BB - 2.0*AB).clip(min=0.0)
+
+def sdtw(C, lam_d, lam_u, lam_l, band=None):
+    N, M = C.shape
+    D = np.full((N, M), np.inf, dtype=np.float64)
+    P = np.full((N, M), -1, dtype=np.int8)
+
+    D[0, :] = C[0, :] if band is None else np.where(band[0, :], C[0, :], np.inf)
+    for i in range(1, N):
+        j_iter = range(1, M) if band is None else np.where(band[i, :])[0]
+        for j in j_iter:
+            if band is not None and not band[i, j]:
+                continue
+            c_diag = D[i - 1, j - 1] + lam_d if j - 1 >= 0 else np.inf
+            c_up = D[i - 1, j] + lam_u
+            c_left = D[i, j - 1] + lam_l if j - 1 >= 0 else np.inf
+            if c_diag <= c_up and c_diag <= c_left:
+                D[i, j] = C[i, j] + c_diag;
+                P[i, j] = 0
+            elif c_up <= c_left:
+                D[i, j] = C[i, j] + c_up;
+                P[i, j] = 1
+            else:
+                D[i, j] = C[i, j] + c_left;
+                P[i, j] = 2
+    j_end = int(np.argmin(D[N - 1, :]));
+    total = float(D[N - 1, j_end])
+    i, j = N - 1, j_end;
+    path = [(i, j)]
+    while i > 0:
+        k = P[i, j]
+        if k == 0:
+            i, j = i - 1, j - 1
+        elif k == 1:
+            i, j = i - 1, j
+        elif k == 2:
+            i, j = i, j - 1
+        else:
+            break
+        path.append((i, j))
+    path.reverse()
+    return path[0][1], j_end, path, total
+
+def xyz_to_region_ids(xyz_m, brain_atlas):
+    """
+    xyz_m: [C, 3] in meters. Convert to µm for atlas, return [C] region ids (int).
+    """
+    # brain_atlas.get_labels should broadcast over channels
+    region_ids = brain_atlas.get_labels(xyz_m, mode='clip')
+
+    # ensure 1D int array
+    return np.asarray(region_ids).astype(int).reshape(-1)

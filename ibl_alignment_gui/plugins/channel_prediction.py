@@ -7,6 +7,11 @@ from qtpy import QtWidgets
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
 
+from ibl_alignment_gui.plugins.auto_align import *
+
+from ephysatlas.feature_computation import compute_features_from_pid
+import time
+
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.shank_controller import ShankController
@@ -15,36 +20,24 @@ PLUGIN_NAME = 'Channel Prediction'
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
-    """
-    Set up the Channel Prediction plugin.
-
-    Adds menu options to select different prediction models.
-
-    Parameters
-    ----------
-    controller: AlignmentGUIController
-        The main application controller.
-    """
     controller.plugins[PLUGIN_NAME] = Bunch()
+    controller.plugins[PLUGIN_NAME]['activated'] = False
+    controller.plugins[PLUGIN_NAME]['engine'] = None  # cache slot
+
     channel_prediction = ChannelPrediction(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
 
-    # Add menu bar for selecting what to show
-    controller.plugins[PLUGIN_NAME]['activated'] = False
-
-    # Add a submenu to the main menu
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
     action_group = QtWidgets.QActionGroup(plugin_menu)
     action_group.setExclusive(True)
 
-    # Add the different prediction model options
-
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
-        'Random': compute_random_predictions
+        'Random': compute_random_predictions,
+        'ephys_based': compute_ephys_based_predictions,
     }
 
     for model, model_func in predictions_models.items():
@@ -69,6 +62,7 @@ class ChannelPrediction:
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
         self.controller = controller
+        self.ba: AllenAtlas = self.controller.model.brain_atlas
 
     def plot_regions(self, _, model: str, func: Callable) -> None:
         """
@@ -175,6 +169,110 @@ def compute_random_predictions(
 
     random = random_chunked_array(len(depth_samples), n_vals=20, seed=42)
     region_ids = controller.model.brain_atlas.regions.id[random]
+    regions = controller.model.brain_atlas.regions.get(region_ids)
+    return get_region_boundaries(regions, depth_samples)
+
+def compute_ephys_based_predictions(
+    controller: 'AlignmentGUIController',
+    items: 'ShankController'
+) -> Bunch[str, np.ndarray]:
+
+    # -------------- one-time caches (lazy) --------------
+    engine = ensure_engine(controller)
+    device = engine.device
+    ctx_manager = engine.ctx_manager
+    model = engine.model
+    handles = engine.handles
+    e_mean, e_std = engine.e_mean, engine.e_std
+    optimization_features = engine.optimization_features
+    M_MAX = engine.M_MAX
+    RADIUS_UM = engine.RADIUS_UM
+    pid_str = engine.pid_str
+    ephys = engine.ephys
+
+    # -------------- prediction pipeline (fast) --------------
+    print("Ephys feature computation")
+    t0 = time.time()
+    xyz_samples = items.model.align_handle.xyz_samples
+    pid = controller.model.shank_labels[0]['id']
+    p_ind = np.where(pid == pid_str)[0]
+
+    assert len(p_ind) > 0, "Probe has no precomputed ephys features."
+
+    recorded_ephys_probe = ephys[p_ind][0]
+
+    print(f"Time: {time.time() - t0:.2f}s")
+
+    C = recorded_ephys_probe.shape[0]
+
+    print("Ephys feature prediction along the probe trace")
+    t0 = time.time()
+    mu_std_full, logvar_full = predict_features_at_xyz_v2(
+        model, ctx_manager, handles, e_mean.shape[-1],
+        xyz_samples, batch_size=512, radius_um=RADIUS_UM, M_max=M_MAX, device=device
+    )
+    print(f"Time: {time.time() - t0:.2f}s")
+
+    print("Alignment pipeline")
+    t0 = time.time()
+    mu_std_full_np = mu_std_full.cpu().numpy().astype(np.float64)
+    B_std = mu_std_full_np[:, optimization_features]
+
+    Y_rec = recorded_ephys_probe.astype(np.float32)
+    ch_mask = ~(np.all(Y_rec == 0.0, axis=1))
+    rec_idx = np.where(ch_mask)[0]
+    assert rec_idx.size >= 2, "Need at least 2 recorded channels."
+
+    Y_std = ((torch.from_numpy(Y_rec) - e_mean.cpu()) / (e_std.cpu() + 1e-8)).numpy().astype(np.float64)
+    A_std = Y_std[rec_idx][:, optimization_features]
+
+    Cmat = build_cost(A_std, B_std, logvar_full)
+
+    j_start, j_end, path, total_cost = sdtw(Cmat, lam_d=0.0, lam_u=5.0, lam_l=5.0)
+
+    min_overlap_channels = int(0.9*C)
+    if (j_end - j_start + 1) < min_overlap_channels:
+        best_k, best_mse = 0, np.inf
+        Nr = A_std.shape[0]
+        for k in range(0, B_std.shape[0] - Nr + 1):
+            m = ((B_std[k:k + Nr] - A_std) ** 2).mean()
+            if m < best_mse:
+                best_mse, best_k = m, k
+        j_start, j_end = best_k, best_k + Nr - 1
+        path = [(i, best_k + i) for i in range(Nr)]
+
+    i_seq = np.array([ij[0] for ij in path], dtype=int)
+    j_seq = np.array([ij[1] for ij in path], dtype=int)
+    j_for_i = np.full((A_std.shape[0],), np.nan)
+    for ii, jj in zip(i_seq, j_seq):
+        j_for_i[ii] = jj
+    for ii in range(1, j_for_i.shape[0]):
+        if np.isnan(j_for_i[ii]):
+            j_for_i[ii] = j_for_i[ii - 1]
+    for ii in range(j_for_i.shape[0] - 2, -1, -1):
+        if np.isnan(j_for_i[ii]):
+            j_for_i[ii] = j_for_i[ii + 1]
+    j_for_i = np.clip(j_for_i.astype(int), 0, B_std.shape[0] - 1)
+
+    j_map_all = np.interp(np.arange(C), rec_idx, j_for_i.astype(float))
+    j_map_all_i = np.clip(np.round(j_map_all).astype(int), 0, B_std.shape[0] - 1)
+    est_xyz = xyz_samples[j_map_all_i]
+
+    brain_atlas = AllenAtlas()
+    region_ids_before =  xyz_to_region_ids(xyz_samples[:j_start], brain_atlas)
+    region_ids_probe = xyz_to_region_ids(est_xyz, brain_atlas)
+    region_ids_after =  xyz_to_region_ids(xyz_samples[j_end+1:], brain_atlas)
+
+    region_ids = np.concatenate((region_ids_before, region_ids_probe, region_ids_after))
+
+    depth_samples_before = items.model.align_handle.ephysalign.sampling_trk[:j_start]
+    depth_samples_probe = items.model.align_handle.ephysalign.sampling_trk[j_map_all_i]
+    depth_samples_after = items.model.align_handle.ephysalign.sampling_trk[j_end+1:]
+
+    depth_samples = np.concatenate((depth_samples_before, depth_samples_probe, depth_samples_after))
+
+    print(f"Time: {time.time() - t0:.2f}s")
+
     regions = controller.model.brain_atlas.regions.get(region_ids)
     return get_region_boundaries(regions, depth_samples)
 

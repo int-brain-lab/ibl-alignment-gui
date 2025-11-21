@@ -26,7 +26,3 @@ if __name__ == '__main__':
     mainapp = AlignmentGUIController(offline=args.offline, csv=args.csv)
     mainapp.view.show()
     app.exec_()
-
-
-# TODO:
-# To run use: python .\ibl_alignment_gui\app\main.py

@@ -44,7 +44,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
-        'Random': compute_random_predictions
+        # 'Random': compute_random_predictions
     }
 
     for model, model_func in predictions_models.items():

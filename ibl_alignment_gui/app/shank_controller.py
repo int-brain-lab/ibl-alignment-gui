@@ -232,6 +232,18 @@ class ShankController:
 
         return cbar
 
+    def plot_feature(self, plot_key: str) -> None:
+        """
+        Plot a feature plot.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the plot to display
+        """
+        data = self.model.feature_plots.get(plot_key, None)
+        self.view.plot_feature(data)
+
     # --------------------------------------------------------------------------------------------
     # Update displays
     # --------------------------------------------------------------------------------------------
@@ -273,9 +285,14 @@ class ShankController:
         """Set the limits for the probe tip and probe top based on values stored in model."""
         self.view.set_probe_lims(self.model.chn_min, self.model.chn_max)
 
-    def set_yaxis_lims(self, *args) -> None:
+    def set_yaxis_lims(self, min_val: float | None = None, max_val: float | None = None,
+                       **kwargs) -> None:
         """See :meth:`ShankView.set_yaxis_lims` for details."""
-        self.view.set_yaxis_lims(*args)
+        if min_val is None:
+            min_val = self.model.loaders['plots'].chn_min
+        if max_val is None:
+            max_val = self.model.chn_max
+        self.view.set_yaxis_lims(min_val, max_val)
 
     def set_scale_title(self, hover_item: pg.LinearRegionItem):
         """
@@ -288,6 +305,10 @@ class ShankController:
         """
         idx = self.view.match_linear_region(hover_item)
         self.view.set_fig_scale_title(self.model.scale_data['scale'][idx])
+
+    def set_feature_title(self, feature_title: str | None) -> None:
+        """See :meth:`ShankView.set_feature_title` for details."""
+        self.view.set_feature_title(feature_title)
 
     def reset_slice_axis(self) -> None:
         """See :meth:`ShankView.reset_slice_axis` for details."""

@@ -8,6 +8,7 @@ from matplotlib import cm, colors
 
 from brainbox.task import passive
 from ibl_alignment_gui.loaders.geometry_loader import (
+    ChannelGeometry,
     arrange_channels_into_banks,
     average_chns_at_same_depths,
     pad_data_to_full_chn_map,
@@ -141,6 +142,14 @@ class LineData:
         Range of the x-axis.
     xaxis : str
         Label for the x-axis.
+    vlines : list or None
+        Positions of vertical lines to be drawn.
+    mask: np.ndarray or None
+        A boolean array indicating which poitns in the data to highlight with scatter points.
+    mask_colour: str or None
+        The colour to use for the mask points.
+    mask_style: str or None
+        The style to use for the mask points.
     """
 
     x: np.ndarray
@@ -149,6 +158,10 @@ class LineData:
     default_levels: list | np.ndarray
     xrange: np.ndarray
     xaxis: str
+    vlines: list | None = None
+    mask: np.ndarray | None = None
+    mask_colour: str | None = None
+    mask_style: str | None = None
 
 
 @dataclass
@@ -158,37 +171,38 @@ class ProbeData:
 
     Attributes
     ----------
-    img : list of np.ndarray
-        List of 2D arrays representing images for each probe bank.
-    idx : list of np.ndarray
-        List of channel indices for each bank.
-    scale : list of np.ndarray
-        List of scaling factors for each bank (x, y).
+    # TODO fix docstring
+    img : np.ndarray
+        2D array containing data arranged according to probe banks.
+    scale : list or np.ndarray
+        Scaling factor along x and y axes.
     levels : list or np.ndarray
-        Levels for colormap scaling. These can be updated by the user
+        Levels for colormap scaling. These can be updated by the user.
     default_levels : list or np.ndarray
         Default levels for colormap scaling.
-    offset : list of np.ndarray
-        List of offsets (x, y) for each bank.
+    offset : list or np.ndarray
+        Offset along x and y axes.
     xrange : np.ndarray
         Range of the x-axis.
     cmap : str
         Colormap name.
     title : str
         Plot title.
+    data : np.ndarray or None
+        An array of the data along the depth of probe (for 3D view)
     boundaries : np.ndarray or None
         Array of boundaries for banks or regions.
     """
 
-    img: list[np.ndarray]
-    idx: list[np.ndarray]
-    scale: list[np.ndarray]
+    img: np.ndarray
+    scale: np.ndarray
     levels: list | np.ndarray
     default_levels: list | np.ndarray
-    offset: list[np.ndarray]
+    offset: np.ndarray
     xrange: np.ndarray
     cmap: str
     title: str
+    data: np.ndarray | None = None
     boundaries: np.ndarray | None = None
 
 
@@ -363,6 +377,7 @@ class PlotLoader:
         self.probe_plots: Bunch | None = None
         self.line_plots: Bunch | None = None
         self.scatter_plots: Bunch | None = None
+        self.feature_plots: Bunch | None = None
 
     # --------------------------------------------------------------------------------------------
     # Main entry point to get all plots
@@ -411,6 +426,7 @@ class PlotLoader:
         self.scatter_plots = self._get_plots('scatter')
         self.line_plots = self._get_plots('line')
         self.probe_plots = self._get_plots('probe')
+        self.feature_plots = self._get_plots('feature')
 
     def _get_plots(self, plot_prefix: str) -> Bunch[str, Any]:
         """
@@ -990,7 +1006,7 @@ class PlotLoader:
         """
         raw_imgs = dict()
 
-        for t, raw_img in self.data['raw_snippets']['images'].items():
+        for i, (t, raw_img) in enumerate(self.data['raw_snippets']['images'].items()):
             x_range = np.array([0, raw_img.shape[0] - 1]) / self.data['raw_snippets']['fs'] * 1e3
             xscale = (x_range[1] - x_range[0]) / raw_img.shape[0]
             yscale = (self.chn_max - self.chn_min) / raw_img.shape[1]
@@ -1005,9 +1021,9 @@ class PlotLoader:
                 cmap='bone',
                 xrange=x_range,
                 xaxis='Time (ms)',
-                title='Power (uV)'
+                title=f'Power (uV) T={int(t)} s'
             )
-            raw_imgs[f'Raw ap t={t}'] = img
+            raw_imgs[f'Raw ap snippet {i}'] = img
 
         return raw_imgs
 
@@ -1072,6 +1088,130 @@ class PlotLoader:
 
         return {'Amplitude': line}
 
+    @skip_missing(['raw_snippets'])
+    def line_dead_channels(self) -> dict[str, Any]:
+        """
+        Generate data for a line plot of dead channels across depth.
+
+        Returns
+        -------
+        Dict
+            A dict containing a LineData object with key 'Dead Channels'.
+        """
+        data = self.data['raw_snippets']['dead_channels']
+        min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
+        max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
+        levels = np.array([min_level, max_level])
+
+        line = LineData(
+            x=data['values'],
+            y=self.shank_sites['sites_y'],
+            xrange=levels,
+            levels=np.copy(levels),
+            default_levels=np.copy(levels),
+            xaxis='High coherence',
+            vlines=data['lines'],
+            mask=data['points'],
+            mask_colour='k',
+            mask_style='star'
+        )
+
+        return {'Dead Channels': line}
+
+    @skip_missing(['raw_snippets'])
+    def line_noisy_channels_coherence(self) -> dict[str, Any]:
+        """
+        Generate data for a line plot of noisy channels across depth.
+
+        Noisy channels in this plot are identified based on high coherence.
+
+        Returns
+        -------
+        Dict
+            A dict containing a LineData object with key 'Noisy Channels Coherence'.
+        """
+        data = self.data['raw_snippets']['noisy_channels_coherence']
+        min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
+        max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
+        levels = np.array([min_level, max_level])
+
+        line = LineData(
+            x=data['values'],
+            y=self.shank_sites['sites_y'],
+            xrange=levels,
+            levels=np.copy(levels),
+            default_levels=np.copy(levels),
+            xaxis='High coherence',
+            vlines=data['lines'],
+            mask=data['points'],
+            mask_colour='r',
+            mask_style='star'
+        )
+
+        return {'Noisy Channels Coherence': line}
+
+    @skip_missing(['raw_snippets'])
+    def line_noisy_channels_psd(self) -> dict[str, Any]:
+        """
+        Generate data for a line plot of noisy channels across depth.
+
+        Noisy channels in this plot are identified based on high PSD.
+
+        Returns
+        -------
+        Dict
+            A dict containing a LineData object with key 'Noisy Channels PSD'.
+        """
+        data = self.data['raw_snippets']['noisy_channels_psd']
+        min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
+        max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
+        levels = np.array([min_level, max_level])
+
+        line = LineData(
+            x=data['values'],
+            y=self.shank_sites['sites_y'],
+            xrange=levels,
+            levels=np.copy(levels),
+            default_levels=np.copy(levels),
+            xaxis='PSD',
+            vlines=data['lines'],
+            mask=data['points'],
+            mask_colour='r',
+            mask_style='star'
+        )
+
+        return {'Noisy Channels PSD': line}
+
+    @skip_missing(['raw_snippets'])
+    def line_outside_channels(self) -> dict[str, Any]:
+        """
+        Generate data for a line plot of outide channels across depth.
+
+        Returns
+        -------
+        Dict
+            A dict containing a LineData object with key 'Outside Channels'.
+        """
+        data = self.data['raw_snippets']['outside_channels']
+        min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
+        max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
+        levels = np.array([min_level, max_level])
+
+        line = LineData(
+            x=data['values'],
+            y=self.shank_sites['sites_y'],
+            xrange=levels,
+            levels=np.copy(levels),
+            default_levels=np.copy(levels),
+            xaxis='Low coherence',
+            vlines=data['lines'],
+            mask=data['points'],
+            mask_colour='y',
+            mask_style='star'
+        )
+
+        return {'Outside Channels': line}
+
     # --------------------------------------------------------------------------------------------
     # Probe plots
     # --------------------------------------------------------------------------------------------
@@ -1117,21 +1257,21 @@ class PlotLoader:
         rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
         levels = np.quantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
-        probe_img, probe_scale, probe_offset, probe_idx = (
+        probe_img, probe_scale, probe_offset = (
             arrange_channels_into_banks(self.shank_sites, rms_avg, bnk_width=BNK_SIZE))
 
         cmap = 'plasma' if band == 'AP' else 'inferno'
 
         probe = ProbeData(
             img=probe_img,
-            idx=probe_idx,
             scale=probe_scale,
             offset=probe_offset,
             levels=levels,
             default_levels=np.copy(levels),
             cmap=cmap,
             xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
-            title=band + ' RMS (uV)'
+            title=band + ' RMS (uV)',
+            data=rms_avg
         )
 
         return {f'rms {band}': probe}
@@ -1155,20 +1295,20 @@ class PlotLoader:
                                 & (self.data['psd_LF']['freqs'] < freq[1]))[0]
             lfp_power = np.mean(self.data['psd_LF']['power'][freq_idx], axis=0)
             lfp_power = 10 * np.log10(lfp_power)
-            probe_img, probe_scale, probe_offset, probe_idx = (
+            probe_img, probe_scale, probe_offset = (
                 arrange_channels_into_banks(self.shank_sites, lfp_power, bnk_width=BNK_SIZE))
             levels = np.quantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
                 img=probe_img,
-                idx=probe_idx,
                 scale=probe_scale,
                 offset=probe_offset,
                 levels=levels,
                 default_levels=np.copy(levels),
                 cmap='viridis',
                 xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
-                title=f'{freq[0]}-{freq[1]} Hz (dB)'
+                title=f'{freq[0]}-{freq[1]} Hz (dB)',
+                data=lfp_power
             )
             data_probe.update({f'{freq[0]} - {freq[1]} Hz': probe})
 
@@ -1218,18 +1358,74 @@ class PlotLoader:
             sub_data = {
                 f'RF Map - {sub}':
                     ProbeData(
-                        img=[img[sub].T],
-                        idx=[np.arange(img[sub].shape[0])],
-                        scale=[np.array([xscale, yscale])],
+                        img=img[sub].T,
+                        scale=np.array([xscale, yscale]),
                         levels=levels,
                         default_levels=np.copy(levels),
-                        offset=[np.array([0, self.chn_min])],
+                        offset=np.array([0, self.chn_min]),
                         cmap='viridis',
                         xrange=np.array([0, 15]),
                         title='rfmap (dB)',
-                        boundaries=depths
+                        boundaries=depths,
+                        data=None,
                     )
             }
             data_img.update(sub_data)
 
         return data_img
+
+    # --------------------------------------------------------------------------------------------
+    # Feature plots
+    # --------------------------------------------------------------------------------------------
+    @skip_missing(['features'])
+    def feature_ephys_atlas(self):
+        """
+        Generate data for ephys atlas feature plots.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ProbeData objects with keys according to features.
+        """
+        ignore_cols = ['pid', 'axial_um', 'lateral_um', 'x', 'y', 'z', 'acronym', 'atlas_id',
+                       'x_target', 'y_target', 'z_target', 'outside', 'Allen_id', 'Cosmos_id',
+                       'Beryl_id']
+
+        feature_data = self.data['features']['df']
+        chn_coords = Bunch()
+        chn_coords['localCoordinates'] = np.c_[
+            feature_data['lateral_um'].values, feature_data['axial_um'].values]
+        chn_coords['rawInd'] = np.arange(chn_coords['localCoordinates'].shape[0])
+        chn_geom = ChannelGeometry(chn_coords)
+        chn_geom.split_sites_per_shank()
+        sites = chn_geom._get_sites_for_shank(0)
+
+        features = [k for k in feature_data if k not in ignore_cols]
+        features.sort()
+
+        data = Bunch()
+
+        for i, feature in enumerate(features):
+            vals = feature_data[feature].values
+            min_val = np.nanmin(vals)
+            max_val = np.nanmax(vals)
+            feature_norm = (vals - min_val) / (max_val - min_val)
+            img, scale, offset = arrange_channels_into_banks(sites, feature_norm)
+
+            offset[0] += i * (10 * sites['n_banks'])
+
+            feat = ProbeData(
+                img=img,
+                scale=scale,
+                offset=offset,
+                levels=np.array([0, 1]),
+                default_levels=np.array([0, 1]),
+                cmap='viridis',
+                xrange=np.array([0, 10 * sites['n_banks']]),
+                title=feature,
+                data=None,
+            )
+
+            data[feature] = feat
+
+        return {'Ephys Atlas': data}

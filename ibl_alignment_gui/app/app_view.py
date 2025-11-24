@@ -114,7 +114,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             shank_items: dict | Bunch,
             selected_config: str,
             default_config: str,
-            non_default_config: str
+            non_default_config: str,
+            feature_view: bool = False
     ) -> list[QtWidgets.QWidget]:
         """
         Initialize the shank and slice tab widgets with the given shank items.
@@ -129,6 +130,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The default configuration.
         non_default_config
             The non-default configuration.
+        feature_view: bool
+            Whether to display the ephys plot as a feature view or not.
 
         Returns
         -------
@@ -145,9 +148,17 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
 
             # Create the shank panel depending on the configuration selected
             if selected_config == 'both':
-                fig_area = custom_widgets.DualConfigWidget(
-                    shank_items[shank][default_config].view,
-                    shank_items[shank][non_default_config].view)
+                if feature_view:
+                    fig_area = custom_widgets.DualConfigFeatureWidget(
+                        shank_items[shank][default_config].view,
+                        shank_items[shank][non_default_config].view)
+                else:
+                    fig_area = custom_widgets.DualConfigWidget(
+                        shank_items[shank][default_config].view,
+                        shank_items[shank][non_default_config].view)
+            elif feature_view:
+                fig_area = custom_widgets.SingleConfigFeatureWidget(
+                    shank_items[shank][selected_config].view)
             else:
                 fig_area = custom_widgets.SingleConfigWidget(
                     shank_items[shank][selected_config].view)

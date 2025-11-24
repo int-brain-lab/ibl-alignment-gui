@@ -1,12 +1,12 @@
 from typing import TYPE_CHECKING
 
+from ibl_alignment_gui.plugins.channel_prediction import setup as setup_channel_prediction
 from ibl_alignment_gui.plugins.cluster_features import setup as setup_cluster_features
 from ibl_alignment_gui.plugins.ephys_features import setup as setup_ephys_features
+from ibl_alignment_gui.plugins.features_3d import setup as setup_3d_features
 from ibl_alignment_gui.plugins.qc_dialog import setup as setup_qc_dialog
 from ibl_alignment_gui.plugins.range_controller import setup as setup_control_range
 from ibl_alignment_gui.plugins.upload_dialog import setup as setup_upload_dialog
-from ibl_alignment_gui.plugins.channel_prediction import setup as setup_channel_prediction
-from ibl_alignment_gui.plugins.features_3d import setup as setup_3d_features
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
@@ -33,7 +33,8 @@ class Plugins:
         setup_qc_dialog(controller)
         setup_upload_dialog(controller)
         setup_cluster_features(controller)
-        setup_ephys_features(controller)
+        if not controller.offline:
+            setup_ephys_features(controller)
+            setup_channel_prediction(controller)
         setup_control_range(controller)
-        setup_channel_prediction(controller)
         setup_3d_features(controller)

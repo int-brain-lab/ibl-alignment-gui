@@ -123,8 +123,12 @@ class AlignmentGUIController:
         self.img_init: str | None = None
         self.probe_init: str | None = None
         self.line_init: str | None = None
+        self.feature_init: str | None = None
         self.slice_init: str | None = None
         self.filter_init: str | None = None
+
+        # The ephys view mode
+        self.show_feature = False
 
         # Store the slice figures
         self.slice_figs: Bunch = Bunch()
@@ -248,6 +252,8 @@ class AlignmentGUIController:
             'probe', self.plot_probe_panels, self.model.probe_keys)
         self.line_init = self.view.populate_menu_tab(
             'line', self.plot_line_panels, self.model.line_keys)
+        self.feature_init = self.view.populate_menu_tab(
+            'feature', self.plot_feature_panels, self.model.feature_keys)
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys)
         filter_keys = ['All', 'KS good', 'KS mua', 'IBL good']
@@ -288,6 +294,7 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     def create_shanks(self) -> None:
         """Create ShankController instance for each shank and config combination."""
+        self.shank_items = defaultdict(Bunch)
         for i, shank in enumerate(self.all_shanks):
             for c in self.model.configs:
                 self.shank_items[shank][c] = (
@@ -298,7 +305,8 @@ class AlignmentGUIController:
         shank_tabs = self.view.init_tabs(self.shank_items,
                                          self.model.selected_config,
                                          self.model.default_config,
-                                         self.model.non_default_config)
+                                         self.model.non_default_config,
+                                         feature_view=self.show_feature)
         for tab in shank_tabs:
             tab.setup_double_click(self.on_mouse_double_clicked)
             tab.setup_mouse_hover(self.on_mouse_hover)
@@ -456,6 +464,13 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
+        self.line_init = plot_key
+
+        if self.show_feature:
+            self.show_feature = False
+            self.on_view_changed()
+            return
+
         self._plot_line_panels(plot_key, data_only=data_only, **kwargs)
 
         self.execute_plugins('plot_line_panels', plot_key, 'line')
@@ -478,8 +493,49 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
-        self.line_init = plot_key
         items.plot_line(plot_key)
+
+    def plot_feature_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
+        """
+        Plot feature panels per shank and config.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the feature plot to display
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        self.feature_init = plot_key
+
+        if not self.show_feature:
+            self.show_feature = True
+            self.on_view_changed()
+            return
+
+        self._plot_feature_panels(plot_key, data_only=data_only, **kwargs)
+
+        self.execute_plugins('plot_feature_panels', plot_key, 'feature')
+
+    @shank_loop
+    def _plot_feature_panels(
+            self,
+            items: ShankController,
+            plot_key: str,
+            data_only: bool = True,
+            **kwargs
+    ) -> None:
+        """
+        Plot feature panels per shank and config.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the feature plot to display
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        items.plot_feature(plot_key)
 
     def plot_panels(
             self,
@@ -519,6 +575,11 @@ class AlignmentGUIController:
         """
         # Update which plot was last selected
         setattr(self, init_attr, plot_key)
+
+        if self.show_feature:
+            self.show_feature = False
+            self.on_view_changed()
+            return
 
         if self.model.selected_config == 'both':
             levels = self.get_normalised_levels(f"{plot_type}_plots", plot_key)
@@ -704,9 +765,12 @@ class AlignmentGUIController:
     def set_ephys_plots(self) -> None:
         """Set the ephys plots to the values stored in the init variables."""
         self.blockPlugins = True
-        self.view.trigger_menu_option('image', self.img_init)
-        self.view.trigger_menu_option('line', self.line_init)
-        self.view.trigger_menu_option('probe', self.probe_init)
+        if not self.show_feature:
+            self.view.trigger_menu_option('image', self.img_init)
+            self.view.trigger_menu_option('line', self.line_init)
+            self.view.trigger_menu_option('probe', self.probe_init)
+        else:
+            self.view.trigger_menu_option('feature', self.feature_init)
         self.blockPlugins = False
 
     # --------------------------------------------------------------------------------------------
@@ -834,6 +898,11 @@ class AlignmentGUIController:
         self.on_shank_selected(0)
         self.view.activate_selection_button()
 
+    def on_view_changed(self):
+        """Triggered when the view is changed between feature and ephys plots."""
+        self.setup(init=False)
+        self.execute_plugins('on_view_changed')
+
     # --------------------------------------------------------------------------------------------
     # Load data
     # --------------------------------------------------------------------------------------------
@@ -885,13 +954,15 @@ class AlignmentGUIController:
         if init:
             # Create ShankController items
             self.create_shanks()
+        else:
+            # Reset shank plot items
+            self.reset_shanks(data_only=True)
 
-        self.reset_shanks(data_only=True)
         self.init_shanks()
 
         # Set the probe lims for each shank and config
         self.set_probe_lims(data_only=True)
-        self.set_yaxis_lims(self.model.y_min, self.model.y_max, data_only=True)
+        self.set_yaxis_lims(data_only=True)
 
         # Initialise ephys plots
         self.set_ephys_plots()
@@ -1179,6 +1250,13 @@ class AlignmentGUIController:
                 if hover_item0 == items.view.fig_hist_ref:
                     self.hover_region = hover_item1
                     return
+            elif self.show_feature and isinstance(hover_item1, pg.ImageItem):
+                items = self.shank_items[name][config]
+                title = getattr(hover_item1, 'feature_name', None)
+                items.set_feature_title(title)
+            else:
+                items = self.shank_items[name][config]
+                items.set_feature_title(None)
 
     # --------------------------------------------------------------------------------------------
     # Display options
@@ -1281,8 +1359,12 @@ class AlignmentGUIController:
         """
         self.set_yaxis_range('fig_hist')
         self.set_yaxis_range('fig_hist_ref')
-        self.set_yaxis_range('fig_img')
-        self.set_xaxis_range('fig_img')
+        if self.show_feature:
+            self.set_yaxis_range('fig_feature')
+            self.set_xaxis_range('fig_feature')
+        else:
+            self.set_yaxis_range('fig_img')
+            self.set_xaxis_range('fig_img')
 
         if self.model.selected_config == 'both':
             self.reset_slice_axis(configs=[self.model.default_config])
@@ -1310,9 +1392,9 @@ class AlignmentGUIController:
         items.set_probe_lims()
 
     @shank_loop
-    def set_yaxis_lims(self, items: ShankController, *args, data_only=True, **kwargs) -> None:
+    def set_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> None:
         """See :meth:`ShankController.set_yaxis_lims` for details."""
-        items.set_yaxis_lims(*args)
+        items.set_yaxis_lims(**kwargs)
 
     # --------------------------------------------------------------------------------------------
     # Grid / Tab display interactions

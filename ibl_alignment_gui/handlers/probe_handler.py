@@ -21,6 +21,7 @@ from ibl_alignment_gui.loaders.data_loader import (
     CollectionData,
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderOne,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
 )
@@ -341,6 +342,18 @@ class ProbeHandler(ABC):
         return self.get_plot_keys('probe_plots')
 
     @property
+    def feature_keys(self) -> list[str]:
+        """
+        Find the list of available feature plot keys across all shanks and configurations.
+
+        Returns
+        -------
+        tuple:
+            A tuple of unique probe plot keys.
+        """
+        return self.get_plot_keys('feature_plots')
+
+    @property
     def slice_keys(self) -> list[str]:
         """
         Find the list of available slice plot keys across all shanks and configurations.
@@ -550,6 +563,7 @@ class ProbeHandlerONE(ProbeHandler):
         self.selected_idx = idx
         self.subj = self.shank_labels[idx]['session_info']['subject']
         self.lab = self.shank_labels[idx]['session_info']['lab']
+        self.pid = self.shank_labels[idx]['id']
 
     def download_histology(self) -> NrrdSliceLoader:
         """Download and load in the histology slice data."""
@@ -568,6 +582,7 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
+            loaders['features'] = FeatureLoaderOne(ins, self.one)
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
@@ -711,6 +726,7 @@ class ProbeHandlerCSV(ProbeHandler):
                     self.brain_atlas, user=user)
                 loaders['ephys'] = SpikeGLXLoaderLocal(local_path, collections.meta_collection)
                 loaders['plots'] = PlotLoader()
+                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
                 # If we don't have the data locally we download it
@@ -726,6 +742,7 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
+                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 

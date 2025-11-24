@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
+import scipy
 import spikeglx
 
 import ibldsp.voltage
@@ -17,6 +19,7 @@ from iblutil.numerical import ismember
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
 from one.api import ONE
+from one.remote import aws
 
 logger = logging.getLogger(__name__)
 
@@ -618,6 +621,9 @@ class SpikeGLXLoader(ABC):
         """
         Load AP snippets centered around selected time points.
 
+        Also computes channel quality metrics across snippets to detect dead, noisy
+        and outside channels.
+
         Parameters
         ----------
         twin : float
@@ -629,15 +635,64 @@ class SpikeGLXLoader(ABC):
             Snippets of raw data for three timepoints in addition to metadata (exists, fs).
         """
         if self.cached_path and self.cached_path.exists():
-            return np.load(self.cached_path, allow_pickle=True).item()
+            data = np.load(self.cached_path, allow_pickle=True).item()
+            if 'dead_channels' in data:
+                return data
 
         sr = self.load_ap_data()
         if not sr:
             return Bunch(exists=False)
 
+        times = self.get_time_snippets(sr)
+
+        # Thresholds for channel quality detection
+        detection_thresholds = {
+            'similarity_threshold': (-0.5, 1),
+            'psd_hf_threshold': 0.02
+        }
+
         data = defaultdict(Bunch)
-        for t in self.get_time_snippets(sr):
-            data['images'][t] = self._get_snippet(sr, t, twin=twin)
+
+        for i, t in enumerate(times):
+            raw, labels, features = self._get_snippet(
+                sr, t, twin=twin, **detection_thresholds)
+
+            if i == 0:
+                chn_labels = np.zeros((raw.shape[1], len(times)))
+                chn_features = {k: np.zeros((raw.shape[1], len(times))) for k in features}
+
+            for k in features:
+                chn_features[k][:, i] = features[k]
+
+            chn_labels[:, i] = labels
+            data['images'][t] = raw
+
+        chn_features_med = {k: np.median(chn_features[k], axis=-1) for k in chn_features}
+        channel_flags, _ = scipy.stats.mode(chn_labels, axis=1)
+
+        data['dead_channels'] = Bunch(
+            values=chn_features_med["xcor_hf"],
+            lines=[detection_thresholds['similarity_threshold'][0]],
+            points=channel_flags == 1
+        )
+
+        data['noisy_channels_coherence'] = Bunch(
+            values=chn_features_med["xcor_hf"],
+            lines=[detection_thresholds['similarity_threshold'][1]],
+            points=chn_features_med["xcor_hf"] > detection_thresholds['similarity_threshold'][1]
+        )
+
+        data['noisy_channels_psd'] = Bunch(
+            values=chn_features_med["psd_hf"],
+            lines=[detection_thresholds['psd_hf_threshold']],
+            points=channel_flags == 2
+        )
+
+        data['outside_channels'] = Bunch(
+            values=chn_features_med["xcor_lf"],
+            lines=[-0.75, 0.75],
+            points=channel_flags == 3
+        )
 
         data['exists'] = True
         data['fs'] = sr.fs
@@ -647,11 +702,13 @@ class SpikeGLXLoader(ABC):
 
         return data
 
+    @staticmethod
     def _get_snippet(
-            self,
             sr: spikeglx.Reader | Streamer,
-            t: float, twin: float = 1
-    ) -> np.ndarray:
+            t: float,
+            twin: float = 1,
+            **kwargs
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of AP data centered at time t.
 
@@ -674,13 +731,14 @@ class SpikeGLXLoader(ABC):
         raw = sr[start_sample:end_sample, :-sr.nsync].T
 
         # Detect bad channels and destripe
-        channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw, sr.fs)
+        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(
+            raw, sr.fs, **kwargs)
         raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry,
                                       channel_labels=channel_labels)
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.450 * sr.fs), int(0.500 * sr.fs))
-        return raw[:, window].T
+        return raw[:, window].T, channel_labels, channel_features
 
     @staticmethod
     def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:
@@ -813,3 +871,68 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         """
         ap_file = next(self.meta_path.glob('*.ap.*bin'), None)
         return spikeglx.Reader(ap_file) if ap_file else None
+
+
+class FeatureLoader(ABC):
+    """Abstract base class for loading ephys atlas features."""
+
+    @abstractmethod
+    def load_features(self) -> Bunch[str, Any]:
+        """Abstract method to load ephys atlas features."""
+
+
+class FeatureLoaderOne(FeatureLoader):
+    """
+    Feature loader using ONE.
+
+    Loads feature from ephys feature table.
+    """
+
+    def __init__(
+            self,
+            insertion: dict,
+            one: ONE,
+            session_path: Path | None = None):
+
+        self.one: ONE = one
+        self.pid: str = insertion['id']
+
+    def load_features(self) -> Bunch[str, Any]:
+        """
+        Load ephys atlas features from ONE.
+
+        Returns
+        -------
+        feature_data: Bunch
+            A Bunch containing a dataFrame containing ephys atlas features for the probe.
+        """
+        fname = 'df_all_cols_merged.pqt'
+        table_path = self.one.cache_dir.joinpath('ephys_atlas_features', fname)
+        table_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not table_path.exists():
+            self.download_features(fname, save_path=table_path)
+
+        data = pd.read_parquet(table_path).reset_index()
+        data = data[data['pid'] == self.pid]
+
+        feature_data = Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)
+
+        return feature_data
+
+    def download_features(self, fname: str, save_path: Path) -> None:
+        """
+        Download the latest ephys atlas features from S3.
+
+        Parameters
+        ----------
+        fname: str
+            Filename to download
+        save_path: Path
+            A path to save the downloaded file
+        """
+        s3, bucket_name = aws.get_s3_from_alyx(alyx=self.one.alyx)
+        # Download file
+        base_path = Path('aggregates/atlas/features/ea_active/2025_W43/agg_full/')
+        aws.s3_download_file(base_path.joinpath(fname), save_path.joinpath(fname), s3=s3,
+                             bucket_name=bucket_name)

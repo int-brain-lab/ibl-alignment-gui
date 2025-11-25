@@ -1042,7 +1042,9 @@ class AlignmentGUIController:
             self.model.current_shank = shank
 
             if not self.offline:
-                display_qc_dialog(self, shank)
+                accepted = display_qc_dialog(self, shank)
+                if accepted == 0:
+                    break
 
             upload = self.view.upload_prompt()
             if upload:

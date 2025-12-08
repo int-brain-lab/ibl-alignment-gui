@@ -297,6 +297,10 @@ class ShankHandler:
 
         self.data_loaded = True
 
+    def load_plots(self):
+        """Load all the plot data for the current shank."""
+        self.loaders['plots'].get_plots()
+
     def filter_units(self, filter_type: str) -> None:
         """
         Filter the spikesorting data by selected unit type and recompute plot data.

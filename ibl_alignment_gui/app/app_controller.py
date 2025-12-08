@@ -242,6 +242,15 @@ class AlignmentGUIController:
         self.view.add_shortcuts_to_menu('fit', fit_options)
         self.view.add_shortcuts_to_menu('display', display_options)
 
+    def load_data(self):
+        self.model.load_data()
+        self.loaded = True
+        self.create_shanks()
+        self.execute_plugins('load_data', self)
+
+    def load_plots(self):
+        self.model.load_plots()
+
     def populate_menubar(self):
         """Populate menu bar tabs based on avaialble plots."""
         self.img_init = self.view.populate_menu_tab(
@@ -918,8 +927,9 @@ class AlignmentGUIController:
         # Get the list of shanks
         self.all_shanks = list(self.model.shanks.keys())
         # Load and prepare all data
-        self.model.load_data()
-        self.loaded = True
+        self.load_data()
+        # Load in all the plots
+        self.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
         # If csv add the config options
@@ -951,10 +961,8 @@ class AlignmentGUIController:
 
         # Reset the view
         self.view.reset_view()
-        if init:
-            # Create ShankController items
-            self.create_shanks()
-        else:
+
+        if not init:
             # Reset shank plot items
             self.reset_shanks(data_only=True)
 

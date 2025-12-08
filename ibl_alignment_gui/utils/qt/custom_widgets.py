@@ -2105,7 +2105,7 @@ class SliderWidget(QtWidgets.QGroupBox):
         self.slider.setMinimum(0)
         self.slider_labels['min'].setText(f'Min: {self.format_label(min_max[0])}')
         self.slider.setMaximum(self.steps - 1)
-        self.slider_labels['max'].setText(f'Min: {self.format_label(min_max[1])}')
+        self.slider_labels['max'].setText(f'Max: {self.format_label(min_max[1])}')
 
     def set_slider_values(self, low_high: list | tuple | np.ndarray) -> None:
         """

@@ -403,7 +403,6 @@ class PlotLoader:
         self.filter_units('All')
         self.compute_avg_cluster_activity()
         self.compute_rasters()
-        self.get_plots()
 
     def get_plots(self):
         """

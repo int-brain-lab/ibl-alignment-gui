@@ -110,18 +110,16 @@ class ProbeHandler(ABC):
             Previous alignments for the selected shank.
         """
         # Load the previous alignment from the default configuration
-        (self.get_selected_shank()[self.default_config].loaders['align']
-         .load_previous_alignments())
+        self.get_selected_shank()[self.default_config].loaders['align'].load_previous_alignments()
         # Set the previous alignments from the non default configuration to the default
         # one (if it exists)
         if self.non_default_config is not None:
             self.get_selected_shank()[self.non_default_config].loaders['align'].alignments = (
-                self.get_selected_shank()[self.default_config].loaders['align'].alignments(
-                    self.get_selected_shank()[
-                        self.non_default_config].loaders['align'].get_previous_alignments()))
+                self.get_selected_shank()[self.default_config].loaders['align'].alignments)
 
-        return (self.get_selected_shank()[self.default_config].loaders['align']
-                .get_previous_alignments())
+            self.get_selected_shank()[self.non_default_config].loaders['align'].get_previous_alignments()
+
+        return self.get_selected_shank()[self.default_config].loaders['align'].get_previous_alignments()
 
     def get_previous_alignments(self) -> dict:
         """
@@ -375,6 +373,13 @@ class ProbeHandler(ABC):
             for config in self.configs:
                 self.shanks[probe][config].loaders['hist'] = slice_loader
                 self.shanks[probe][config].load_data()
+
+    def load_plots(self):
+        """Load plots for all configs and shanks."""
+        for probe in self.shanks:
+            for config in self.configs:
+                self.shanks[probe][config].load_plots()
+
 
     def upload_data(self) -> str:
         """

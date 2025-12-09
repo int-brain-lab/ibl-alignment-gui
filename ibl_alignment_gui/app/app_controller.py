@@ -73,12 +73,6 @@ class AlignmentGUIController:
     img_init, probe_init, line_init, slice_init, filter_init : str or None
         Track the initially loaded image, probe, line, slice, and filter
         states, respectively.
-    scatter_levels, img_levels, probe_levels : list or tuple or np.ndarray or None
-        Track current visualization levels for scatter, image, and probe data.
-    normalise_levels : str
-        The configuration to use to normalise visualistaion levels across configs.
-    normalise_idx : int
-        Index used to track normalization states.
     plugins : dict
         A mapping of plugin names to plugin instances.
     """
@@ -132,13 +126,6 @@ class AlignmentGUIController:
 
         # Store the slice figures
         self.slice_figs: Bunch = Bunch()
-
-        # The levels for the different plot types
-        self.scatter_levels: list | np.ndarray | None = None
-        self.img_levels: list | np.ndarray | None = None
-        self.probe_levels: list | np.ndarray | None = None
-        self.normalise_levels: str | None = None
-        self.normalise_idx: int = 0
 
         # Plugin management
         self.blockPlugins: bool = False
@@ -233,8 +220,6 @@ class AlignmentGUIController:
                                'callback': lambda: self.loop_through_tabs(1)},
                 'Previous shank': {'shortcut': 'Left',
                                    'callback': lambda: self.loop_through_tabs(-1)},
-                # Shortcut to normalise colour bars when multiple configs shown
-                'Normalize': {'shortcut': 'Shift+N', 'callback': self.on_normalise_levels},
                 # Shortcut to reset all plots to their default range
                 'Reset Range': {'shortcut': 'R', 'callback': self.on_reset_levels},
             }
@@ -551,7 +536,6 @@ class AlignmentGUIController:
             plot_key: str,
             plot_type: str,
             plot_func: str,
-            level_attr: str,
             init_attr: str,
             dual_cb_name: str | None = None,
             plugin_event: str | None = None,
@@ -569,9 +553,6 @@ class AlignmentGUIController:
             The type of plot to update e.g. image, probe, scatter
         plot_func: str
             The name of the function used to update the plots
-        level_attr: str
-            The name of the attribute that stores the levels for the plot type
-            e.g. self.probe_levels
         init_attr: str
             The name of the attribute that stores the current plot key of the plot
             type e.g. self.probe_init
@@ -591,15 +572,12 @@ class AlignmentGUIController:
             return
 
         if self.model.selected_config == 'both':
-            levels = self.get_normalised_levels(f"{plot_type}_plots", plot_key)
-            setattr(self, level_attr, levels)
-            results = self._plot_panels(plot_key, plot_type, plot_func, level_attr,
-                                        data_only, **kwargs)
+            results = self._plot_panels(plot_key, plot_type, plot_func, data_only,
+                                        **kwargs)
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
-            setattr(self, level_attr, Bunch.fromkeys(self.all_shanks, None))
-            self._plot_panels(plot_key, plot_type, plot_func, level_attr, data_only, **kwargs)
+            self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
 
         # Optional plugin event
         if plugin_event:
@@ -612,7 +590,6 @@ class AlignmentGUIController:
             plot_key: str,
             plot_type: str,
             plot_func: str,
-            level_attr: str,
             data_only: bool = True,
             **kwargs
     ) -> Bunch:
@@ -625,8 +602,7 @@ class AlignmentGUIController:
             A bunch containing the cbar object as well as the shank and config it belongs to
         """
         plot_func = getattr(items, plot_func)
-        levels = getattr(self, level_attr)[kwargs.get('shank')]
-        cbar = plot_func(plot_key, levels=levels)
+        cbar = plot_func(plot_key)
 
         if plot_type == 'scatter':
             self.connect_cluster_plugin(items)
@@ -645,9 +621,8 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='scatter', plot_func='plot_scatter',
-                         level_attr='scatter_levels', init_attr='img_init',
-                         dual_cb_name='fig_dual_img_cb', plugin_event='plot_scatter_panels',
-                         data_only=data_only, **kwargs)
+                         init_attr='img_init', dual_cb_name='fig_dual_img_cb',
+                         plugin_event='plot_scatter_panels', data_only=data_only, **kwargs)
 
     def plot_image_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -661,9 +636,8 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='image', plot_func='plot_image',
-                         level_attr='img_levels', init_attr='img_init',
-                         dual_cb_name='fig_dual_img_cb', plugin_event='plot_image_panels',
-                         data_only=data_only, **kwargs)
+                         init_attr='img_init', dual_cb_name='fig_dual_img_cb',
+                         plugin_event='plot_image_panels', data_only=data_only, **kwargs)
 
     def plot_probe_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -677,40 +651,8 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='probe', plot_func='plot_probe',
-                         level_attr='probe_levels', init_attr='probe_init',
-                         dual_cb_name='fig_dual_probe_cb', plugin_event='plot_probe_panels',
-                         data_only=data_only, **kwargs)
-
-    def get_normalised_levels(self, plot_type: str, plot_key: str) -> Bunch[str, Bunch | None]:
-        """
-        For a given plot_type and plot_key find the levels for the config stored.
-
-        Parameters
-        ----------
-        plot_type: str
-            The type of plot to update e.g. image, probe, scatter
-        plot_key
-            The key of the plot
-
-        Returns
-        -------
-        Bunch
-            The levels for each shank for the config in self.normalise_levels
-        """
-        if self.normalise_levels == 'both' or len(self.model.configs) == 1:
-            return Bunch.fromkeys(self.all_shanks, None)
-        levels = Bunch()
-        for shank in self.all_shanks:
-            # Try to get data from the primary config
-            data = self.model.get_plot(shank, plot_type, plot_key, self.normalise_levels)
-            # If no data found, fallback to the other config
-            if not data:
-                other_config = next(c for c in self.model.configs if c != self.normalise_levels)
-                data = self.model.get_plot(shank, plot_type, plot_key, other_config)
-
-            levels[shank] = data.levels if data else None
-
-        return levels
+                         init_attr='probe_init', dual_cb_name='fig_dual_probe_cb',
+                         plugin_event='plot_probe_panels', data_only=data_only, **kwargs)
 
     def plot_dual_colorbar(self, results: Bunch, fig: str) -> None:
         """
@@ -889,8 +831,6 @@ class AlignmentGUIController:
             Whether this is the first time loading the probe or not
         """
         self.model.get_config(idx)
-        self.normalise_idx = 0
-        self.normalise_levels = self.model.selected_config
         self.setup(init=init)
 
         if not init:
@@ -1330,24 +1270,6 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Plot display interactions
     # --------------------------------------------------------------------------------------------
-    def on_normalise_levels(self) -> None:
-        """
-        Set the config to which the ephys plots colour level range should be set to.
-
-        The different levels can be cycled through by pressing Shift+N.
-        """
-        # If we only have one config, we always show the same colour range
-        if len(self.model.possible_configs) == 1:
-            return
-        # Cycle through the config options and define the config that should be used to
-        # define the colour levels
-        self.normalise_idx += 1
-        idx = np.mod(self.normalise_idx, len(self.model.possible_configs))
-        self.normalise_levels = self.model.possible_configs[idx]
-        # Trigger the plotting of the image and probe plots to which these levels apply
-        self.view.trigger_menu_option('image', self.img_init)
-        self.view.trigger_menu_option('probe', self.probe_init)
-
     def on_reset_levels(self) -> None:
         """
         Reset the levels of all plots to the default range.

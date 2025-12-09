@@ -84,11 +84,13 @@ class RangeControllerView(PopupWindow):
             self.sliders[plot] = SliderWidget(steps=self.steps, slider_type=plot)
             self.labels[plot] = QtWidgets.QLabel()
 
-        self.shank_options = CheckBoxGroup(['All'] + self.controller.all_shanks)
+        self.shank_options = CheckBoxGroup()
+        self.shank_options.add_options(['All'] + self.controller.all_shanks)
         self.shank_options.set_checked([self.controller.model.selected_shank])
         self.shank_options.setup_callback(self.on_shank_button_clicked)
 
-        self.config_options = CheckBoxGroup(['both'] + self.controller.model.configs)
+        self.config_options = CheckBoxGroup()
+        self.config_options.add_options(['both'] + self.controller.model.configs)
         self.config_options.set_checked([self.controller.model.selected_config])
         self.config_options.setup_callback(self.on_config_button_clicked)
 

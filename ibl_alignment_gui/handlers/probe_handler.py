@@ -205,47 +205,6 @@ class ProbeHandler(ABC):
         """
         return self.get_selected_shank()[self.default_config].align_handle.total_idx
 
-    @property
-    def y_min(self) -> float:
-        """
-        Minimum y channel value for the selected shank.
-
-        If config is 'both' returns the minimum across both configurations.
-
-        Returns
-        -------
-        float:
-            The minimum channel value
-        """
-        if self.selected_config == 'both':
-            y_min = [0]
-            for config in self.configs:
-                y_min.append(self.get_selected_shank()[config].loaders['plots'].chn_min)
-            return np.nanmin(y_min)
-        else:
-            return np.min(
-                [0, self.get_selected_shank()[self.selected_config].loaders['plots'].chn_min])
-
-    @property
-    def y_max(self) -> float:
-        """
-        Maximum y channel value for the selected shank.
-
-        If config is 'both' returns the maximum across both configurations.
-
-        Returns
-        -------
-        float:
-            The maximum channel value
-        """
-        if self.selected_config == 'both':
-            y_max = []
-            for config in self.configs:
-                y_max.append(self.get_selected_shank()[config].loaders['plots'].chn_max)
-            return np.nanmax(y_max)
-        else:
-            return self.get_selected_shank()[self.selected_config].loaders['plots'].chn_max
-
     def get_plot(self, shank: str, plot: str, key: str, config: str | None = None) -> Any:
         """
         Access a specific plot for a specific shank and configuration.

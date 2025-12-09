@@ -970,7 +970,7 @@ class AlignmentGUIController:
 
         # Set the probe lims for each shank and config
         self.set_probe_lims(data_only=True)
-        self.set_yaxis_lims(data_only=True)
+        self.set_yaxis_lims()
 
         # Initialise ephys plots
         self.set_ephys_plots()
@@ -1401,10 +1401,41 @@ class AlignmentGUIController:
         """See :meth:`ShankController.set_probe_lims` for details."""
         items.set_probe_lims()
 
+    def set_yaxis_lims(self) -> None:
+        """
+        Set the y-axis limits for all shanks based on stored values.
+
+        Parameters
+        ----------
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        results = self._get_yaxis_lims()
+        if self.model.selected_config == 'both':
+            ylims = Bunch.fromkeys(self.all_shanks, [])
+            for res in results:
+                ylims[res['shank']] += res['ylim']
+            lims = defaultdict(Bunch)
+            for shank in self.all_shanks:
+                for config in self.model.configs:
+                    lims[shank][config] = [np.nanmin(ylims[shank]), np.nanmax(ylims[shank])]
+        else:
+            lims = defaultdict(Bunch)
+            for res in results:
+                lims[res['shank']][res['config']] = res['ylim']
+
+        self._set_yaxis_lims(lims)
+
     @shank_loop
-    def set_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> None:
+    def _set_yaxis_lims(self, items: ShankController, lims, data_only=True, **kwargs) -> None:
         """See :meth:`ShankController.set_yaxis_lims` for details."""
-        items.set_yaxis_lims(**kwargs)
+        ylims = lims[kwargs.get('shank')][kwargs.get('config')]
+        items.set_yaxis_lims(*ylims)
+
+    @shank_loop
+    def _get_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> tuple[float, float]:
+        """See :meth:`ShankController.get_yaxis_lims` for details."""
+        return Bunch(shank=kwargs.get('shank'), config=kwargs.get('config'), ylim=items.get_yaxis_lims())
 
     # --------------------------------------------------------------------------------------------
     # Grid / Tab display interactions

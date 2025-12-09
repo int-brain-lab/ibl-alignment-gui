@@ -285,14 +285,19 @@ class ShankController:
         """Set the limits for the probe tip and probe top based on values stored in model."""
         self.view.set_probe_lims(self.model.chn_min, self.model.chn_max)
 
-    def set_yaxis_lims(self, min_val: float | None = None, max_val: float | None = None,
-                       **kwargs) -> None:
+    def set_yaxis_lims(self, *args) -> None:
         """See :meth:`ShankView.set_yaxis_lims` for details."""
-        if min_val is None:
-            min_val = self.model.loaders['plots'].chn_min
-        if max_val is None:
-            max_val = self.model.chn_max
-        self.view.set_yaxis_lims(min_val, max_val)
+        self.view.set_yaxis_lims(*args)
+
+    def get_yaxis_lims(self) -> list[float, float]:
+        """
+        Get the y-axis limits from the model.
+        Returns
+        -------
+        list[float, float]
+            The ymin and ymax values from the model
+        """
+        return [self.model.y_min, self.model.y_max]
 
     def set_scale_title(self, hover_item: pg.LinearRegionItem):
         """

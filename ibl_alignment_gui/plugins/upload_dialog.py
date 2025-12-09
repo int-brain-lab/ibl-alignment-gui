@@ -31,7 +31,7 @@ def display(controller: 'AlignmentGUIController'):
     controller:
         The main application controller.
     """
-    controller.upload_dialog.setup()
+    controller.upload_dialog.add_shanks()
     controller.upload_dialog.exec_()
     return controller.upload_dialog.shanks_to_upload
 
@@ -52,31 +52,40 @@ class UploadDialog(QtWidgets.QDialog):
         self.controller = controller
         self.setWindowTitle('Upload shanks')
         self.resize(300, 150)
-        self.view = False
         self.shanks_to_upload: list = list()
+        self.setup()
 
-    def setup(self) -> None:
+    def setup(self):
         """Set up the dialog layout and widgets."""
-        if not self.view:
-            self.shank_options = CheckBoxGroup(['All'] + self.controller.all_shanks,
-                                               'Select shanks to upload:', orientation='vertical')
-            self.shank_options.set_checked([self.controller.model.selected_shank])
-            self.shank_options.setup_callback(self.on_shank_button_clicked)
+        self.shank_options = CheckBoxGroup('Select shanks to upload:', orientation='vertical')
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self.on_accept)
+        button_box.rejected.connect(self.reject)
 
-            button_box = QtWidgets.QDialogButtonBox(
-                QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-            )
-            button_box.accepted.connect(self.on_accept)
-            button_box.rejected.connect(self.reject)
-    
-            # Assemble layout
-            dialog_layout = QtWidgets.QVBoxLayout()
-            dialog_layout.addWidget(self.shank_options)
-            dialog_layout.addWidget(button_box)
-            self.setLayout(dialog_layout)
-            self.view = True
-        else:
-            self.shank_options.set_checked([self.controller.model.selected_shank])
+        # Assemble layout
+        self.dialog_layout = QtWidgets.QVBoxLayout()
+        self.dialog_layout.addWidget(self.shank_options)
+        self.dialog_layout.addWidget(button_box)
+        self.setLayout(self.dialog_layout)
+
+
+    def add_shanks(self) -> None:
+        """Add the current shanks to the dropdown options"""
+        # Replace the options in the CheckBoxGroup
+        options = ['All'] + self.controller.all_shanks
+        self.shank_options.add_options(options)
+        # Set the currently selected shank
+        self.shank_options.set_checked([self.controller.model.selected_shank])
+        # Connect the callback
+        self.shank_options.setup_callback(self.on_shank_button_clicked)
+
+        # Force a repaint to ensure old buttons are gone
+        self.shank_options.update()
+        self.shank_options.repaint()
+        self.dialog_layout.update()
+        self.update()
 
     def on_shank_button_clicked(self, checked: bool, button: str) -> None:
         """

@@ -150,6 +150,30 @@ class ShankHandler:
         return self.loaders['plots'].chn_max
 
     @property
+    def y_min(self) -> float:
+        """
+        Return the minimum y channel value.
+
+        Returns
+        -------
+        float:
+            The minimum channel value
+        """
+        return self.loaders['plots'].chn_min
+
+    @property
+    def y_max(self) -> float:
+        """
+        Return the maximum y channel value.
+
+        Returns
+        -------
+        float:
+            The maximum channel value
+        """
+        return self.loaders['plots'].chn_max
+
+    @property
     def image_plots(self) -> Bunch[str, ImageData]:
         """
         Access the image plots for the currently active shank.

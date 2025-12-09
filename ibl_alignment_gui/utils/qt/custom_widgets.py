@@ -2144,33 +2144,42 @@ class CheckBoxGroup(QtWidgets.QGroupBox):
 
     def __init__(
             self,
-            options: list[str],
             title: str | None = None,
             orientation: str = 'horizontal',
             parent: QtWidgets.QMainWindow | None = None):
         super().__init__(title, parent)
 
         self.checkboxes: dict[str, QtWidgets.QCheckBox] = Bunch()
-        self.options = options
         self.orientation = orientation
-
         self.create_widgets()
 
     def create_widgets(self) -> None:
-        """Create the checkboxes for each option and layout."""
-        group = QtWidgets.QButtonGroup()
-        group.setExclusive(False)
-        layout = QtWidgets.QHBoxLayout() if self.orientation == 'horizontal' \
+        """Create the button group and layout."""
+        self.group = QtWidgets.QButtonGroup()
+        self.group.setExclusive(False)
+        self.layout = QtWidgets.QHBoxLayout() if self.orientation == 'horizontal' \
             else QtWidgets.QVBoxLayout()
 
-        for option in self.options:
+        self.setLayout(self.layout)
+
+    def add_options(self, options: list[str]) -> None:
+
+        if len(self.checkboxes) > 0:
+            for checkbox in self.checkboxes.values():
+                self.group.removeButton(checkbox)
+                self.layout.removeWidget(checkbox)
+                checkbox.deleteLater()
+
+        self.checkboxes = Bunch()
+
+        for option in options:
             checkbox = QtWidgets.QCheckBox(option)
             checkbox.setChecked(False)
             self.checkboxes[option] = checkbox
-            group.addButton(checkbox)
-            layout.addWidget(checkbox)
+            self.group.addButton(checkbox)
+            self.layout.addWidget(checkbox)
 
-        self.setLayout(layout)
+        self.layout.update()
 
     def set_checked(self, options: list[str]) -> None:
         """

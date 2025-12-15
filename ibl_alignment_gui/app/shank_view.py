@@ -427,6 +427,31 @@ class ShankView:
 
         self.set_yaxis_range(fig)
 
+    def plot_histology_cumulative(self, fig: pg.PlotItem, data: Bunch, ax: str = 'right') -> None:
+
+        self.clear_histology(fig)
+        axis = fig.getAxis(ax)
+        axis.setTicks([])
+        set_axis(fig, 'bottom', pen='w', label=' ')
+
+        # Insert a column of zeros at the start for cumulative plotting
+        values = np.c_[np.zeros(data.probability.shape[0]), data.probability]
+
+        for i, colour in enumerate(data.colours):
+            item = pg.FillBetweenItem(
+                pg.PlotCurveItem( values[:, i - 1], data.depths),
+                pg.PlotCurveItem(values[:, i], data.depths),
+                brush=pg.mkBrush(colour)
+            )
+            fig.addItem(item)
+
+        # Add probe limits as dotted lines
+        fig.addItem(pg.InfiniteLine(pos=self.probe_tip, angle=0, pen=self.kpen_dot))
+        fig.addItem(pg.InfiniteLine(pos=self.probe_top, angle=0, pen=self.kpen_dot))
+
+        self.set_yaxis_range(fig)
+        self.set_xaxis_range(fig, [0, 1])
+
     def clear_scale_factor(self):
         """Clear items from the scale factor plot."""
         self.fig_scale.clear()

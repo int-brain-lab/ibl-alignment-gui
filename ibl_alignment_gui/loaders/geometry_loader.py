@@ -254,7 +254,7 @@ class GeometryLoader(ABC):
         self.electrodes: Geometry | None = None
         self.channels: Geometry | None = None
 
-    def get_geometry(self, sort=False):
+    def get_geometry(self):
         """Load probe geometry from both the metadata and the channels."""
         meta = self.load_meta_data()
         if meta is not None:

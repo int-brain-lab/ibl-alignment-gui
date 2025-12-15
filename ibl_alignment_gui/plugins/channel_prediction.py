@@ -6,6 +6,7 @@ from qtpy import QtWidgets
 
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
+from iblutil.numerical import ismember
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
@@ -44,7 +45,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
-        # 'Random': compute_random_predictions
+        'Cumulative': compute_cumulative_distribution
     }
 
     for model, model_func in predictions_models.items():
@@ -119,7 +120,10 @@ def plot_predicted_regions(
     if results is None:
         items.model.predictions[model] = func(controller, items)
 
-    items.view.plot_histology(items.view.fig_hist_ref, items.model.predictions[model], ax='right')
+    if 'probability' in items.model.predictions[model]:
+        items.view.plot_histology_cumulative(items.view.fig_hist_ref,items.model.predictions[model])
+    else:
+        items.view.plot_histology(items.view.fig_hist_ref, items.model.predictions[model], ax='right')
 
 
 def compute_cosmos_predictions(
@@ -177,6 +181,51 @@ def compute_random_predictions(
     region_ids = controller.model.brain_atlas.regions.id[random]
     regions = controller.model.brain_atlas.regions.get(region_ids)
     return get_region_boundaries(regions, depth_samples)
+
+
+def compute_cumulative_distribution(
+        controller: 'AlignmentGUIController',
+        items: 'ShankController'
+) -> Bunch[str, np.ndarray]:
+
+    """
+    Example prediction model that plots cumulative prediction of brain regions.
+
+    Returns
+    -------
+    Bunch
+        A bunch containing the predicted brain regions.
+    """
+    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
+    xyz_samples = items.model.align_handle.xyz_samples
+    # depths of these coordinates along the track
+    depth_samples = items.model.align_handle.ephysalign.sampling_trk
+
+    region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping='Beryl')
+    region_ids = np.unique(region_ids)
+
+    _, region_idxs = ismember(region_ids, controller.model.brain_atlas.regions.id)
+
+    colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
+
+    ndepths = depth_samples.size # number of depths
+    nregions = region_ids.size  # number of regions
+
+    # Generate random probabilities
+    probas = np.random.rand(ndepths, nregions)
+    # Normalize each row to sum to 1
+    probas /= probas.sum(axis=1, keepdims=True)
+    # Cumulative sum across regions (for stacking)
+    cprobas = probas.cumsum(axis=1)
+
+    data = Bunch(
+        depths=depth_samples * 1e6,
+        regions=region_ids,
+        colours=colours,
+        probability=cprobas
+    )
+
+    return data
 
 
 def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.ndarray]:

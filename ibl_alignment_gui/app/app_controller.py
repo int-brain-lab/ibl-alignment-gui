@@ -312,7 +312,7 @@ class AlignmentGUIController:
 
     @shank_loop
     def reset_shanks(self, items: ShankController, **kwargs) -> None:
-        """"See :meth:`ShankController.init_plot_items` for details."""
+        """See :meth:`ShankController.init_plot_items` for details."""
         items.init_plot_items()
 
     def get_config(self) -> str:
@@ -1355,7 +1355,7 @@ class AlignmentGUIController:
         items.set_yaxis_lims(*ylims)
 
     @shank_loop
-    def _get_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> tuple[float, float]:
+    def _get_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> Bunch:
         """See :meth:`ShankController.get_yaxis_lims` for details."""
         return Bunch(shank=kwargs.get('shank'), config=kwargs.get('config'), ylim=items.get_yaxis_lims())
 

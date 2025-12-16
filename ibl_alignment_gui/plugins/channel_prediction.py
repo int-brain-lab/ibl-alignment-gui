@@ -2,6 +2,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
+from pathlib import Path
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.utils.utils import shank_loop
@@ -196,30 +198,43 @@ def compute_cumulative_distribution(
     Bunch
         A bunch containing the predicted brain regions.
     """
-    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
-    xyz_samples = items.model.align_handle.xyz_samples
-    # depths of these coordinates along the track
-    depth_samples = items.model.align_handle.ephysalign.sampling_trk
 
-    region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping='Beryl')
-    region_ids = np.unique(region_ids)
+    if Path('/Users/admin/Downloads/ea_features.pqt').exists():
+        df = pd.read_parquet('/Users/admin/Downloads/ea_features.pqt')
+        int_cols = [c for c in df.columns if c.isdigit()]
+        probas = df[int_cols].to_numpy()
+        cprobas = probas.cumsum(axis=1)
+        depth_samples = df['axial_um'].values
 
-    _, region_idxs = ismember(region_ids, controller.model.brain_atlas.regions.id)
+        region_ids = np.array([int(c) for c in int_cols])
+        _, region_idxs = ismember(region_ids, controller.model.brain_atlas.regions.id)
+        colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
+    else:
+        # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
+        xyz_samples = items.model.align_handle.xyz_samples
+        # depths of these coordinates along the track
+        depth_samples = items.model.align_handle.ephysalign.sampling_trk
 
-    colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
+        region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping='Beryl')
+        region_ids = np.unique(region_ids)
 
-    ndepths = depth_samples.size # number of depths
-    nregions = region_ids.size  # number of regions
+        _, region_idxs = ismember(region_ids, controller.model.brain_atlas.regions.id)
 
-    # Generate random probabilities
-    probas = np.random.rand(ndepths, nregions)
-    # Normalize each row to sum to 1
-    probas /= probas.sum(axis=1, keepdims=True)
-    # Cumulative sum across regions (for stacking)
-    cprobas = probas.cumsum(axis=1)
+        colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
+
+        ndepths = depth_samples.size # number of depths
+        nregions = region_ids.size  # number of regions
+
+        # Generate random probabilities
+        probas = np.random.rand(ndepths, nregions)
+        # Normalize each row to sum to 1
+        probas /= probas.sum(axis=1, keepdims=True)
+        # Cumulative sum across regions (for stacking)
+        cprobas = probas.cumsum(axis=1)
+
 
     data = Bunch(
-        depths=depth_samples * 1e6,
+        depths=depth_samples,
         regions=region_ids,
         colours=colours,
         probability=cprobas

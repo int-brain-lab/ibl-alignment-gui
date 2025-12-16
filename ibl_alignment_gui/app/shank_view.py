@@ -439,7 +439,7 @@ class ShankView:
 
         for i, colour in enumerate(data.colours):
             item = pg.FillBetweenItem(
-                pg.PlotCurveItem( values[:, i - 1], data.depths),
+                pg.PlotCurveItem( values[:, i + 1], data.depths),
                 pg.PlotCurveItem(values[:, i], data.depths),
                 brush=pg.mkBrush(colour)
             )

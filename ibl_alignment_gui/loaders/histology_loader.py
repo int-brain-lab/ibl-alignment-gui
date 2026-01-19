@@ -199,7 +199,7 @@ def download_histology_data(
 
     def _find_histology_folder(subj: str, lab: str):
         flatiron_path = Path('histology', lab, subj, 'downsampledStacks_25', 'sample2ARA')
-        url = f"{par.HTTP_DATA_SERVER}/{'/'.join(flatiron_path.parts)}"
+        url = f"{par.HTTP_DATA_SERVER}/{'/'.join(flatiron_path.parts)}/"
         try:
             response = requests.get(
                 url, auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD))

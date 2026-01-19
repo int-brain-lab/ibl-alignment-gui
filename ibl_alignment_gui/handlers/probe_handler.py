@@ -339,7 +339,6 @@ class ProbeHandler(ABC):
             for config in self.configs:
                 self.shanks[probe][config].load_plots()
 
-
     def upload_data(self) -> str:
         """
         Upload data for the selected shank for each configuration.
@@ -512,6 +511,7 @@ class ProbeHandlerONE(ProbeHandler):
             A string with the session info and probe name
         """
         return (ins['session_info']['start_time'][:10] + ' ' +
+                f"{ins['session_info']['number']:03}" + ' ' +
                 self.normalize_shank_label(ins['name']))
 
     def set_info(self, idx):

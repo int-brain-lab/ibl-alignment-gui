@@ -445,7 +445,7 @@ class AlignmentGUIController:
         """Plot channels on slice plots."""
         self.show_channels = True
         c = 'g' if items.config == self.model.default_config else 'r'
-        items.plot_channels(self.slice_figs[kwargs.get('shank')], colour=c)
+        items.plot_channels(self.slice_figs[kwargs.get('shank')], self.probe_init, c)
 
     def plot_line_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -653,6 +653,10 @@ class AlignmentGUIController:
         self.plot_panels(plot_key, plot_type='probe', plot_func='plot_probe',
                          init_attr='probe_init', dual_cb_name='fig_dual_probe_cb',
                          plugin_event='plot_probe_panels', data_only=data_only, **kwargs)
+        if self.model.selected_config == 'both':
+            self.plot_channel_panels()
+        else:
+            self.plot_channel_panels(configs=[self.model.selected_config])
 
     def plot_dual_colorbar(self, results: Bunch, fig: str) -> None:
         """
@@ -912,9 +916,6 @@ class AlignmentGUIController:
         self.set_probe_lims(data_only=True)
         self.set_yaxis_lims()
 
-        # Initialise ephys plots
-        self.set_ephys_plots()
-
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
         self.get_scaled_histology()
@@ -924,6 +925,9 @@ class AlignmentGUIController:
         self.show_labels = False
         self.toggle_labels()
         self.update_string()
+
+        # Initialise ephys plots
+        self.set_ephys_plots()
 
         # Add reference lines to the display
         if init:

@@ -768,15 +768,15 @@ class ProbeHandlerLocal(ProbeHandler):
         self.folder_path = folder_path
         collections = CollectionData()
 
-        # Load in the geometry and find the number of shnaks
+        # Load in the geometry and find the number of shanks
         self.geom = GeometryLoaderLocal(self.folder_path, collections)
         self.geom.get_geometry()
 
         self.n_shanks = self.geom.channels.n_shanks
         if self.n_shanks == 1:
-            self.shank_labels = ['1/1']
+            self.shank_labels = ['shank_1']
         else:
-            self.shank_labels = [f'{iShank + 1}/{self.n_shanks}'
+            self.shank_labels = [f'shank_{iShank + 1}'
                                  for iShank in range(self.n_shanks)]
 
         self.initialise_shanks()
@@ -792,7 +792,7 @@ class ProbeHandlerLocal(ProbeHandler):
         idx: int
             The index of the selected shank
         """
-        self.selected_shank = f'shank_{self.shank_labels[idx]}'
+        self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
     def download_histology(self) -> NrrdSliceLoader:
@@ -812,4 +812,4 @@ class ProbeHandlerLocal(ProbeHandler):
                                                        self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderLocal(self.folder_path, '')
             loaders['plots'] = PlotLoader()
-            self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
+            self.shanks[ishank][self.default_config] = ShankHandler(loaders, ish)

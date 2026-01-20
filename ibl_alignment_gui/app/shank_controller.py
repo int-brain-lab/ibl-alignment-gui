@@ -130,14 +130,18 @@ class ShankController:
         data['depth'] = self.view.depth
         self.view.plot_fit(data)
 
-    def plot_channels(self, fig_slice: pg.ViewBox, colour: str | None = None) -> None:
+    def plot_channels(self, fig_slice: pg.ViewBox, plot_key: str, colour: str | None = None) -> None:
         """
         Plot channels on a slice plot.
+
+        Add jitter to channel positions to avoid overlap.
 
         Parameters
         ----------
         fig_slice: pg.ViewBox
             The slice fig to add the channel items to
+        plot_key: str
+            The key of the plot to display
         colour: str
             The colour of the scatter points used to plot the channels
 
@@ -147,9 +151,11 @@ class ShankController:
         plotted on a different slice figure than the one stored in the view.
         """
         data = Bunch()
-        data['xyz_channels'] = self.model.xyz_channels
+        jitter = np.random.uniform(-1 * 1e-5, 1 * 1e-5, size=self.model.xyz_channels.shape)
+        data['xyz_channels'] = self.model.xyz_channels + jitter
         data['track_lines'] = self.model.track_lines
-        self.view.plot_channels(fig_slice, data, colour=colour)
+        data_feature = self.model.probe_plots.get(plot_key, None)
+        self.view.plot_channels(fig_slice, data, data_feature, colour)
 
     def plot_scatter(self, plot_key: str, levels: list | None = None) -> ColorBar | None:
         """

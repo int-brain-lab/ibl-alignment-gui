@@ -52,6 +52,18 @@ class ShankHandler:
         """
         return self.loaders['align'].feature_prev
 
+    @property
+    def xyz_picks(self) -> np.ndarray:
+        """
+        Return the xyz picks from the alignment loader for the currently active shank.
+
+        Returns
+        -------
+        np.ndarray
+            An array of xyz pick coordinates.
+        """
+        return self.loaders['align'].xyz_picks
+
     # -------------------------------------------------------------------------
     # Alignment handler - attributes and methods in align_handle
     # -------------------------------------------------------------------------

@@ -562,7 +562,7 @@ class ShankView:
         self.slice_lines = self.remove_items(fig_slice, self.slice_lines)
         self.slice_chns = self.remove_items(fig_slice, self.slice_chns)
 
-    def plot_channels(self, fig_slice: pg.ViewBox, data: Bunch, colour: str = 'r') -> None:
+    def plot_channels(self, fig_slice: pg.ViewBox, data: Bunch, data_feature: ProbeData | None, colour: str = 'r') -> None:
         """
         Plot the locations of electrode channels and track reference lines on the histology slice.
 
@@ -579,9 +579,21 @@ class ShankView:
         """
         self.clear_channels(fig_slice)
 
+        if data_feature is None:
+            brush = pg.mkBrush(colour)
+            pen = pg.mkPen(colour, width=0.2)
+        else:
+            if data_feature.data is None:
+                brush = pg.mkBrush(colour)
+                pen = pg.mkPen(colour, width=0.2)
+            else:
+                cbar = ColorBar(data_feature.cmap)
+                brush = cbar.get_brush(data_feature.data, levels=list(data_feature.levels))
+                pen = None
+
         self.slice_chns = pg.ScatterPlotItem(x=data['xyz_channels'][:, 0],
                                              y=data['xyz_channels'][:, 2],
-                                             pen=colour, brush=colour)
+                                             brush=brush, pen=pen)
         fig_slice.addItem(self.slice_chns)
 
         self.slice_lines = []

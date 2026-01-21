@@ -21,8 +21,6 @@ from ibl_alignment_gui.utils.utils import shank_loop
 PLUGIN_NAME = "3D features"
 
 SHANK_COLOURS = {
-    '0': '#000000',
-    '1': '#000000',
     'a': '#000000',
     'b': '#30B666',
     'c': '#ff0044',
@@ -169,7 +167,7 @@ class Features3D:
         urchin.ccf25.root.set_material('transparent-lit')
         urchin.ccf25.root.set_alpha(0.5)
 
-        self.plot_channels(self.controller.probe_init)
+        self.data_button_pressed()
 
     def data_button_pressed(self) -> None:
         """
@@ -359,9 +357,10 @@ class Features3D:
 
             # Find the position to put the shank indicators
             min_idx = np.argmin(mlapdv[:, 2])
+
             sh_info = {'name': shank,
                        'pos': [mlapdv[min_idx, 1], mlapdv[min_idx, 0], mlapdv[min_idx, 2] - 200],
-                       'col': SHANK_COLOURS[shank[-1]]}
+                       'col': SHANK_COLOURS.get(shank[-1], create_random_color())}
             if self.controller.model.selected_config != 'both' or dat['config'] == 'quarter':
                 markers.append(sh_info)
 
@@ -369,6 +368,21 @@ class Features3D:
         if len(positions) > 0:
             self.set_points({'pos': positions, 'col': colours})
             self.set_markers(markers)
+
+
+def create_random_color() -> str:
+    """
+    Create a random hex color code.
+
+    Returns
+    -------
+    str
+        A hex color code.
+    """
+    r = np.random.randint(0, 256)
+    g = np.random.randint(0, 256)
+    b = np.random.randint(0, 256)
+    return rgb2hex((r / 255, g / 255, b / 255))
 
 
 def data_to_colors(
@@ -466,14 +480,9 @@ def update_channels(_, items: 'ShankController', plot_key: str, **kwargs) -> dic
     """
     xyz = items.model.xyz_channels
     data = items.model.probe_plots.get(plot_key, None)
-    if data is None:
+    if data is None or data.data is None:
         return {'xyz': None, 'values': None, 'shank': kwargs['shank'], 'config': kwargs['config']}
 
-    # We need to do this because the probe plots are split by bank
-    vals = np.concatenate(data.img, axis=1)[0]
-    idx = np.concatenate(data.idx)
-    vals = vals[idx]
-
-    values = data_to_colors(vals, data.cmap, data.levels[0], data.levels[1])
+    values = data_to_colors(data.data, data.cmap, data.levels[0], data.levels[1])
 
     return {'xyz': xyz, 'values': values, 'shank': kwargs['shank'], 'config': kwargs['config']}

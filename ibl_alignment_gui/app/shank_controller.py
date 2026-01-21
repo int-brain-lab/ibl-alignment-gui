@@ -232,6 +232,18 @@ class ShankController:
 
         return cbar
 
+    def plot_feature(self, plot_key: str) -> None:
+        """
+        Plot a feature plot.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the plot to display
+        """
+        data = self.model.feature_plots.get(plot_key, None)
+        self.view.plot_feature(data)
+
     # --------------------------------------------------------------------------------------------
     # Update displays
     # --------------------------------------------------------------------------------------------
@@ -277,6 +289,16 @@ class ShankController:
         """See :meth:`ShankView.set_yaxis_lims` for details."""
         self.view.set_yaxis_lims(*args)
 
+    def get_yaxis_lims(self) -> list[float, float]:
+        """
+        Get the y-axis limits from the model.
+        Returns
+        -------
+        list[float, float]
+            The ymin and ymax values from the model
+        """
+        return [self.model.y_min, self.model.y_max]
+
     def set_scale_title(self, hover_item: pg.LinearRegionItem):
         """
         Update the title of the scale plot color bar based on the hovered region.
@@ -288,6 +310,10 @@ class ShankController:
         """
         idx = self.view.match_linear_region(hover_item)
         self.view.set_fig_scale_title(self.model.scale_data['scale'][idx])
+
+    def set_feature_title(self, feature_title: str | None) -> None:
+        """See :meth:`ShankView.set_feature_title` for details."""
+        self.view.set_feature_title(feature_title)
 
     def reset_slice_axis(self) -> None:
         """See :meth:`ShankView.reset_slice_axis` for details."""

@@ -150,6 +150,30 @@ class ShankHandler:
         return self.loaders['plots'].chn_max
 
     @property
+    def y_min(self) -> float:
+        """
+        Return the minimum y channel value.
+
+        Returns
+        -------
+        float:
+            The minimum channel value
+        """
+        return self.loaders['plots'].chn_min
+
+    @property
+    def y_max(self) -> float:
+        """
+        Return the maximum y channel value.
+
+        Returns
+        -------
+        float:
+            The maximum channel value
+        """
+        return self.loaders['plots'].chn_max
+
+    @property
     def image_plots(self) -> Bunch[str, ImageData]:
         """
         Access the image plots for the currently active shank.
@@ -209,6 +233,18 @@ class ShankHandler:
         """
         return self.loaders['plots'].slice_plots
 
+    @property
+    def feature_plots(self) -> Bunch[str, Bunch]:
+        """
+        Access the feature plots from the current shank's plot loader.
+
+        Returns
+        -------
+        Bunch:
+            A bunch of available feature plots.
+        """
+        return self.loaders['plots'].feature_plots
+
     def reset_levels(self) -> None:
         """Reset the levels for all image, scatter, line and probe plots."""
         for plot in [self.image_plots, self.scatter_plots, self.line_plots, self.probe_plots]:
@@ -251,6 +287,12 @@ class ShankHandler:
         # Load in the raw data snippets
         self.raw_data['raw_snippets'] = self.loaders['ephys'].load_ap_snippets()
 
+        # Load in the features data
+        if self.loaders.get('features', None) is not None:
+            self.raw_data['features'] = self.loaders['features'].load_features()
+        else:
+            self.raw_data['features'] = Bunch(exists=False)
+
         # Create the plot data using the raw data
         self.loaders['plots'].get_data(self.raw_data, shank_sites)
 
@@ -278,6 +320,10 @@ class ShankHandler:
             self.loaders['plots'].slice_plots = Bunch()
 
         self.data_loaded = True
+
+    def load_plots(self):
+        """Load all the plot data for the current shank."""
+        self.loaders['plots'].get_plots()
 
     def filter_units(self, filter_type: str) -> None:
         """

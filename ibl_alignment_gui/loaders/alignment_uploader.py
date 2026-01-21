@@ -134,7 +134,7 @@ class AlignmentUploaderOne(AlignmentUploader):
         bool
             True if channels uploaded, False otherwise.
         """
-        if self.resolved:
+        if self.resolved and not self.force_resolve:
             return False
 
         # Create new trajectory and overwrite previous one

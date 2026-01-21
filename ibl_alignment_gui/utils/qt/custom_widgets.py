@@ -1209,7 +1209,7 @@ class MenuWidget(QtWidgets.QMenuBar):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'slice', 'filter']:
+        for group in ['image', 'line', 'probe', 'feature', 'slice', 'filter']:
             self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)
@@ -1542,9 +1542,11 @@ class ConfigWidget(QtWidgets.QWidget):
             func_hover(hover_items, n, i, c))
 
 
-class SingleConfigWidget(ConfigWidget):
+class SingleConfigFeatureWidget(ConfigWidget):
     """
-    Widget for displaying ephys and histology for a single shank and configuration.
+    Widget for displaying ephys features and histology for a single shank and configuration.
+
+    The ephys plot shows the feature plot.
 
     Parameters
     ----------
@@ -1590,7 +1592,89 @@ class SingleConfigWidget(ConfigWidget):
         fig_ephys_layout: pg.GraphicsLayout
             The created ephys figure layout.
         """
-        items.fig_data_ax = set_axis(items.fig_img, 'left', label='Distance from probe tip (uV)')
+        set_axis(items.fig_feature, 'left', label='Distance from probe tip (um)')
+
+        fig_ephys_layout = pg.GraphicsLayout()
+        fig_ephys_layout.setSpacing(0)
+
+        # Add items to layout with positions and spans
+        fig_ephys_layout.addItem(items.fig_feature_label, 0, 0)
+        fig_ephys_layout.addItem(items.fig_feature, 1, 0)
+
+        fig_ephys_layout.layout.setRowStretchFactor(0, 1)
+        fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+
+        return fig_ephys_layout
+
+    def get_layout(self) -> tuple[pg.GraphicsLayout, pg.GraphicsLayout]:
+        """
+        Create the electrophysiology and histogram layouts.
+
+        Returns
+        -------
+        ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        hist_layout: pg.GraphicsLayout
+            The created histology figure layout.
+        """
+        ephys_layout = self.create_ephys_figure_layout(self.items)
+        hist_layout = self.create_hist_figure_layout(self.items)
+
+        return ephys_layout, hist_layout
+
+
+
+class SingleConfigWidget(ConfigWidget):
+    """
+    Widget for displaying ephys and histology for a single shank and configuration.
+
+    The ephys plot shows the image, probe and line plots in one display.
+
+    Parameters
+    ----------
+    items: ShankView
+        A ShankView object containing all the figure items for this configuration and shank.
+    parent : QWidgets.QMainWindow, optional
+        The parent window
+
+    Attributes
+    ----------
+    items: ShankView
+        A ShankView object containing all the figure items for this configuration and shank.
+    header : QtWidgets.QLabel
+        A label widget for the header, provided by the subclass.
+    config : str
+        The probe configuration name, provided by the subclass.
+    idx : int
+        The index of the shank, provided by the subclass.
+    name : str
+        The name of the shank, provided by the subclass.
+    """
+
+    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+        self.items = items
+        self.config: str = items.config
+        self.idx: int = items.index
+        self.name: str = items.name
+        self.header: QtWidgets.QLabel = items.header
+
+        super().__init__(parent)
+
+    def create_ephys_figure_layout(self, items) -> pg.GraphicsLayout:
+        """
+        Build an ephys figure layout for a single configuration.
+
+        Parameters
+        ----------
+        items: ShankView
+            A ShankView object containing all the figure items for this configuration and shank.
+
+        Returns
+        -------
+        fig_ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        """
+        items.fig_data_ax = set_axis(items.fig_img, 'left', label='Distance from probe tip (um)')
         set_axis(items.fig_scale_cb, 'bottom', show=False)
 
         fig_ephys_layout = pg.GraphicsLayout()
@@ -1634,8 +1718,8 @@ class DualConfigWidget(ConfigWidget):
     Widget for displaying ephys and histology for a single shank and two different configurations.
 
     The histology figure is built from the figure items of the default configuration.
-    The ephys figure shows both the figure items from the default and non-default configurations
-    side by side in one panel.
+    The ephys figure shows the image, line and probe plots from both the default and non-default
+    configurations, side by side in one panel.
 
     Parameters
     ----------
@@ -1705,7 +1789,7 @@ class DualConfigWidget(ConfigWidget):
         # Configure axes for both sets
         items_non_default.fig_data_ax = set_axis(items_non_default.fig_img, 'left', show=False)
         items_default.fig_data_ax = set_axis(
-            items_default.fig_img, 'left', label='Distance from probe tip (uV)')
+            items_default.fig_img, 'left', label='Distance from probe tip (um)')
         set_axis(items_default.fig_scale_cb, 'bottom')
 
         # Link the y-axis
@@ -1749,6 +1833,123 @@ class DualConfigWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(3, 1)
         fig_ephys_layout.layout.setColumnStretchFactor(4, 1)
         fig_ephys_layout.layout.setColumnStretchFactor(5, 1)
+        fig_ephys_layout.layout.setRowStretchFactor(0, 1)
+        fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+
+        return fig_ephys_layout
+
+    def get_layout(self) -> tuple[pg.GraphicsLayout, pg.GraphicsLayout]:
+        """
+        Create the electrophysiology and histogram layouts.
+
+        Returns
+        -------
+        ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        hist_layout: pg.GraphicsLayout
+            The created histology figure layout.
+        """
+        ephys_layout = self.create_ephys_figure_layout(self.items_default, self.items_non_default)
+        hist_layout = self.create_hist_figure_layout(self.items_default)
+
+        return ephys_layout, hist_layout
+
+
+class DualConfigFeatureWidget(ConfigWidget):
+    """
+    Widget for displaying ephys features and histology for a single shank and different configs.
+
+    The histology figure is built from the figure items of the default configuration.
+    The ephys figure shows the feature plot from both the default and non-default configurations
+    side by side in one panel.
+
+    Parameters
+    ----------
+    items_default: ShankView
+        A ShankView object containing all the figure items for the default configuration
+        and shank.
+    items_non_default: ShankView
+        A ShankView object containing all the figure items for the non-default configuration
+        and shank
+    parent : QWidgets.QMainWindow, optional
+        The parent window
+
+    Attributes
+    ----------
+    items_default: ShankView
+        A ShankView object containing all the figure items for the default configuration
+        and shank.
+    items_non_default: ShankView
+        A ShankView object containing all the figure items for the non-default configuration
+        and shank
+    header : QtWidgets.QLabel
+        A label widget for the header, provided by the subclass.
+    config : str
+        The probe configuration name, provided by the subclass.
+    idx : int
+        The index of the shank, provided by the subclass.
+    name : str
+        The name of the shank, provided by the subclass.
+    """
+
+    def __init__(self,
+                 items_default,
+                 items_non_default,
+                 parent: QtWidgets.QMainWindow | None = None):
+
+        self.items_default = items_default
+        self.items_non_default = items_non_default
+        self.config: str = items_default.config
+        self.idx: int = items_default.index
+        self.name: str = items_default.name
+        self.header: QtWidgets.QLabel = items_default.header
+
+        super().__init__(parent)
+
+    def create_ephys_figure_layout(
+            self,
+            items_default,
+            items_non_default
+    ) -> pg.GraphicsLayout:
+        """
+        Build an ephys figure layout showing two configurations alongside each other.
+
+        Parameters
+        ----------
+        items_default: ShankView
+            A ShankView object containing all the figure items for the default configuration
+            and shank.
+        items_non_default: ShankView
+            A ShankView object containing all the figure items for the non-default configuration
+            and shank
+
+        Returns
+        -------
+        fig_ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        """
+        # Configure axes for both sets
+        items_non_default.fig_feature_ax = set_axis(items_non_default.fig_feature, 'left',
+                                                    show=False)
+        items_default.fig_feature_ax = set_axis(
+            items_default.fig_feature, 'left', label='Distance from probe tip (um)')
+        set_axis(items_default.fig_scale_cb, 'bottom')
+
+        # Link the y-axis
+        items_default.fig_feature.setYLink(items_non_default.fig_feature)
+
+        # Layout arrangement
+        fig_ephys_layout = pg.GraphicsLayout()
+        fig_ephys_layout.setSpacing(0)
+
+        # Add items to layout with positions and spans
+        fig_ephys_layout.addItem(items_default.fig_feature_label, 0, 0, 1, 2)
+        fig_ephys_layout.addItem(items_default.fig_feature, 1, 0)
+        fig_ephys_layout.addItem(items_non_default.fig_feature, 1, 1)
+
+        # Set column and row stretch factors
+        fig_ephys_layout.layout.setColumnStretchFactor(0, 6)
+        fig_ephys_layout.layout.setColumnStretchFactor(1, 4)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
 
@@ -1904,7 +2105,7 @@ class SliderWidget(QtWidgets.QGroupBox):
         self.slider.setMinimum(0)
         self.slider_labels['min'].setText(f'Min: {self.format_label(min_max[0])}')
         self.slider.setMaximum(self.steps - 1)
-        self.slider_labels['max'].setText(f'Min: {self.format_label(min_max[1])}')
+        self.slider_labels['max'].setText(f'Max: {self.format_label(min_max[1])}')
 
     def set_slider_values(self, low_high: list | tuple | np.ndarray) -> None:
         """
@@ -1943,33 +2144,42 @@ class CheckBoxGroup(QtWidgets.QGroupBox):
 
     def __init__(
             self,
-            options: list[str],
             title: str | None = None,
             orientation: str = 'horizontal',
             parent: QtWidgets.QMainWindow | None = None):
         super().__init__(title, parent)
 
         self.checkboxes: dict[str, QtWidgets.QCheckBox] = Bunch()
-        self.options = options
         self.orientation = orientation
-
         self.create_widgets()
 
     def create_widgets(self) -> None:
-        """Create the checkboxes for each option and layout."""
-        group = QtWidgets.QButtonGroup()
-        group.setExclusive(False)
-        layout = QtWidgets.QHBoxLayout() if self.orientation == 'horizontal' \
+        """Create the button group and layout."""
+        self.group = QtWidgets.QButtonGroup()
+        self.group.setExclusive(False)
+        self.layout = QtWidgets.QHBoxLayout() if self.orientation == 'horizontal' \
             else QtWidgets.QVBoxLayout()
 
-        for option in self.options:
+        self.setLayout(self.layout)
+
+    def add_options(self, options: list[str]) -> None:
+
+        if len(self.checkboxes) > 0:
+            for checkbox in self.checkboxes.values():
+                self.group.removeButton(checkbox)
+                self.layout.removeWidget(checkbox)
+                checkbox.deleteLater()
+
+        self.checkboxes = Bunch()
+
+        for option in options:
             checkbox = QtWidgets.QCheckBox(option)
             checkbox.setChecked(False)
             self.checkboxes[option] = checkbox
-            group.addButton(checkbox)
-            layout.addWidget(checkbox)
+            self.group.addButton(checkbox)
+            self.layout.addWidget(checkbox)
 
-        self.setLayout(layout)
+        self.layout.update()
 
     def set_checked(self, options: list[str]) -> None:
         """

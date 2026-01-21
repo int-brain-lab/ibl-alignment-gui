@@ -36,6 +36,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['plot_probe_panels'] = range_controller.on_plot_changed
     controller.plugins[PLUGIN_NAME]['plot_scatter_panels'] = range_controller.on_plot_changed
     controller.plugins[PLUGIN_NAME]['plot_line_panels'] = range_controller.on_plot_changed
+    controller.plugins[PLUGIN_NAME]['on_view_changed'] = range_controller.disable_sliders
 
     # Add a submenu to the main menu
     action = QtWidgets.QAction(PLUGIN_NAME, controller.view)
@@ -83,11 +84,13 @@ class RangeControllerView(PopupWindow):
             self.sliders[plot] = SliderWidget(steps=self.steps, slider_type=plot)
             self.labels[plot] = QtWidgets.QLabel()
 
-        self.shank_options = CheckBoxGroup(['All'] + self.controller.all_shanks)
+        self.shank_options = CheckBoxGroup()
+        self.shank_options.add_options(['All'] + self.controller.all_shanks)
         self.shank_options.set_checked([self.controller.model.selected_shank])
         self.shank_options.setup_callback(self.on_shank_button_clicked)
 
-        self.config_options = CheckBoxGroup(['both'] + self.controller.model.configs)
+        self.config_options = CheckBoxGroup()
+        self.config_options.add_options(['both'] + self.controller.model.configs)
         self.config_options.set_checked([self.controller.model.selected_config])
         self.config_options.setup_callback(self.on_config_button_clicked)
 
@@ -215,7 +218,6 @@ class RangeController:
         if self.controller.model.selected_config == 'both':
             self.view.on_config_button_clicked(True, 'both')
 
-
     def on_close(self) -> None:
         """
         Triggered when the plugin window is closed.
@@ -223,6 +225,18 @@ class RangeController:
         Deactivate the plugin and callbacks.
         """
         self.controller.plugins[PLUGIN_NAME]['activated'] = False
+
+    def disable_sliders(self) -> None:
+        """Disable sliders when the view is changed to feature view."""
+        if self.controller.show_feature:
+            for slider_widget in self.view.sliders.values():
+                slider_widget.slider.setEnabled(False)
+                slider_widget.reset_button.setEnabled(False)
+        else:
+            for slider_widget in self.view.sliders.values():
+                slider_widget.slider.setEnabled(True)
+                slider_widget.reset_button.setEnabled(True)
+            self.set_init_levels()
 
     def set_init_levels(self) -> None:
         """Set the initial levels for image, probe, and line plots based on controller settings."""
@@ -306,7 +320,7 @@ class RangeController:
         plot_key: str
             The key of the plot to update.
         plot_type: str
-            The type of the plot ('image', 'probe', 'line', or 'scatter')
+            The type of the plot ('image', 'probe', 'line', 'scatter' or 'feature')
         """
         if plot_type == 'probe':
             self.controller.plot_probe_panels(plot_key)
@@ -330,6 +344,10 @@ class RangeController:
         plot_type: str
             The type of the plot
         """
+        # If not feature plot shown and feature slider moved, return
+        if self.controller.show_feature:
+            return
+
         # Ensure we don't go into on_plot_changed
         self.disable = True
 
@@ -337,7 +355,6 @@ class RangeController:
         plot_key = self.plot_keys[plot_type]
         if plot_type == 'image':
             plot_type = self.get_image_plot_type(plot_key)
-
 
         set_levels(self.controller, plot_key, plot_type, levels,
                    shanks=self.view.get_selected_shanks(),

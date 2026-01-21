@@ -254,7 +254,7 @@ class GeometryLoader(ABC):
         self.electrodes: Geometry | None = None
         self.channels: Geometry | None = None
 
-    def get_geometry(self, sort=False):
+    def get_geometry(self):
         """Load probe geometry from both the metadata and the channels."""
         meta = self.load_meta_data()
         if meta is not None:
@@ -422,7 +422,7 @@ def arrange_channels_into_banks(
         shank_geom: Bunch[str, Any],
         data: np.ndarray,
         bnk_width: int = 10
-) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Arrange channel data into probe banks for visualization.
 
@@ -442,22 +442,13 @@ def arrange_channels_into_banks(
 
     Returns
     -------
-    bnk_data : list of np.ndarray
-        List of data values for each bank, shape of each array is (1, n_channels_per_bank)
-        for each bank
-    bnk_scale : list of np.ndarray
-        List of scaling factors for each bank along x and y axes
+    bnk_data : np.ndarray
+        A 2D array with data organised into individual banks on the shank.
+    bnk_scale : np.ndarray
+        Scale factor to apply along x and y axes
     bnk_offset : list of np.ndarray
-        List of offset values for each bank along x and y axes.
-    bnk_index : list of np.ndarray
-        List of original indices for data in each bank.
-
+        Offset to apply along x and y axes.
     """
-    bnk_data = list()
-    bnk_scale = list()
-    bnk_offset = list()
-    bnk_index = list()
-
     # Find the minimum spacing between channels in each bank
     x_coords = np.unique(shank_geom['sites_x'])
     bnk_diff = []
@@ -467,6 +458,13 @@ def arrange_channels_into_banks(
         bnk_diff.append(np.min(np.abs(np.diff(bnk_ycoords))))
     bnk_diff = np.min(bnk_diff)
 
+    if bnk_diff != shank_geom['sites_pitch']:
+        bnk_data = np.full((shank_geom['sites_full'].shape[0] + 1,
+                            shank_geom['n_banks']), np.nan)
+    else:
+        bnk_data = np.full((shank_geom['sites_full'].shape[0],
+                            shank_geom['n_banks']), np.nan)
+
     for ibank, bank in enumerate(np.unique(shank_geom['sites_x'])):
 
         # Find the channels in the current bank
@@ -475,31 +473,21 @@ def arrange_channels_into_banks(
 
         # NP1.0 checkerboard
         if bnk_diff != shank_geom['sites_pitch']:
-            bnk_full = np.arange(np.min(bnk_ycoords), np.max(bnk_ycoords) + bnk_diff, bnk_diff)
-            idx_full = np.where(np.isin(bnk_full, bnk_ycoords))
-            bnk_vals = np.full((bnk_full.shape[0]), np.nan)
-            bnk_yoffset = np.min(bnk_ycoords)
-
+            idx_full = np.where(np.isin(shank_geom['sites_full'], bnk_ycoords))[0]
+            bnk_data[idx_full, ibank] = data[bnk_chns]
+            # Fill in the extra row for checkerboard display
+            bnk_data[[idx_full + 1], ibank] = data[bnk_chns]
         else:  # NP2.0
-            idx_full = np.where(np.isin(shank_geom['sites_full'], bnk_ycoords))
-            bnk_vals = np.full((shank_geom['sites_full'].shape[0]), np.nan)
-            bnk_yoffset = shank_geom['sites_min']
+            idx_full = np.where(np.isin(shank_geom['sites_full'], bnk_ycoords))[0]
+            # Fill in the data for the channels in the current bank
+            bnk_data[idx_full, ibank] = data[bnk_chns]
 
-        # Fill in the data for the channels in the current bank
-        bnk_vals[idx_full] = data[bnk_chns]
-        bnk_vals = bnk_vals[np.newaxis, :]
+    # Get the scaling and offset for the shank
+    bnk_yscale = ((shank_geom['sites_max'] - shank_geom['sites_min']) / bnk_data.shape[0])
+    bnk_xscale = bnk_width
+    bnk_offset = np.array([0, shank_geom['sites_min']])
 
-        # Get the scaling and offset for the current bank
-        bnk_yscale = ((shank_geom['sites_max'] - shank_geom['sites_min']) / bnk_vals.shape[1])
-        bnk_xscale = bnk_width / bnk_vals.shape[0]
-        bnk_xoffset = bnk_width * ibank
-
-        bnk_index.append(bnk_chns)
-        bnk_data.append(bnk_vals)
-        bnk_scale.append(np.array([bnk_xscale, bnk_yscale]))
-        bnk_offset.append(np.array([bnk_xoffset, bnk_yoffset]))
-
-    return bnk_data, bnk_scale, bnk_offset, bnk_index
+    return bnk_data.T, np.array([bnk_xscale, bnk_yscale]), bnk_offset
 
 
 def average_chns_at_same_depths(shank_geom: Bunch[str, Any], data: np.ndarray) -> np.ndarray:

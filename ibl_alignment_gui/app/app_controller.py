@@ -73,12 +73,6 @@ class AlignmentGUIController:
     img_init, probe_init, line_init, slice_init, filter_init : str or None
         Track the initially loaded image, probe, line, slice, and filter
         states, respectively.
-    scatter_levels, img_levels, probe_levels : list or tuple or np.ndarray or None
-        Track current visualization levels for scatter, image, and probe data.
-    normalise_levels : str
-        The configuration to use to normalise visualistaion levels across configs.
-    normalise_idx : int
-        Index used to track normalization states.
     plugins : dict
         A mapping of plugin names to plugin instances.
     """
@@ -123,18 +117,15 @@ class AlignmentGUIController:
         self.img_init: str | None = None
         self.probe_init: str | None = None
         self.line_init: str | None = None
+        self.feature_init: str | None = None
         self.slice_init: str | None = None
         self.filter_init: str | None = None
 
+        # The ephys view mode
+        self.show_feature = False
+
         # Store the slice figures
         self.slice_figs: Bunch = Bunch()
-
-        # The levels for the different plot types
-        self.scatter_levels: list | np.ndarray | None = None
-        self.img_levels: list | np.ndarray | None = None
-        self.probe_levels: list | np.ndarray | None = None
-        self.normalise_levels: str | None = None
-        self.normalise_idx: int = 0
 
         # Plugin management
         self.blockPlugins: bool = False
@@ -229,14 +220,21 @@ class AlignmentGUIController:
                                'callback': lambda: self.loop_through_tabs(1)},
                 'Previous shank': {'shortcut': 'Left',
                                    'callback': lambda: self.loop_through_tabs(-1)},
-                # Shortcut to normalise colour bars when multiple configs shown
-                'Normalize': {'shortcut': 'Shift+N', 'callback': self.on_normalise_levels},
                 # Shortcut to reset all plots to their default range
                 'Reset Range': {'shortcut': 'R', 'callback': self.on_reset_levels},
             }
 
         self.view.add_shortcuts_to_menu('fit', fit_options)
         self.view.add_shortcuts_to_menu('display', display_options)
+
+    def load_data(self):
+        self.model.load_data()
+        self.loaded = True
+        self.create_shanks()
+        self.execute_plugins('load_data', self)
+
+    def load_plots(self):
+        self.model.load_plots()
 
     def populate_menubar(self):
         """Populate menu bar tabs based on avaialble plots."""
@@ -248,6 +246,8 @@ class AlignmentGUIController:
             'probe', self.plot_probe_panels, self.model.probe_keys)
         self.line_init = self.view.populate_menu_tab(
             'line', self.plot_line_panels, self.model.line_keys)
+        self.feature_init = self.view.populate_menu_tab(
+            'feature', self.plot_feature_panels, self.model.feature_keys)
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys)
         filter_keys = ['All', 'KS good', 'KS mua', 'IBL good']
@@ -288,6 +288,7 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     def create_shanks(self) -> None:
         """Create ShankController instance for each shank and config combination."""
+        self.shank_items = defaultdict(Bunch)
         for i, shank in enumerate(self.all_shanks):
             for c in self.model.configs:
                 self.shank_items[shank][c] = (
@@ -298,7 +299,8 @@ class AlignmentGUIController:
         shank_tabs = self.view.init_tabs(self.shank_items,
                                          self.model.selected_config,
                                          self.model.default_config,
-                                         self.model.non_default_config)
+                                         self.model.non_default_config,
+                                         feature_view=self.show_feature)
         for tab in shank_tabs:
             tab.setup_double_click(self.on_mouse_double_clicked)
             tab.setup_mouse_hover(self.on_mouse_hover)
@@ -310,7 +312,7 @@ class AlignmentGUIController:
 
     @shank_loop
     def reset_shanks(self, items: ShankController, **kwargs) -> None:
-        """"See :meth:`ShankController.init_plot_items` for details."""
+        """See :meth:`ShankController.init_plot_items` for details."""
         items.init_plot_items()
 
     def get_config(self) -> str:
@@ -456,6 +458,13 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
+        self.line_init = plot_key
+
+        if self.show_feature:
+            self.show_feature = False
+            self.on_view_changed()
+            return
+
         self._plot_line_panels(plot_key, data_only=data_only, **kwargs)
 
         self.execute_plugins('plot_line_panels', plot_key, 'line')
@@ -478,15 +487,55 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
-        self.line_init = plot_key
         items.plot_line(plot_key)
+
+    def plot_feature_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
+        """
+        Plot feature panels per shank and config.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the feature plot to display
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        self.feature_init = plot_key
+
+        if not self.show_feature:
+            self.show_feature = True
+            self.on_view_changed()
+            return
+
+        self._plot_feature_panels(plot_key, data_only=data_only, **kwargs)
+
+        self.execute_plugins('plot_feature_panels', plot_key, 'feature')
+
+    @shank_loop
+    def _plot_feature_panels(
+            self,
+            items: ShankController,
+            plot_key: str,
+            data_only: bool = True,
+            **kwargs
+    ) -> None:
+        """
+        Plot feature panels per shank and config.
+
+        Parameters
+        ----------
+        plot_key: str
+            The key of the feature plot to display
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        items.plot_feature(plot_key)
 
     def plot_panels(
             self,
             plot_key: str,
             plot_type: str,
             plot_func: str,
-            level_attr: str,
             init_attr: str,
             dual_cb_name: str | None = None,
             plugin_event: str | None = None,
@@ -504,9 +553,6 @@ class AlignmentGUIController:
             The type of plot to update e.g. image, probe, scatter
         plot_func: str
             The name of the function used to update the plots
-        level_attr: str
-            The name of the attribute that stores the levels for the plot type
-            e.g. self.probe_levels
         init_attr: str
             The name of the attribute that stores the current plot key of the plot
             type e.g. self.probe_init
@@ -520,16 +566,18 @@ class AlignmentGUIController:
         # Update which plot was last selected
         setattr(self, init_attr, plot_key)
 
+        if self.show_feature:
+            self.show_feature = False
+            self.on_view_changed()
+            return
+
         if self.model.selected_config == 'both':
-            levels = self.get_normalised_levels(f"{plot_type}_plots", plot_key)
-            setattr(self, level_attr, levels)
-            results = self._plot_panels(plot_key, plot_type, plot_func, level_attr,
-                                        data_only, **kwargs)
+            results = self._plot_panels(plot_key, plot_type, plot_func, data_only,
+                                        **kwargs)
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
-            setattr(self, level_attr, Bunch.fromkeys(self.all_shanks, None))
-            self._plot_panels(plot_key, plot_type, plot_func, level_attr, data_only, **kwargs)
+            self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
 
         # Optional plugin event
         if plugin_event:
@@ -542,7 +590,6 @@ class AlignmentGUIController:
             plot_key: str,
             plot_type: str,
             plot_func: str,
-            level_attr: str,
             data_only: bool = True,
             **kwargs
     ) -> Bunch:
@@ -555,8 +602,7 @@ class AlignmentGUIController:
             A bunch containing the cbar object as well as the shank and config it belongs to
         """
         plot_func = getattr(items, plot_func)
-        levels = getattr(self, level_attr)[kwargs.get('shank')]
-        cbar = plot_func(plot_key, levels=levels)
+        cbar = plot_func(plot_key)
 
         if plot_type == 'scatter':
             self.connect_cluster_plugin(items)
@@ -575,9 +621,8 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='scatter', plot_func='plot_scatter',
-                         level_attr='scatter_levels', init_attr='img_init',
-                         dual_cb_name='fig_dual_img_cb', plugin_event='plot_scatter_panels',
-                         data_only=data_only, **kwargs)
+                         init_attr='img_init', dual_cb_name='fig_dual_img_cb',
+                         plugin_event='plot_scatter_panels', data_only=data_only, **kwargs)
 
     def plot_image_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -591,9 +636,8 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='image', plot_func='plot_image',
-                         level_attr='img_levels', init_attr='img_init',
-                         dual_cb_name='fig_dual_img_cb', plugin_event='plot_image_panels',
-                         data_only=data_only, **kwargs)
+                         init_attr='img_init', dual_cb_name='fig_dual_img_cb',
+                         plugin_event='plot_image_panels', data_only=data_only, **kwargs)
 
     def plot_probe_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -607,40 +651,8 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.plot_panels(plot_key, plot_type='probe', plot_func='plot_probe',
-                         level_attr='probe_levels', init_attr='probe_init',
-                         dual_cb_name='fig_dual_probe_cb', plugin_event='plot_probe_panels',
-                         data_only=data_only, **kwargs)
-
-    def get_normalised_levels(self, plot_type: str, plot_key: str) -> Bunch[str, Bunch | None]:
-        """
-        For a given plot_type and plot_key find the levels for the config stored.
-
-        Parameters
-        ----------
-        plot_type: str
-            The type of plot to update e.g. image, probe, scatter
-        plot_key
-            The key of the plot
-
-        Returns
-        -------
-        Bunch
-            The levels for each shank for the config in self.normalise_levels
-        """
-        if self.normalise_levels == 'both' or len(self.model.configs) == 1:
-            return Bunch.fromkeys(self.all_shanks, None)
-        levels = Bunch()
-        for shank in self.all_shanks:
-            # Try to get data from the primary config
-            data = self.model.get_plot(shank, plot_type, plot_key, self.normalise_levels)
-            # If no data found, fallback to the other config
-            if not data:
-                other_config = next(c for c in self.model.configs if c != self.normalise_levels)
-                data = self.model.get_plot(shank, plot_type, plot_key, other_config)
-
-            levels[shank] = data.levels if data else None
-
-        return levels
+                         init_attr='probe_init', dual_cb_name='fig_dual_probe_cb',
+                         plugin_event='plot_probe_panels', data_only=data_only, **kwargs)
 
     def plot_dual_colorbar(self, results: Bunch, fig: str) -> None:
         """
@@ -704,9 +716,12 @@ class AlignmentGUIController:
     def set_ephys_plots(self) -> None:
         """Set the ephys plots to the values stored in the init variables."""
         self.blockPlugins = True
-        self.view.trigger_menu_option('image', self.img_init)
-        self.view.trigger_menu_option('line', self.line_init)
-        self.view.trigger_menu_option('probe', self.probe_init)
+        if not self.show_feature:
+            self.view.trigger_menu_option('image', self.img_init)
+            self.view.trigger_menu_option('line', self.line_init)
+            self.view.trigger_menu_option('probe', self.probe_init)
+        else:
+            self.view.trigger_menu_option('feature', self.feature_init)
         self.blockPlugins = False
 
     # --------------------------------------------------------------------------------------------
@@ -816,8 +831,6 @@ class AlignmentGUIController:
             Whether this is the first time loading the probe or not
         """
         self.model.get_config(idx)
-        self.normalise_idx = 0
-        self.normalise_levels = self.model.selected_config
         self.setup(init=init)
 
         if not init:
@@ -834,6 +847,11 @@ class AlignmentGUIController:
         self.on_shank_selected(0)
         self.view.activate_selection_button()
 
+    def on_view_changed(self):
+        """Triggered when the view is changed between feature and ephys plots."""
+        self.setup(init=False)
+        self.execute_plugins('on_view_changed')
+
     # --------------------------------------------------------------------------------------------
     # Load data
     # --------------------------------------------------------------------------------------------
@@ -849,8 +867,9 @@ class AlignmentGUIController:
         # Get the list of shanks
         self.all_shanks = list(self.model.shanks.keys())
         # Load and prepare all data
-        self.model.load_data()
-        self.loaded = True
+        self.load_data()
+        # Load in all the plots
+        self.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
         # If csv add the config options
@@ -882,16 +901,16 @@ class AlignmentGUIController:
 
         # Reset the view
         self.view.reset_view()
-        if init:
-            # Create ShankController items
-            self.create_shanks()
 
-        self.reset_shanks(data_only=True)
+        if not init:
+            # Reset shank plot items
+            self.reset_shanks(data_only=True)
+
         self.init_shanks()
 
         # Set the probe lims for each shank and config
         self.set_probe_lims(data_only=True)
-        self.set_yaxis_lims(self.model.y_min, self.model.y_max, data_only=True)
+        self.set_yaxis_lims()
 
         # Initialise ephys plots
         self.set_ephys_plots()
@@ -971,7 +990,9 @@ class AlignmentGUIController:
             self.model.current_shank = shank
 
             if not self.offline:
-                display_qc_dialog(self, shank)
+                accepted = display_qc_dialog(self, shank)
+                if accepted == 0:
+                    break
 
             upload = self.view.upload_prompt()
             if upload:
@@ -1179,6 +1200,13 @@ class AlignmentGUIController:
                 if hover_item0 == items.view.fig_hist_ref:
                     self.hover_region = hover_item1
                     return
+            elif self.show_feature and isinstance(hover_item1, pg.ImageItem):
+                items = self.shank_items[name][config]
+                title = getattr(hover_item1, 'feature_name', None)
+                items.set_feature_title(title)
+            else:
+                items = self.shank_items[name][config]
+                items.set_feature_title(None)
 
     # --------------------------------------------------------------------------------------------
     # Display options
@@ -1242,24 +1270,6 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Plot display interactions
     # --------------------------------------------------------------------------------------------
-    def on_normalise_levels(self) -> None:
-        """
-        Set the config to which the ephys plots colour level range should be set to.
-
-        The different levels can be cycled through by pressing Shift+N.
-        """
-        # If we only have one config, we always show the same colour range
-        if len(self.model.possible_configs) == 1:
-            return
-        # Cycle through the config options and define the config that should be used to
-        # define the colour levels
-        self.normalise_idx += 1
-        idx = np.mod(self.normalise_idx, len(self.model.possible_configs))
-        self.normalise_levels = self.model.possible_configs[idx]
-        # Trigger the plotting of the image and probe plots to which these levels apply
-        self.view.trigger_menu_option('image', self.img_init)
-        self.view.trigger_menu_option('probe', self.probe_init)
-
     def on_reset_levels(self) -> None:
         """
         Reset the levels of all plots to the default range.
@@ -1281,8 +1291,12 @@ class AlignmentGUIController:
         """
         self.set_yaxis_range('fig_hist')
         self.set_yaxis_range('fig_hist_ref')
-        self.set_yaxis_range('fig_img')
-        self.set_xaxis_range('fig_img')
+        if self.show_feature:
+            self.set_yaxis_range('fig_feature')
+            self.set_xaxis_range('fig_feature')
+        else:
+            self.set_yaxis_range('fig_img')
+            self.set_xaxis_range('fig_img')
 
         if self.model.selected_config == 'both':
             self.reset_slice_axis(configs=[self.model.default_config])
@@ -1309,10 +1323,41 @@ class AlignmentGUIController:
         """See :meth:`ShankController.set_probe_lims` for details."""
         items.set_probe_lims()
 
+    def set_yaxis_lims(self) -> None:
+        """
+        Set the y-axis limits for all shanks based on stored values.
+
+        Parameters
+        ----------
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        results = self._get_yaxis_lims()
+        if self.model.selected_config == 'both':
+            ylims = Bunch.fromkeys(self.all_shanks, [])
+            for res in results:
+                ylims[res['shank']] += res['ylim']
+            lims = defaultdict(Bunch)
+            for shank in self.all_shanks:
+                for config in self.model.configs:
+                    lims[shank][config] = [np.nanmin(ylims[shank]), np.nanmax(ylims[shank])]
+        else:
+            lims = defaultdict(Bunch)
+            for res in results:
+                lims[res['shank']][res['config']] = res['ylim']
+
+        self._set_yaxis_lims(lims)
+
     @shank_loop
-    def set_yaxis_lims(self, items: ShankController, *args, data_only=True, **kwargs) -> None:
+    def _set_yaxis_lims(self, items: ShankController, lims, data_only=True, **kwargs) -> None:
         """See :meth:`ShankController.set_yaxis_lims` for details."""
-        items.set_yaxis_lims(*args)
+        ylims = lims[kwargs.get('shank')][kwargs.get('config')]
+        items.set_yaxis_lims(*ylims)
+
+    @shank_loop
+    def _get_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> Bunch:
+        """See :meth:`ShankController.get_yaxis_lims` for details."""
+        return Bunch(shank=kwargs.get('shank'), config=kwargs.get('config'), ylim=items.get_yaxis_lims())
 
     # --------------------------------------------------------------------------------------------
     # Grid / Tab display interactions

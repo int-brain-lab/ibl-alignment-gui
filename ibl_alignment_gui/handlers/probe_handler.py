@@ -21,6 +21,7 @@ from ibl_alignment_gui.loaders.data_loader import (
     CollectionData,
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderOne,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
 )
@@ -109,18 +110,16 @@ class ProbeHandler(ABC):
             Previous alignments for the selected shank.
         """
         # Load the previous alignment from the default configuration
-        (self.get_selected_shank()[self.default_config].loaders['align']
-         .load_previous_alignments())
+        self.get_selected_shank()[self.default_config].loaders['align'].load_previous_alignments()
         # Set the previous alignments from the non default configuration to the default
         # one (if it exists)
         if self.non_default_config is not None:
             self.get_selected_shank()[self.non_default_config].loaders['align'].alignments = (
-                self.get_selected_shank()[self.default_config].loaders['align'].alignments(
-                    self.get_selected_shank()[
-                        self.non_default_config].loaders['align'].get_previous_alignments()))
+                self.get_selected_shank()[self.default_config].loaders['align'].alignments)
 
-        return (self.get_selected_shank()[self.default_config].loaders['align']
-                .get_previous_alignments())
+            self.get_selected_shank()[self.non_default_config].loaders['align'].get_previous_alignments()
+
+        return self.get_selected_shank()[self.default_config].loaders['align'].get_previous_alignments()
 
     def get_previous_alignments(self) -> dict:
         """
@@ -205,47 +204,6 @@ class ProbeHandler(ABC):
             The total number of alignments stored in the circular buffer
         """
         return self.get_selected_shank()[self.default_config].align_handle.total_idx
-
-    @property
-    def y_min(self) -> float:
-        """
-        Minimum y channel value for the selected shank.
-
-        If config is 'both' returns the minimum across both configurations.
-
-        Returns
-        -------
-        float:
-            The minimum channel value
-        """
-        if self.selected_config == 'both':
-            y_min = [0]
-            for config in self.configs:
-                y_min.append(self.get_selected_shank()[config].loaders['plots'].chn_min)
-            return np.nanmin(y_min)
-        else:
-            return np.min(
-                [0, self.get_selected_shank()[self.selected_config].loaders['plots'].chn_min])
-
-    @property
-    def y_max(self) -> float:
-        """
-        Maximum y channel value for the selected shank.
-
-        If config is 'both' returns the maximum across both configurations.
-
-        Returns
-        -------
-        float:
-            The maximum channel value
-        """
-        if self.selected_config == 'both':
-            y_max = []
-            for config in self.configs:
-                y_max.append(self.get_selected_shank()[config].loaders['plots'].chn_max)
-            return np.nanmax(y_max)
-        else:
-            return self.get_selected_shank()[self.selected_config].loaders['plots'].chn_max
 
     def get_plot(self, shank: str, plot: str, key: str, config: str | None = None) -> Any:
         """
@@ -341,6 +299,18 @@ class ProbeHandler(ABC):
         return self.get_plot_keys('probe_plots')
 
     @property
+    def feature_keys(self) -> list[str]:
+        """
+        Find the list of available feature plot keys across all shanks and configurations.
+
+        Returns
+        -------
+        tuple:
+            A tuple of unique probe plot keys.
+        """
+        return self.get_plot_keys('feature_plots')
+
+    @property
     def slice_keys(self) -> list[str]:
         """
         Find the list of available slice plot keys across all shanks and configurations.
@@ -362,6 +332,12 @@ class ProbeHandler(ABC):
             for config in self.configs:
                 self.shanks[probe][config].loaders['hist'] = slice_loader
                 self.shanks[probe][config].load_data()
+
+    def load_plots(self):
+        """Load plots for all configs and shanks."""
+        for probe in self.shanks:
+            for config in self.configs:
+                self.shanks[probe][config].load_plots()
 
     def upload_data(self) -> str:
         """
@@ -535,6 +511,7 @@ class ProbeHandlerONE(ProbeHandler):
             A string with the session info and probe name
         """
         return (ins['session_info']['start_time'][:10] + ' ' +
+                f"{ins['session_info']['number']:03}" + ' ' +
                 self.normalize_shank_label(ins['name']))
 
     def set_info(self, idx):
@@ -550,6 +527,7 @@ class ProbeHandlerONE(ProbeHandler):
         self.selected_idx = idx
         self.subj = self.shank_labels[idx]['session_info']['subject']
         self.lab = self.shank_labels[idx]['session_info']['lab']
+        self.pid = self.shank_labels[idx]['id']
 
     def download_histology(self) -> NrrdSliceLoader:
         """Download and load in the histology slice data."""
@@ -568,6 +546,7 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
+            loaders['features'] = FeatureLoaderOne(ins, self.one)
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
@@ -711,6 +690,7 @@ class ProbeHandlerCSV(ProbeHandler):
                     self.brain_atlas, user=user)
                 loaders['ephys'] = SpikeGLXLoaderLocal(local_path, collections.meta_collection)
                 loaders['plots'] = PlotLoader()
+                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
                 # If we don't have the data locally we download it
@@ -726,6 +706,7 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
+                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 

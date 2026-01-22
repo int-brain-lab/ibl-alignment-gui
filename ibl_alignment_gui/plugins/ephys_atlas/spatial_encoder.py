@@ -42,13 +42,13 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
     model_name = '2024_W43_SE_model'
     one = controller.model.one
     local_path = one.cache_dir.joinpath('ephys_atlas_features')
-    _ = ephysatlas.data.download_model(local_path=local_path.joinpath(model_name), model_name=model_name, one=one)
+    local_path = ephysatlas.regionclassifier.download_model(local_path=local_path, model_name=model_name, one=one)
 
     optimization_features = np.arange(len(FEATURE_LIST))
 
     # Context manager + config
     cfg = AtlasPCAConfig()
-    ctx_manager = ContextAtlasManager(cfg, model_name, regenerate_context=False, output_dir=local_path)
+    ctx_manager = ContextAtlasManager(cfg, regenerate_context=False, output_dir=local_path)
 
     # Load ephys & probe positions
     pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData(VINTAGE='2025_W52')
@@ -77,7 +77,7 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
         d_model=128, nhead=8, depth=2, neighbor_self_attn=False,
         heteroscedastic=heteroscedastic, drop=0.15
     ).to(device)
-    model.load_state_dict(torch.load(local_path.joinpath(model_name, 'SE_model.pth'), map_location=device))
+    model.load_state_dict(torch.load(local_path.joinpath('SE_model.pth'), map_location=device))
     model.eval()
     torch.set_grad_enabled(False)
 
@@ -297,7 +297,9 @@ def predict(controller, items):
 
     # -------------- prediction pipeline (fast) --------------
     print("Ephys feature computation")
-    xyz_samples = items.model.align_handle.xyz_samples
+    # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
+    #  need to update the model and change that
+    xyz_samples = items.model.align_handle.xyz_samples.copy()[::-1, :]
     pid = controller.model.shank_labels[0]['id']
     p_ind = np.where(pid == engine.pid_str)[0]
     if len(p_ind) == 0:
@@ -366,24 +368,12 @@ def predict(controller, items):
     j_map_all_i = np.clip(np.round(j_map_all).astype(int), 0, predicted.shape[0] - 1)
     est_xyz = xyz_samples[j_map_all_i]
 
-    # TODO this didn't seem to work in that the prediction was always the same as the original regardless of session.
-    # I think because the depths are just being assigned to their original positions in the feature prediction
-    # rather than being reallocated to the position of the recorded feature.
-    # We need est_xyz[0] to be at depth 0 along the probe
-    # region_ids_before =  xyz_to_region_ids(xyz_samples[:j_start], brain_atlas)
-    # region_ids_probe = xyz_to_region_ids(est_xyz, brain_atlas)
-    # region_ids_after =  xyz_to_region_ids(xyz_samples[j_end+1:], brain_atlas)
-    #
-    # region_ids = np.concatenate((region_ids_before, region_ids_probe, region_ids_after))
-    #
-    # depth_samples_before = items.model.align_handle.ephysalign.sampling_trk[:j_start]
-    # depth_samples_probe = items.model.align_handle.ephysalign.sampling_trk[j_map_all_i]
-    # depth_samples_after = items.model.align_handle.ephysalign.sampling_trk[j_end+1:]
-    #
-    # depth_samples = np.concatenate((depth_samples_before, depth_samples_probe, depth_samples_after))
+    # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
+    #  need to update the model and change that
+    trk = items.model.align_handle.ephysalign.sampling_trk.copy()[::-1]
+    depth_samples = (trk - trk[j_end])[::-1]
 
+    # TODO: Flipping the probe back for consistency
+    region_ids = xyz_to_region_ids(xyz_samples, controller.model.brain_atlas)[::-1]
 
-    region_ids = controller.model.brain_atlas.get_labels(est_xyz, mode='clip')
-    depths = df['axial_um'].to_numpy() / 1e6  # in meters
-
-    return region_ids, depths
+    return region_ids, depth_samples

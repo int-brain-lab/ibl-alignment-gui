@@ -65,6 +65,7 @@ class ShankView:
 
         # Set some pens for plotting
         self.kpen_dot: QtGui.QPen = pg.mkPen(color='k', style=QtCore.Qt.DotLine, width=2)
+        self.kpen_dashed: QtGui.QPen = pg.mkPen(color='k', style=QtCore.Qt.DashLine, width=2)
         self.kpen_solid: QtGui.QPen = pg.mkPen(color='k', style=QtCore.Qt.SolidLine, width=2)
 
         # Probe geometry
@@ -100,7 +101,8 @@ class ShankView:
 
         # Plot items for line plot
         self.fig_line: pg.PlotItem | None = None
-        self.line_item: pg.PlotCurveItem | None = None
+        self.line_items: list[pg.PlotCurveItem | pg.ScatterPlotItem
+                              | pg.InfiniteLine] | None = None
 
         # Plot items for the probe plot
         self.fig_probe: pg.PlotItem | None = None
@@ -108,6 +110,12 @@ class ShankView:
         self.probe_items: list[pg.ImageItem] = []
         self.probe_cbar: ColorBar | None = None
         self.probe_bounds: list[pg.InfiniteLine] = []
+
+        # Plot items for the feature plot
+        self.fig_feature: pg.PlotItem | None = None
+        self.fig_feature_ax: pg.AxisItem | None = None
+        self.fig_feature_label: pg.PlotItem | None = None
+        self.feature_items: list[pg.ImageItem] = []
 
         # Plot items for the slice plot
         self.slice_lines: list[pg.PlotCurveItem] = []
@@ -258,7 +266,7 @@ class ShankView:
             self.fig_img.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
         self.probe_top_lines.append(
             self.fig_img.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
-        self.fig_data_ax = set_axis(self.fig_img, 'left', label='Distance from probe tip (uV)')
+        self.fig_data_ax = set_axis(self.fig_img, 'left', label='Distance from probe tip (um)')
         self.fig_img_cb = self._create_plot_cb_item(max_height=70)
 
         # 1D line plot
@@ -277,6 +285,17 @@ class ShankView:
             self.fig_probe.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
         self.fig_probe_cb = self._create_plot_cb_item(max_height=70)
         self.fig_probe.setYLink(self.fig_img)
+
+        # 2D feature plot
+        self.fig_feature = self._create_plot_item(mouse_enabled=(False, True), pen='w')
+        self.probe_tip_lines.append(
+            self.fig_feature.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
+        self.probe_top_lines.append(
+            self.fig_feature.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
+        self.fig_feature_ax = set_axis(self.fig_feature, 'left',
+                                       label='Distance from probe tip (um)')
+        self.fig_feature_label = self._create_plot_cb_item(max_height=70)
+        set_axis(self.fig_feature_label, 'left', pen='w', label=' ')
 
     def create_histology_plots(self) -> None:
         """Create the plots the histology panels."""
@@ -385,7 +404,7 @@ class ShankView:
         axis = fig.getAxis(ax)
         axis.setTicks([data.axis_label])
         axis.setZValue(10)
-        set_axis(fig, 'bottom', pen='w', label='blank')
+        set_axis(fig, 'bottom', pen='w', label=' ')
 
         # Plot regions and boundaries
         for colour, region in zip(data.colour, data.region, strict=False):
@@ -407,6 +426,31 @@ class ShankView:
         fig.addItem(pg.InfiniteLine(pos=self.probe_top, angle=0, pen=self.kpen_dot))
 
         self.set_yaxis_range(fig)
+
+    def plot_histology_cumulative(self, fig: pg.PlotItem, data: Bunch, ax: str = 'right') -> None:
+
+        self.clear_histology(fig)
+        axis = fig.getAxis(ax)
+        axis.setTicks([])
+        set_axis(fig, 'bottom', pen='w', label=' ')
+
+        # Insert a column of zeros at the start for cumulative plotting
+        values = np.c_[np.zeros(data.probability.shape[0]), data.probability]
+
+        for i, colour in enumerate(data.colours):
+            item = pg.FillBetweenItem(
+                pg.PlotCurveItem( values[:, i + 1], data.depths),
+                pg.PlotCurveItem(values[:, i], data.depths),
+                brush=pg.mkBrush(colour)
+            )
+            fig.addItem(item)
+
+        # Add probe limits as dotted lines
+        fig.addItem(pg.InfiniteLine(pos=self.probe_tip, angle=0, pen=self.kpen_dot))
+        fig.addItem(pg.InfiniteLine(pos=self.probe_top, angle=0, pen=self.kpen_dot))
+
+        self.set_yaxis_range(fig)
+        self.set_xaxis_range(fig, [0, 1])
 
     def clear_scale_factor(self):
         """Clear items from the scale factor plot."""
@@ -447,7 +491,7 @@ class ShankView:
         self.fig_scale.addItem(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen=colours[-1]))
 
         self.set_yaxis_range(self.fig_scale)
-        set_axis(self.fig_scale, 'bottom', pen='w', label='blank')
+        set_axis(self.fig_scale, 'bottom', pen='w', label=' ')
 
         return cbar
 
@@ -608,7 +652,7 @@ class ShankView:
 
     def clear_line(self) -> None:
         """Clear items from the scatter plot."""
-        self.line_item = self.remove_items(self.fig_line, self.line_item)
+        self.line_items = self.remove_items(self.fig_line, self.line_items)
 
     def plot_line(self, data: LineData | None) -> None:
         """
@@ -624,8 +668,28 @@ class ShankView:
         if data is None:
             return self.plot_empty(self.fig_line)
 
-        self.line_item = pg.PlotCurveItem(x=data.x, y=data.y, pen=self.kpen_solid)
-        self.fig_line.addItem(self.line_item)
+        self.line_items = []
+        line = pg.PlotCurveItem(x=data.x, y=data.y, pen=self.kpen_solid)
+        self.fig_line.addItem(line)
+        self.line_items.append(line)
+
+        # Add vertical lines
+        if data.vlines is not None:
+            for vline in data.vlines:
+                x = [vline, vline]
+                y = [data.y[0], data.y[-1]]
+                line = pg.PlotCurveItem(x=x, y=y, pen=self.kpen_dashed)
+                self.fig_line.addItem(line)
+                self.line_items.append(line)
+
+        if data.mask is not None:
+            scat = pg.ScatterPlotItem(
+                x=data.x[data.mask],
+                y=data.y[data.mask],
+                symbol=data.mask_style,
+                pen=data.mask_colour)
+            self.fig_line.addItem(scat)
+            self.line_items.append(scat)
 
         set_axis(self.fig_line, 'bottom', pen='k')
         set_axis(self.fig_line, 'bottom', label=data.xaxis)
@@ -672,17 +736,16 @@ class ShankView:
 
         # Create image plots per shank and add to figure
         self.probe_items = []
-        for img, scale, offset in zip(data.img, data.scale, data.offset, strict=False):
-            image = pg.ImageItem()
-            image.setImage(img)
-            image.setTransform(self.make_transform(scale, offset))
-            image.setLookupTable(self.plot_cbar.get_colour_map())
-            image.setLevels((levels[0], levels[1]))
-            self.fig_probe.addItem(image)
-            self.probe_items.append(image)
+        image = pg.ImageItem()
+        image.setImage(data.img)
+        image.setTransform(self.make_transform(data.scale, data.offset))
+        image.setLookupTable(self.plot_cbar.get_colour_map())
+        image.setLevels((levels[0], levels[1]))
+        self.fig_probe.addItem(image)
+        self.probe_items.append(image)
 
         # Add in a fake label so that the appearance is the same as other plots
-        set_axis(self.fig_probe, 'bottom', pen='w', label='blank')
+        set_axis(self.fig_probe, 'bottom', pen='w', label=' ')
 
         self.set_xaxis_range(self.fig_probe, data.xrange)
         self.set_yaxis_range(self.fig_probe)
@@ -750,6 +813,47 @@ class ShankView:
 
         return self.img_cbar
 
+    def clear_feature(self) -> None:
+        """Clear items from the probe plot."""
+        self.feature_items = self.remove_items(self.fig_feature, self.feature_items)
+
+    def plot_feature(self, data: Bunch[str, ProbeData]) -> None:
+        """
+        Plot a 2D feature plot of electrophysiology data.
+
+        This is made up of many individual probe plots stacked horizontally.
+
+        Parameters
+        ----------
+        data : Bunch[str, ProbeData]
+            A Bunch object containing data to plot
+        """
+        self.clear_feature()
+
+        if data is None:
+            return self.plot_empty(self.fig_feature, img=True)
+
+        cbar = ColorBar('viridis')
+        features = []
+        for feature, feature_data in data.items():
+            image = pg.ImageItem()
+            image.feature_name = feature
+            image.setImage(feature_data.img)
+            image.setTransform(self.make_transform(feature_data.scale, feature_data.offset))
+            image.setLookupTable(cbar.get_colour_map())
+            image.setLevels(feature_data.levels)
+            self.fig_feature.addItem(image)
+            self.feature_items.append(image)
+            features.append((feature_data.offset[0], feature))
+
+        set_axis(self.fig_feature, 'bottom', pen='w', label=' ')
+        self.set_yaxis_range(self.fig_feature)
+        self.set_xaxis_range(self.fig_feature, [0, feature_data.offset[0]])
+
+        self.ephys_plot = image
+        self.y_scale = feature_data.scale[1]
+        self.xrange = [0, feature_data.offset[0]]
+
     # --------------------------------------------------------------------------------------------
     # Plot utils
     # --------------------------------------------------------------------------------------------
@@ -773,7 +877,7 @@ class ShankView:
         """
         self.set_xaxis_range(fig, [0, 1])
         self.set_yaxis_range(fig)
-        set_axis(fig, 'bottom', pen='w', label='blank')
+        set_axis(fig, 'bottom', pen='w', label=' ')
         if fig_cb:
             set_axis(fig_cb, 'top', pen='w')
         if img:
@@ -929,6 +1033,20 @@ class ShankView:
         """
         self.fig_scale_ax.setLabel('Scale = ' + str(np.around(value, 2)))
 
+    def set_feature_title(self, feature: str | None) -> None:
+        """
+        Update the axis of the feature label to display the current hovered feature.
+
+        Parameters
+        ----------
+        feature : str
+            The feature name to display in the axis label.
+        """
+        if feature is not None:
+            set_axis(self.fig_feature_label, 'top', pen='k', label=feature, ticks=False)
+        else:
+            set_axis(self.fig_feature_label, 'top', pen='w', label=' ', ticks=False)
+
     def match_linear_region(self, hover_item: pg.LinearRegionItem) -> int | None:
         """
         Find the index of a hovered linear region within the list of scale regions.
@@ -992,7 +1110,7 @@ class ShankView:
         if idx[0].size == 0:
             return None, None
         line_idx = idx[0][0]
-        fig_idx = np.setdiff1d(np.arange(0, 3), idx[1][0])  # indices of two other plots
+        fig_idx = np.setdiff1d(np.arange(0, 4), idx[1][0])  # indices of two other plots
         return line_idx, fig_idx
 
     def match_track_line(self, track_line: pg.InfiniteLine) -> int | None:
@@ -1054,7 +1172,7 @@ class ShankView:
 
         # Reference lines on image, line and probe figures (feature)
         line_features = []
-        for fig in [self.fig_img, self.fig_line, self.fig_probe]:
+        for fig in [self.fig_img, self.fig_line, self.fig_probe, self.fig_feature]:
             line_feature = pg.InfiniteLine(pos=pos, angle=0, pen=pen, movable=True)
             line_feature.setZValue(100)
             fig.addItem(line_feature)
@@ -1112,6 +1230,7 @@ class ShankView:
         self.fig_img.removeItem(self.lines_features[line_idx][0])
         self.fig_line.removeItem(self.lines_features[line_idx][1])
         self.fig_probe.removeItem(self.lines_features[line_idx][2])
+        self.fig_feature.removeItem(self.lines_features[line_idx][3])
         self.fig_hist.removeItem(self.lines_tracks[line_idx])
 
     def delete_reference_line_and_point(self, line_idx: int) -> None:
@@ -1149,6 +1268,7 @@ class ShankView:
         """
         self.lines_features[line_idx][fig_idx[0]].setPos(feature_line.value())
         self.lines_features[line_idx][fig_idx[1]].setPos(feature_line.value())
+        self.lines_features[line_idx][fig_idx[2]].setPos(feature_line.value())
         self.points[line_idx].setData(x=[self.lines_features[line_idx][0].pos().y()],
                                       y=[self.lines_tracks[line_idx].pos().y()])
 
@@ -1189,6 +1309,7 @@ class ShankView:
             self.fig_img.removeItem(line_feature[0])
             self.fig_line.removeItem(line_feature[1])
             self.fig_probe.removeItem(line_feature[2])
+            self.fig_feature.removeItem(line_feature[3])
             self.fig_hist.removeItem(line_track)
 
     def add_reference_lines_to_display(self) -> None:
@@ -1197,4 +1318,5 @@ class ShankView:
             self.fig_img.addItem(line_feature[0])
             self.fig_line.addItem(line_feature[1])
             self.fig_probe.addItem(line_feature[2])
+            self.fig_feature.addItem(line_feature[3])
             self.fig_hist.addItem(line_track)

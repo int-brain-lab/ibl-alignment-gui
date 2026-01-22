@@ -54,6 +54,7 @@ def callback(controller: 'AlignmentGUIController') -> None:
     controller: AlignmentGUIController
         The main application controller.
     """
+    controller.plugins[PLUGIN_NAME]['activated'] = True
     controller.plugins[PLUGIN_NAME]['loader'].setup()
 
 
@@ -244,15 +245,14 @@ class EphysFeatureView(PopupWindow):
 
         color_bar = ColorBar(self.cmap, plot_item=fig_cbar)
         color_bar.set_levels(levels)
-        for img, scale, move in zip(data['img'], data['scale'], data['offset'], strict=False):
-            image = pg.ImageItem()
-            image.setImage(img)
-            transform = [scale[0], 0., 0., 0., scale[1], 0., move[0],
-                         move[1] - offset, 1.]
-            image.setTransform(QtGui.QTransform(*transform))
-            image.setLookupTable(color_bar.get_colour_map())
-            image.setLevels((levels[0], levels[1]))
-            fig_probe.addItem(image)
+        image = pg.ImageItem()
+        image.setImage(data['img'])
+        transform = [data['scale'][0], 0., 0., 0., data['scale'][1], 0., data['offset'][0],
+                     data['offset'][1] - offset, 1.]
+        image.setTransform(QtGui.QTransform(*transform))
+        image.setLookupTable(color_bar.get_colour_map())
+        image.setLevels((levels[0], levels[1]))
+        fig_probe.addItem(image)
 
         fig_probe.setXRange(min=data['xrange'][0], max=data['xrange'][1], padding=0)
         if self.aligned:
@@ -397,7 +397,8 @@ class EphysFeatures:
 
     def setup(self) -> None:
         """Set up the ephys features viewer and connect signals."""
-        self.view = EphysFeatureView(self.title, self.controller, step=self.step)
+        self.view = EphysFeatureView._get_or_create(self.title, self.controller, step=self.step)
+        self.view.closed.connect(self.on_close)
 
         self.view.region_combobox.activated.connect(self.on_region_chosen)
         self.view.plot_combobox.activated.connect(self.on_plot_chosen)
@@ -437,6 +438,14 @@ class EphysFeatures:
         # Populate colormap combobox
         SelectionWidget.populate_combobox(CMAPS, self.view.cmap_list, self.view.cmap_combobox)
         self.view.cmap = self.cmap
+
+    def on_close(self) -> None:
+        """
+        Triggered when the plugin window is closed.
+
+        Deactivate the plugin and callbacks.
+        """
+        self.controller.plugins[PLUGIN_NAME]['activated'] = False
 
     @property
     def normalised(self) -> bool:
@@ -512,7 +521,8 @@ class EphysFeatures:
 
         missing_feature_pids = [p for p in pids if p not in self.feature_data[self.plot_name]]
         if len(missing_feature_pids) > 0:
-            self.feature_data[self.plot_name].update(self.prepare_feature_data(missing_feature_pids))
+            self.feature_data[self.plot_name].update(
+                self.prepare_feature_data(missing_feature_pids))
 
         missing_region_pids = [p for p in pids if p not in self.region_data]
         if len(missing_region_pids) > 0:
@@ -550,7 +560,7 @@ class EphysFeatures:
             sites = chn_geom._get_sites_for_shank(0)
 
             bnk_width = 10
-            probe_img, probe_scale, probe_offset, _ = arrange_channels_into_banks(sites, data)
+            probe_img, probe_scale, probe_offset = arrange_channels_into_banks(sites, data)
             probe_levels = np.nanquantile(data, [0.1, 0.9])
 
             data_dict = {

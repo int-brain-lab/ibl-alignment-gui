@@ -23,7 +23,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.qc_dialog.accepted.connect(lambda: callback(controller))
 
 
-def display(controller: 'AlignmentGUIController', shank: str) -> None:
+def display(controller: 'AlignmentGUIController', shank: str) -> int:
     """
     Show the QC dialog.
 
@@ -33,9 +33,14 @@ def display(controller: 'AlignmentGUIController', shank: str) -> None:
         The main application controller.
     shank: str
         The shank identifier for which the QC dialog is displayed.
+
+    Returns
+    -------
+        int
+            The result of the dialog execution (Accepted or Rejected).
     """
     controller.qc_dialog.setWindowTitle(f"QC assessment {shank}")
-    controller.qc_dialog.exec_()
+    return controller.qc_dialog.exec_()
 
 
 def callback(controller: 'AlignmentGUIController'):

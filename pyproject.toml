@@ -26,6 +26,8 @@ license = {text = "MIT"}
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
+[project.scripts]
+alignment-gui = "ibl_alignment_gui.app.main:launch_app"
 
 [tool.pdm]
 distribution = true

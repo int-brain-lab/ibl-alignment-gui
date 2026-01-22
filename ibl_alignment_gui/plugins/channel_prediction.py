@@ -190,14 +190,23 @@ def compute_ephys_based_predictions(
     pid_str = engine.pid_str
     ephys = engine.ephys
 
+    brain_atlas = AllenAtlas()
+
     # -------------- prediction pipeline (fast) --------------
     print("Ephys feature computation")
     t0 = time.time()
-    xyz_samples = items.model.align_handle.xyz_samples
+    # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
+    #  need to update the model and change that
+    xyz_samples = items.model.align_handle.xyz_samples[::-1, :]
     pid = controller.model.shank_labels[0]['id']
     p_ind = np.where(pid == pid_str)[0]
 
-    assert len(p_ind) > 0, "Probe has no precomputed ephys features."
+    if len(p_ind) <= 0:
+        print("Probe has no precomputed ephys features.")
+        region_ids = xyz_to_region_ids(xyz_samples, brain_atlas)
+        depth_samples = items.model.align_handle.ephysalign.sampling_trk
+        regions = controller.model.brain_atlas.regions.get(region_ids)
+        return get_region_boundaries(regions, depth_samples)
 
     recorded_ephys_probe = ephys[p_ind][0]
 
@@ -258,18 +267,13 @@ def compute_ephys_based_predictions(
     j_map_all_i = np.clip(np.round(j_map_all).astype(int), 0, B_std.shape[0] - 1)
     est_xyz = xyz_samples[j_map_all_i]
 
-    brain_atlas = AllenAtlas()
-    region_ids_before =  xyz_to_region_ids(xyz_samples[:j_start], brain_atlas)
-    region_ids_probe = xyz_to_region_ids(est_xyz, brain_atlas)
-    region_ids_after =  xyz_to_region_ids(xyz_samples[j_end+1:], brain_atlas)
+    # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
+    #  need to update the model and change that
+    trk = items.model.align_handle.ephysalign.sampling_trk.copy()[::-1]
+    depth_samples = (trk - trk[j_end])[::-1]
 
-    region_ids = np.concatenate((region_ids_before, region_ids_probe, region_ids_after))
-
-    depth_samples_before = items.model.align_handle.ephysalign.sampling_trk[:j_start]
-    depth_samples_probe = items.model.align_handle.ephysalign.sampling_trk[j_map_all_i]
-    depth_samples_after = items.model.align_handle.ephysalign.sampling_trk[j_end+1:]
-
-    depth_samples = np.concatenate((depth_samples_before, depth_samples_probe, depth_samples_after))
+    # TODO: Flipping the probe back for consistency
+    region_ids = xyz_to_region_ids(xyz_samples, brain_atlas)[::-1]
 
     print(f"Time: {time.time() - t0:.2f}s")
 

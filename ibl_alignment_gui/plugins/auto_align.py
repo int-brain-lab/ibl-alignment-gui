@@ -16,6 +16,7 @@ from ephysatlas.data import download_tables, read_features_from_disk
 
 from iblatlas.atlas import AllenAtlas
 from one.api import ONE
+from ephysatlas.regionclassifier import download_model
 
 from pathlib import Path
 from typing import Tuple, Optional, Dict
@@ -57,12 +58,15 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
     t0 = time.time()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    auto_align_path = 'ibl_alignment_gui/plugins/auto_align_files/'
     optimization_features = np.arange(len(FEATURE_LIST))
+
+    # Download model directory from S3 server
+    one = ONE()
+    model_path = download_model(local_path=Path("prediction_model"), model_name="2024_W43_SE_model", one=one)
 
     # Context manager + config
     cfg = AtlasPCAConfig()
-    ctx_manager = ContextAtlasManager(cfg, auto_align_path, regenerate_context=False)
+    ctx_manager = ContextAtlasManager(cfg, model_path, regenerate_context=False)
 
     # Load ephys & probe positions
     pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData()
@@ -91,7 +95,8 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
         d_model=128, nhead=8, depth=2, neighbor_self_attn=False,
         heteroscedastic=heteroscedastic, drop=0.15
     ).to(device)
-    model.load_state_dict(torch.load(os.path.join(auto_align_path, 'SE_model.pth'), map_location=device))
+
+    model.load_state_dict(torch.load(os.path.join(model_path, "SE_model.pth"), map_location=device))
     model.eval()
     torch.set_grad_enabled(False)
 
@@ -920,7 +925,7 @@ def predict_features_at_xyz_v2(
     # Build RAW context at query xyz
     pack = ctx_manager.sample_context_numpy_m(xyz_m_cand, mode='clip')
     ctx_raw = torch.from_numpy(np.concatenate([pack['cell_pc'], pack['gene_pc']], axis=1)).float()
-    xyz_t = torch.from_numpy(xyz_m_cand).float()
+    xyz_t = torch.from_numpy(xyz_m_cand.copy()).float()
 
     C = xyz_t.shape[0]
 

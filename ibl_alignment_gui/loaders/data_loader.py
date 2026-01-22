@@ -419,7 +419,7 @@ class DataLoaderOne(DataLoader):
         self.probe_label: str = insertion['name']
         self.spike_collection: str | None = spike_collection
         self.probe_path: Path = self.get_spike_sorting_path()
-        self.probe_collection: str = str(self.probe_path.relative_to(self.session_path))
+        self.probe_collection: str = str(self.probe_path.relative_to(self.session_path).as_posix())
         self.filter: bool = True
 
         super().__init__()

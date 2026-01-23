@@ -419,7 +419,7 @@ class DataLoaderOne(DataLoader):
         self.probe_label: str = insertion['name']
         self.spike_collection: str | None = spike_collection
         self.probe_path: Path = self.get_spike_sorting_path()
-        self.probe_collection: str = str(self.probe_path.relative_to(self.session_path).as_posix())
+        self.probe_collection: str = str(self.probe_path.relative_to(self.session_path))
         self.filter: bool = True
 
         super().__init__()
@@ -906,14 +906,25 @@ class FeatureLoaderOne(FeatureLoader):
         feature_data: Bunch
             A Bunch containing a dataFrame containing ephys atlas features for the probe.
         """
-        fname = 'df_all_cols_merged.pqt'
-        table_path = self.one.cache_dir.joinpath('ephys_atlas_features', fname)
+        import ephysatlas.data
+
+        table_path = self.one.cache_dir.joinpath('ephys_atlas_features')
         table_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_label = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        features_path = ephysatlas.data.download_tables(table_path, label=latest_label,
+                                                        project='ea_active', one=self.one)
+        data = ephysatlas.data.read_features_from_disk(features_path)
+        data = data.reset_index()
 
-        if not table_path.exists():
-            self.download_features(fname, save_path=table_path)
+        # fname = 'df_all_cols_merged.pqt'
+        # table_path = self.one.cache_dir.joinpath('ephys_atlas_features', fname)
+        # table_path.parent.mkdir(parents=True, exist_ok=True)
+        #
+        # if not table_path.exists():
+        #     self.download_features(fname, save_path=table_path)
+        #
+        # data = pd.read_parquet(table_path).reset_index()
 
-        data = pd.read_parquet(table_path).reset_index()
         data = data[data['pid'] == self.pid]
 
         feature_data = Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)

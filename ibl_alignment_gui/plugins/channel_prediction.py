@@ -2,13 +2,14 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
-from pathlib import Path
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
-from iblutil.numerical import ismember
+from iblatlas.atlas import AllenAtlas
+
+import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
+import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
@@ -18,36 +19,24 @@ PLUGIN_NAME = 'Channel Prediction'
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
-    """
-    Set up the Channel Prediction plugin.
-
-    Adds menu options to select different prediction models.
-
-    Parameters
-    ----------
-    controller: AlignmentGUIController
-        The main application controller.
-    """
     controller.plugins[PLUGIN_NAME] = Bunch()
+    controller.plugins[PLUGIN_NAME]['activated'] = True
+
     channel_prediction = ChannelPrediction(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
 
-    # Add menu bar for selecting what to show
-    controller.plugins[PLUGIN_NAME]['activated'] = False
-
-    # Add a submenu to the main menu
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
     action_group = QtWidgets.QActionGroup(plugin_menu)
     action_group.setExclusive(True)
 
-    # Add the different prediction model options
-
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
-        'Cumulative': compute_cumulative_distribution
+        'Spatial Encoder': compute_spatial_encoder_predictions,
+        'Inference Model': compute_inference_predictions,
+        'Inference Cumulative': compute_cumulative_predictions
     }
 
     for model, model_func in predictions_models.items():
@@ -58,6 +47,19 @@ def setup(controller: 'AlignmentGUIController') -> None:
                                  channel_prediction.plot_regions(_, m, func))
         action_group.addAction(action)
         plugin_menu.addAction(action)
+
+    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = lambda: callback(action_group)
+
+
+def callback(group) -> None:
+    """Reset action group to 'Original' selection."""
+    group.setEnabled(False)
+    for action in group.actions():
+        if action.text() == 'Original':
+            action.setChecked(True)
+        else:
+            action.setChecked(False)
+    group.setEnabled(True)
 
 
 class ChannelPrediction:
@@ -72,6 +74,7 @@ class ChannelPrediction:
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
         self.controller = controller
+        self.ba: AllenAtlas = self.controller.model.brain_atlas
 
     def plot_regions(self, _, model: str, func: Callable) -> None:
         """
@@ -151,91 +154,61 @@ def compute_cosmos_predictions(
     return get_region_boundaries(regions, depth_samples)
 
 
-def compute_random_predictions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+def compute_spatial_encoder_predictions(
+    controller: 'AlignmentGUIController',
+    items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
     """
-    Example prediction model that uses the spikes data to assign random brain regions.
+    Prediction model using the spatial encoder.
 
     Returns
     -------
     Bunch
-        A bunch containing the predicted brain regions.
+        The predicted brain regions along the probe.
     """
-    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
-    xyz_samples = items.model.align_handle.xyz_samples
-    # depths of these coordinates along the track
-    depth_samples = items.model.align_handle.ephysalign.sampling_trk
 
-    # Spikes and other data can be accessed in this way if needed
-    spikes = items.model.raw_data['spikes']
-
-    def random_chunked_array(n, n_vals=20, seed=None):
-        rng = np.random.default_rng(seed)
-        cuts = np.sort(rng.choice(np.arange(1, n), size=n_vals - 1, replace=False))
-        chunks = np.diff(np.r_[0, cuts, n])
-        vals = rng.choice(np.arange(1001), size=n_vals, replace=False)
-        chosen = rng.choice(vals, size=len(chunks), replace=True)
-        return np.repeat(chosen, chunks)
-
-    random = random_chunked_array(len(depth_samples), n_vals=20, seed=42)
-    region_ids = controller.model.brain_atlas.regions.id[random]
+    region_ids, depths = spatial.predict(controller, items)
     regions = controller.model.brain_atlas.regions.get(region_ids)
-    return get_region_boundaries(regions, depth_samples)
+
+    return get_region_boundaries(regions, depths)
 
 
-def compute_cumulative_distribution(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+def compute_inference_predictions(
+    controller: 'AlignmentGUIController',
+    items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
-
     """
-    Example prediction model that plots cumulative prediction of brain regions.
+    Prediction model using the inference model.
 
     Returns
     -------
     Bunch
-        A bunch containing the predicted brain regions.
+        The predicted brain regions along the probe.
     """
 
-    if Path('/Users/admin/Downloads/ea_features.pqt').exists():
-        df = pd.read_parquet('/Users/admin/Downloads/ea_features.pqt')
-        int_cols = [c for c in df.columns if c.isdigit()]
-        probas = df[int_cols].to_numpy()
-        cprobas = probas.cumsum(axis=1)
-        depth_samples = df['axial_um'].values
+    region_ids, depths = inference.predict(controller, items)
+    regions = controller.model.brain_atlas.regions.get(region_ids)
 
-        region_ids = np.array([int(c) for c in int_cols])
-        _, region_idxs = ismember(region_ids, controller.model.brain_atlas.regions.id)
-        colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
-    else:
-        # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
-        xyz_samples = items.model.align_handle.xyz_samples
-        # depths of these coordinates along the track
-        depth_samples = items.model.align_handle.ephysalign.sampling_trk
+    return get_region_boundaries(regions, depths / 1e6)
 
-        region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping='Beryl')
-        region_ids = np.unique(region_ids)
 
-        _, region_idxs = ismember(region_ids, controller.model.brain_atlas.regions.id)
+def compute_cumulative_predictions(
+        controller: 'AlignmentGUIController',
+        items: 'ShankController'
+) -> Bunch[str, np.ndarray]:
+    """
+    Cumulative prediction model using the inference model.
+    Returns
+    -------
+    Bunch
+        A bunch containing the probability of predicted brain regions along the probe.
+    """
 
-        colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
-
-        ndepths = depth_samples.size # number of depths
-        nregions = region_ids.size  # number of regions
-
-        # Generate random probabilities
-        probas = np.random.rand(ndepths, nregions)
-        # Normalize each row to sum to 1
-        probas /= probas.sum(axis=1, keepdims=True)
-        # Cumulative sum across regions (for stacking)
-        cprobas = probas.cumsum(axis=1)
-
+    cprobas, depths, colours, regions = inference.predict_cumulative(controller, items)
 
     data = Bunch(
-        depths=depth_samples,
-        regions=region_ids,
+        depths=depths,
+        regions=regions,
         colours=colours,
         probability=cprobas
     )

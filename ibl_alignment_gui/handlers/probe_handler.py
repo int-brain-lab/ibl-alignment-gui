@@ -39,6 +39,12 @@ from iblutil.util import Bunch
 from one import params
 from one.api import ONE
 
+try:
+    import ephysatlas.data
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
+
 
 class ProbeHandler(ABC):
     """
@@ -423,6 +429,9 @@ class ProbeHandlerONE(ProbeHandler):
 
         self.one = one or ONE()
         self.spike_collection = spike_collection
+        if EPHYS_ATLAS:
+            self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+
         super().__init__(brain_atlas)
 
     def get_subjects(self) -> np.ndarray:
@@ -490,6 +499,8 @@ class ProbeHandlerONE(ProbeHandler):
         self.shank_labels = np.array(self.shank_labels)[idx]
         shanks = np.array(shanks)[idx]
 
+        self.lab = self.shank_labels[0]['session_info']['lab']
+
         self.initialise_shanks()
 
         return list(shanks)
@@ -546,7 +557,7 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-            loaders['features'] = FeatureLoaderOne(ins, self.one)
+            loaders['features'] = FeatureLoaderOne(ins, self.one, self.ea_model, multi_area=self.lab=='steinmetzlab')
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
@@ -585,6 +596,8 @@ class ProbeHandlerCSV(ProbeHandler):
         self.default_config = 'dense'
         self.non_default_config = 'quarter'
         self.selected_config = 'quarter'
+        if EPHYS_ATLAS:
+            self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
 
     def get_subjects(self) -> np.ndarray:
         """
@@ -690,7 +703,6 @@ class ProbeHandlerCSV(ProbeHandler):
                     self.brain_atlas, user=user)
                 loaders['ephys'] = SpikeGLXLoaderLocal(local_path, collections.meta_collection)
                 loaders['plots'] = PlotLoader()
-                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
                 # If we don't have the data locally we download it
@@ -706,7 +718,8 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-                loaders['features'] = FeatureLoaderOne(ins, self.one)
+                if EPHYS_ATLAS:
+                    loaders['features'] = FeatureLoaderOne(ins, self.one, self.ea_model, multi_area=True)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 

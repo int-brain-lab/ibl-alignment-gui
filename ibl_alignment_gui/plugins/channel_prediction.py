@@ -125,10 +125,11 @@ def plot_predicted_regions(
     if results is None:
         items.model.predictions[model] = func(controller, items)
 
-    if 'probability' in items.model.predictions[model]:
-        items.view.plot_histology_cumulative(items.view.fig_hist_ref,items.model.predictions[model])
-    else:
-        items.view.plot_histology(items.view.fig_hist_ref, items.model.predictions[model], ax='right')
+    if items.model.predictions[model] is not None:
+        if 'probability' in items.model.predictions[model]:
+            items.view.plot_histology_cumulative(items.view.fig_hist_ref,items.model.predictions[model])
+        else:
+            items.view.plot_histology(items.view.fig_hist_ref, items.model.predictions[model], ax='right')
 
 
 def compute_cosmos_predictions(
@@ -157,7 +158,7 @@ def compute_cosmos_predictions(
 def compute_spatial_encoder_predictions(
     controller: 'AlignmentGUIController',
     items: 'ShankController'
-) -> Bunch[str, np.ndarray]:
+) -> Bunch[str, np.ndarray] | None:
     """
     Prediction model using the spatial encoder.
 
@@ -167,7 +168,10 @@ def compute_spatial_encoder_predictions(
         The predicted brain regions along the probe.
     """
 
-    region_ids, depths = spatial.predict(controller, items)
+    result = spatial.predict(controller, items)
+    if result is None:
+        return
+    region_ids, depths = result
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
     return get_region_boundaries(regions, depths)
@@ -176,7 +180,7 @@ def compute_spatial_encoder_predictions(
 def compute_inference_predictions(
     controller: 'AlignmentGUIController',
     items: 'ShankController'
-) -> Bunch[str, np.ndarray]:
+) -> Bunch[str, np.ndarray] | None:
     """
     Prediction model using the inference model.
 
@@ -186,7 +190,11 @@ def compute_inference_predictions(
         The predicted brain regions along the probe.
     """
 
-    region_ids, depths = inference.predict(controller, items)
+    result = inference.predict(controller, items)
+    if result is None:
+        return
+
+    region_ids, depths = result
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
     return get_region_boundaries(regions, depths / 1e6)
@@ -195,7 +203,7 @@ def compute_inference_predictions(
 def compute_cumulative_predictions(
         controller: 'AlignmentGUIController',
         items: 'ShankController'
-) -> Bunch[str, np.ndarray]:
+) -> Bunch[str, np.ndarray] | None:
     """
     Cumulative prediction model using the inference model.
     Returns
@@ -204,8 +212,11 @@ def compute_cumulative_predictions(
         A bunch containing the probability of predicted brain regions along the probe.
     """
 
-    cprobas, depths, colours, regions = inference.predict_cumulative(controller, items)
+    result = inference.predict_cumulative(controller, items)
+    if result is None:
+        return
 
+    cprobas, depths, colours, regions = result
     data = Bunch(
         depths=depths,
         regions=regions,

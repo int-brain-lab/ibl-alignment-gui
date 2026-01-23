@@ -16,6 +16,11 @@ from ibl_alignment_gui.loaders.geometry_loader import (
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
 
+try:
+    import ephysatlas.features
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 np.seterr(divide='ignore', invalid='ignore')
@@ -1386,10 +1391,6 @@ class PlotLoader:
         Dict
             A dict containing multiple ProbeData objects with keys according to features.
         """
-        ignore_cols = ['pid', 'axial_um', 'lateral_um', 'x', 'y', 'z', 'acronym', 'atlas_id',
-                       'x_target', 'y_target', 'z_target', 'outside', 'Allen_id', 'Cosmos_id',
-                       'Beryl_id']
-
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
         chn_coords['localCoordinates'] = np.c_[
@@ -1399,12 +1400,11 @@ class PlotLoader:
         chn_geom.split_sites_per_shank()
         sites = chn_geom._get_sites_for_shank(0)
 
-        features = [k for k in feature_data if k not in ignore_cols]
-        features.sort()
-
         data = Bunch()
 
-        for i, feature in enumerate(features):
+        feature_set = ephysatlas.features.voltage_features_set()
+
+        for i, feature in enumerate(feature_set):
             vals = feature_data[feature].values
             min_val = np.nanmin(vals)
             max_val = np.nanmax(vals)

@@ -21,6 +21,11 @@ from one.alf.exceptions import ALFObjectNotFound
 from one.api import ONE
 from one.remote import aws
 
+try:
+    import ephysatlas.data
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -190,9 +195,9 @@ class DataLoader(ABC):
             else:
                 vis_stim = Bunch()
                 vis_stim['leftGabor'] = gabor['start'][
-                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)]
+                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)].astype(np.float32)
                 vis_stim['rightGabor'] = gabor['start'][
-                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)]
+                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)].astype(np.float32)
                 vis_stim['exists'] = True
         except Exception:
             logger.warning('Failed to process passiveGabor data, some plots will not display')
@@ -892,10 +897,13 @@ class FeatureLoaderOne(FeatureLoader):
             self,
             insertion: dict,
             one: ONE,
-            session_path: Path | None = None):
+            feature_version: str,
+            multi_area: bool = False):
 
         self.one: ONE = one
         self.pid: str = insertion['id']
+        self.feature_version: str = feature_version
+        self.multi_area: bool = multi_area
 
     def load_features(self) -> Bunch[str, Any]:
         """
@@ -906,44 +914,43 @@ class FeatureLoaderOne(FeatureLoader):
         feature_data: Bunch
             A Bunch containing a dataFrame containing ephys atlas features for the probe.
         """
-        import ephysatlas.data
-
         table_path = self.one.cache_dir.joinpath('ephys_atlas_features')
         table_path.parent.mkdir(parents=True, exist_ok=True)
-        latest_label = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
-        features_path = ephysatlas.data.download_tables(table_path, label=latest_label,
-                                                        project='ea_active', one=self.one)
-        data = ephysatlas.data.read_features_from_disk(features_path)
-        data = data.reset_index()
 
-        # fname = 'df_all_cols_merged.pqt'
-        # table_path = self.one.cache_dir.joinpath('ephys_atlas_features', fname)
-        # table_path.parent.mkdir(parents=True, exist_ok=True)
-        #
-        # if not table_path.exists():
-        #     self.download_features(fname, save_path=table_path)
-        #
-        # data = pd.read_parquet(table_path).reset_index()
+        data = self.load_dataframe('ea_active', self.feature_version, table_path)
 
-        data = data[data['pid'] == self.pid]
+        if len(data) == 0 and self.multi_area:
+            data = self.load_dataframe('multi_area_comm', '2025_W52', table_path)
 
         feature_data = Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)
 
         return feature_data
 
-    def download_features(self, fname: str, save_path: Path) -> None:
+    def download_features(self, project, feature, save_path: Path) -> None:
         """
         Download the latest ephys atlas features from S3.
 
         Parameters
         ----------
-        fname: str
-            Filename to download
+        project: str
+            The project name
+        feature: str
+            The feature version
         save_path: Path
             A path to save the downloaded file
         """
-        s3, bucket_name = aws.get_s3_from_alyx(alyx=self.one.alyx)
-        # Download file
-        base_path = Path('aggregates/atlas/features/ea_active/2025_W43/agg_full/')
-        aws.s3_download_file(base_path.joinpath(fname), save_path.joinpath(fname), s3=s3,
-                             bucket_name=bucket_name)
+        ephysatlas.data.download_tables(save_path, label=feature, project=project, one=self.one)
+
+    def load_dataframe(self, project: str, feature: str, save_path: Path) -> pd.DataFrame:
+
+        model_path = save_path.joinpath(project, feature)
+
+        if not model_path.exists():
+            self.download_features(project, feature, save_path)
+
+        data = (pd.read_parquet(
+            model_path.joinpath('agg_full', 'df_all_cols_merged.pqt'))
+                .reset_index())
+
+        return data[data['pid'] == self.pid]
+

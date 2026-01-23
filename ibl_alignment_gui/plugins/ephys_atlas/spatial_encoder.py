@@ -28,10 +28,6 @@ class AlignmentEngine:
     e_std:  'torch.Tensor'
     ctx_mean: 'torch.Tensor'
     ctx_std:  'torch.Tensor'
-    ephys: np.ndarray
-    probe_positions: np.ndarray
-    probe_planned_positions: np.ndarray
-    pid_str: np.ndarray
     M_MAX: int
     RADIUS_UM: float
     optimization_features: np.ndarray
@@ -44,7 +40,9 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
     model_name = '2024_W43_SE_model'
     one = controller.model.one
     local_path = one.cache_dir.joinpath('ephys_atlas_features')
-    _ = ephysatlas.regionclassifier.download_model(local_path=local_path, model_name=model_name, one=one)
+    model_path = local_path.joinpath(model_name)
+    model_path.mkdir(parents=True, exist_ok=True)
+    _ = ephysatlas.data.download_model(local_path=model_path, model_name=model_name, one=one)
 
     optimization_features = np.arange(len(FEATURE_LIST))
 
@@ -53,18 +51,20 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
     ctx_manager = ContextAtlasManager(cfg, regenerate_context=False, model_name=model_name, output_dir=local_path)
 
     # Load ephys & probe positions
-    pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData(VINTAGE='2025_W52')
+    pid_str, ephys, probe_positions, _ = (
+        LoadInsertionData(raw_data=True, VINTAGE=controller.model.ea_model, path_data=local_path))
 
     # Build dataset & splits ONCE
     M_MAX = 8
     RADIUS_UM = 500
-    train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std = build_channels_plus_emptyvoxels_with_neighbors(
+    train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std = (
+        build_channels_plus_emptyvoxels_with_neighbors(
         ctx_manager=ctx_manager,
         ephys=ephys,
         probe_positions=probe_positions,
         RADIUS_UM=RADIUS_UM,
         M_MAX=M_MAX
-    )
+    ))
 
     handles = alignment_handles_from_loader(train_loader)
 
@@ -88,8 +88,7 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
     return AlignmentEngine(
         device=device, cfg=cfg, ctx_manager=ctx_manager, model=model,
         handles=handles, e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
-        ephys=ephys, probe_positions=probe_positions, probe_planned_positions=probe_planned_positions,
-        pid_str=pid_str, M_MAX=M_MAX, RADIUS_UM=RADIUS_UM, optimization_features=optimization_features
+        M_MAX=M_MAX, RADIUS_UM=RADIUS_UM, optimization_features=optimization_features
     )
 
 def ensure_engine(controller: 'AlignmentGUIController') -> AlignmentEngine:
@@ -301,21 +300,14 @@ def predict(controller, items):
     # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
     #  need to update the model and change that
     xyz_samples = items.model.align_handle.xyz_samples.copy()[::-1, :]
-    pid = controller.model.shank_labels[0]['id']
-    p_ind = np.where(pid == engine.pid_str)[0]
-    if len(p_ind) == 0:
-        print(f'Probe ID {pid} not found in ephys atlas database.')
-        return
 
     # Get the ephys features recorded on the probe
-    # These features are flipped
-    recorded = engine.ephys[p_ind][0].astype(np.float32)
+    # Need to flip the features as need to be ordered from top to bottom for model
+    if not items.model.raw_data['features']['exists']:
+        return
 
-    # This would get the features that are used in the GUI for the current pid but they
-    # are not flipped
-    df = items.model.raw_data['features']['df']
-    # TODO check if it is the same if we flip the recorded features
-    # recorded = df[FEATURE_LIST].to_numpy()
+    df = items.model.raw_data['features']['df'].copy()
+    recorded = df.sort_values('axial_um', ascending=False)[FEATURE_LIST].to_numpy()
 
     # Number of channels on the probe
     nc = recorded.shape[0]
@@ -325,7 +317,7 @@ def predict(controller, items):
         print('Need at least 2 recorded channels with non-zero features for spatial encoding.')
         return
     # Z score the recorded features so that they are in the same space as predicted features
-    recorded = ((torch.from_numpy(recorded) - engine.e_mean.cpu()) / (engine.e_std.cpu() + 1e-8)).numpy().astype(np.float64)
+    recorded = ((torch.from_numpy(recorded.copy()) - engine.e_mean.cpu()) / (engine.e_std.cpu() + 1e-8)).numpy().astype(np.float64)
     # Recorded features
     recorded = recorded[kp_mask][:, engine.optimization_features]
 

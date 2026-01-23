@@ -30,6 +30,9 @@ def load_inference_model(controller):
 
 def predict(controller, items):
 
+    if not items.model.raw_data['features']['exists']:
+        return
+
     df = items.model.raw_data['features']['df']
     model = ensure_model(controller)
     predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'])
@@ -41,6 +44,9 @@ def predict(controller, items):
 
 
 def predict_cumulative(controller, items):
+
+    if not items.model.raw_data['features']['exists']:
+        return
 
     df = items.model.raw_data['features']['df']
     model = ensure_model(controller)

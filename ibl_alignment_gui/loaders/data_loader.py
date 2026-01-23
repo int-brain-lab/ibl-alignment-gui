@@ -595,8 +595,10 @@ class SpikeGLXLoader(ABC):
 
         self.meta: Bunch | None = None
         self.save_path: Path | None = save_path
-        self.cached_path: Path | None = save_path.joinpath('alignment_gui_raw_data_snippets.npy') \
-            if save_path else None
+        self.cached_ap_path: Path | None = save_path.joinpath(
+            'alignment_gui_raw_data_snippets.npy') if save_path else None
+        self.cached_lf_path: Path | None = save_path.joinpath(
+            'alignment_gui_raw_lf_data_snippets.npy') if save_path else None
 
     def get_meta_data(self) -> Bunch[str, Any]:
         """
@@ -622,6 +624,10 @@ class SpikeGLXLoader(ABC):
     def load_ap_data(self) -> spikeglx.Reader | Streamer | None:
         """Abstract method to return a SpikeGLX reader or Streamer object."""
 
+    @abstractmethod
+    def load_lf_data(self) -> spikeglx.Reader | Streamer | None:
+        """Abstract method to return a SpikeGLX reader or Streamer object."""
+
     def load_ap_snippets(self, twin: float = 1) -> Bunch[str, Any] | defaultdict[str, Any]:
         """
         Load AP snippets centered around selected time points.
@@ -639,8 +645,8 @@ class SpikeGLXLoader(ABC):
         data: Bunch
             Snippets of raw data for three timepoints in addition to metadata (exists, fs).
         """
-        if self.cached_path and self.cached_path.exists():
-            data = np.load(self.cached_path, allow_pickle=True).item()
+        if self.cached_ap_path and self.cached_ap_path.exists():
+            data = np.load(self.cached_ap_path, allow_pickle=True).item()
             if 'dead_channels' in data:
                 return data
 
@@ -659,7 +665,7 @@ class SpikeGLXLoader(ABC):
         data = defaultdict(Bunch)
 
         for i, t in enumerate(times):
-            raw, labels, features = self._get_snippet(
+            raw, labels, features = self._get_ap_snippet(
                 sr, t, twin=twin, **detection_thresholds)
 
             if i == 0:
@@ -702,13 +708,56 @@ class SpikeGLXLoader(ABC):
         data['exists'] = True
         data['fs'] = sr.fs
 
-        if self.cached_path:
-            np.save(self.cached_path, data)
+        if self.cached_ap_path:
+            np.save(self.cached_ap_path, data)
+
+        return data
+
+    def load_lf_snippets(self, twin: float = 5) -> Bunch[str, Any] | defaultdict[str, Any]:
+        """
+        Load LF snippets centered around selected time points.
+
+        Also computes channel quality metrics across snippets to detect dead, noisy
+        and outside channels.
+
+        Parameters
+        ----------
+        twin : float
+            Time window in seconds for each snippet.
+
+        Returns
+        -------
+        data: Bunch
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+        """
+        if self.cached_lf_path and self.cached_lf_path.exists():
+            data = np.load(self.cached_lf_path, allow_pickle=True).item()
+            return data
+
+        sr = self.load_lf_data()
+        if not sr:
+            return Bunch(exists=False)
+
+        times = self.get_time_snippets(sr)
+
+        data = defaultdict(Bunch)
+
+        for i, t in enumerate(times):
+            raw = self._get_lf_snippet(sr, t, twin=twin)
+
+            data['images'][t] = raw
+
+        data['exists'] = True
+        data['fs'] = sr.fs
+
+        # TODO uncomment once we are happy with the snippet length
+        # if self.cached_lf_path:
+        #     np.save(self.cached_lf_path, data)
 
         return data
 
     @staticmethod
-    def _get_snippet(
+    def _get_ap_snippet(
             sr: spikeglx.Reader | Streamer,
             t: float,
             twin: float = 1,
@@ -742,8 +791,43 @@ class SpikeGLXLoader(ABC):
                                       channel_labels=channel_labels)
 
         # Extract a window in time (450–500 ms)
-        window = slice(int(0.450 * sr.fs), int(0.500 * sr.fs))
+        window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
         return raw[:, window].T, channel_labels, channel_features
+
+    @staticmethod
+    def _get_lf_snippet(
+            sr: spikeglx.Reader | Streamer,
+            t: float,
+            twin: float = 5,
+            **kwargs
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Extract a snippet of LF data centered at time t.
+
+        Parameters
+        ----------
+        sr : spikeglx.Reader or Streamer
+            The raw data reader
+        t : float
+            Time in seconds for center of snippet.
+        twin : float
+            Time window (in seconds) to extract.
+
+        Returns
+        -------
+        np.ndarray
+            Snippet of raw data (time, channels)
+        """
+        start_sample = int(t * sr.fs)
+        end_sample = start_sample + int(twin * sr.fs)
+        raw = sr[start_sample:end_sample, :-sr.nsync].T
+
+        # Detect bad channels and destripe
+        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, k_filter=None)
+
+        # Extract a window in time (1–2 seconds)
+        window = slice(int(1 * sr.fs), int(3 * sr.fs))
+        return raw[:, window].T
 
     @staticmethod
     def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:
@@ -834,6 +918,17 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         """
         return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
 
+    def load_lf_data(self):
+        """
+        Load LF data using ONE.
+
+        Returns
+        -------
+        Streamer
+            A streamer object for LF band.
+        """
+        return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
+
 
 class SpikeGLXLoaderLocal(SpikeGLXLoader):
     """
@@ -876,6 +971,18 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         """
         ap_file = next(self.meta_path.glob('*.ap.*bin'), None)
         return spikeglx.Reader(ap_file) if ap_file else None
+
+    def load_lf_data(self) -> spikeglx.Reader | None:
+        """
+        Load binary LF data from local path.
+
+        Returns
+        -------
+        spikeglx.Reader or None
+            A spikeglx.Reader instance to load the raw data, or None if not found.
+        """
+        lf_file = next(self.meta_path.glob('*.lf.*bin'), None)
+        return spikeglx.Reader(lf_file) if lf_file else None
 
 
 class FeatureLoader(ABC):

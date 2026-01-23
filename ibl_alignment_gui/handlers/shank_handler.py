@@ -285,7 +285,8 @@ class ShankHandler:
         self.raw_data = self.loaders['data'].get_data(shank_sites)
 
         # Load in the raw data snippets
-        self.raw_data['raw_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_ap_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_lf_snippets'] = self.loaders['ephys'].load_lf_snippets()
 
         # Load in the features data
         if self.loaders.get('features', None) is not None:

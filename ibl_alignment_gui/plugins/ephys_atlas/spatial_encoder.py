@@ -15,6 +15,8 @@ from typing import Optional
 from dataclasses import dataclass
 
 
+MODEL_NAME = 'Spatial encoder'
+
 @dataclass
 class AlignmentEngine:
     device: str
@@ -42,13 +44,13 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
     model_name = '2024_W43_SE_model'
     one = controller.model.one
     local_path = one.cache_dir.joinpath('ephys_atlas_features')
-    local_path = ephysatlas.regionclassifier.download_model(local_path=local_path, model_name=model_name, one=one)
+    _ = ephysatlas.regionclassifier.download_model(local_path=local_path, model_name=model_name, one=one)
 
     optimization_features = np.arange(len(FEATURE_LIST))
 
     # Context manager + config
     cfg = AtlasPCAConfig()
-    ctx_manager = ContextAtlasManager(cfg, regenerate_context=False, output_dir=local_path)
+    ctx_manager = ContextAtlasManager(cfg, regenerate_context=False, model_name=model_name, output_dir=local_path)
 
     # Load ephys & probe positions
     pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData(VINTAGE='2025_W52')
@@ -77,7 +79,7 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
         d_model=128, nhead=8, depth=2, neighbor_self_attn=False,
         heteroscedastic=heteroscedastic, drop=0.15
     ).to(device)
-    model.load_state_dict(torch.load(local_path.joinpath('SE_model.pth'), map_location=device))
+    model.load_state_dict(torch.load(local_path.joinpath(model_name, 'SE_model.pth'), map_location=device))
     model.eval()
     torch.set_grad_enabled(False)
 
@@ -92,10 +94,9 @@ def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngi
 
 def ensure_engine(controller: 'AlignmentGUIController') -> AlignmentEngine:
     plug = controller.plugins['Channel Prediction']
-    if 'engine' not in plug or plug['engine'] is None:
-        plug['engine'] = load_alignment_engine(controller)
-    return plug['engine']
-
+    if MODEL_NAME not in plug or plug[MODEL_NAME] is None:
+        plug[MODEL_NAME] = load_alignment_engine(controller)
+    return plug[MODEL_NAME]
 
 def get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei):
     p_rel = p_n - p_q[:, None, :]
@@ -127,7 +128,7 @@ def predict_features_at_xyz(
     # Build RAW context at query xyz
     pack = engine.ctx_manager.sample_context_numpy_m(xyz, mode='clip')
     ctx_raw = torch.from_numpy(np.concatenate([pack['cell_pc'], pack['gene_pc']], axis=1)).float()
-    xyz_t = torch.from_numpy(xyz).float()
+    xyz_t = torch.from_numpy(xyz.copy()).float()
 
     C = xyz_t.shape[0]
 
@@ -313,6 +314,7 @@ def predict(controller, items):
     # This would get the features that are used in the GUI for the current pid but they
     # are not flipped
     df = items.model.raw_data['features']['df']
+    # TODO check if it is the same if we flip the recorded features
     # recorded = df[FEATURE_LIST].to_numpy()
 
     # Number of channels on the probe
@@ -370,10 +372,24 @@ def predict(controller, items):
 
     # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
     #  need to update the model and change that
-    trk = items.model.align_handle.ephysalign.sampling_trk.copy()[::-1]
-    depth_samples = (trk - trk[j_end])[::-1]
 
     # TODO: Flipping the probe back for consistency
-    region_ids = xyz_to_region_ids(xyz_samples, controller.model.brain_atlas)[::-1]
+    trk = items.model.align_handle.ephysalign.sampling_trk.copy()[::-1]
+
+    # Get the regions within the probe
+    region_ids = xyz_to_region_ids(est_xyz, controller.model.brain_atlas)[::-1]
+    depth_samples = df['axial_um'].to_numpy() / 1e6
+
+    # Get the regions outside the probe
+    # Above the probe (from top of probe to top of brain)
+    region_ids_top = xyz_to_region_ids(xyz_samples[:j_start], controller.model.brain_atlas)[::-1]
+    depths_top = (trk[:j_start] - trk[j_start] + depth_samples[-1])[::-1]
+
+    # Below the probe (from bottom of probe to bottom of brain)
+    region_ids_bottom =  xyz_to_region_ids(xyz_samples[j_end+1:], controller.model.brain_atlas)[::-1]
+    depths_bottom = (trk[j_end+1:] - trk[j_end])[::-1]
+
+    region_ids = np.concatenate([region_ids_bottom, region_ids, region_ids_top], axis=0)
+    depth_samples = np.concatenate([depths_bottom, depth_samples, depths_top], axis=0)
 
     return region_ids, depth_samples

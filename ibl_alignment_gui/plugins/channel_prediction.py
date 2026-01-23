@@ -11,8 +11,6 @@ from iblatlas.atlas import AllenAtlas
 import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
 import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
 
-
-
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.shank_controller import ShankController
@@ -22,8 +20,7 @@ PLUGIN_NAME = 'Channel Prediction'
 
 def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME] = Bunch()
-    controller.plugins[PLUGIN_NAME]['activated'] = False
-    controller.plugins[PLUGIN_NAME]['engine'] = None  # cache slot
+    controller.plugins[PLUGIN_NAME]['activated'] = True
 
     channel_prediction = ChannelPrediction(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
@@ -50,6 +47,19 @@ def setup(controller: 'AlignmentGUIController') -> None:
                                  channel_prediction.plot_regions(_, m, func))
         action_group.addAction(action)
         plugin_menu.addAction(action)
+
+    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = lambda: callback(action_group)
+
+
+def callback(group) -> None:
+    """Reset action group to 'Original' selection."""
+    group.setEnabled(False)
+    for action in group.actions():
+        if action.text() == 'Original':
+            action.setChecked(True)
+        else:
+            action.setChecked(False)
+    group.setEnabled(True)
 
 
 class ChannelPrediction:
@@ -143,38 +153,55 @@ def compute_cosmos_predictions(
 
     return get_region_boundaries(regions, depth_samples)
 
+
 def compute_spatial_encoder_predictions(
     controller: 'AlignmentGUIController',
     items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
+    """
+    Prediction model using the spatial encoder.
+
+    Returns
+    -------
+    Bunch
+        The predicted brain regions along the probe.
+    """
 
     region_ids, depths = spatial.predict(controller, items)
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
     return get_region_boundaries(regions, depths)
 
+
 def compute_inference_predictions(
     controller: 'AlignmentGUIController',
     items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
+    """
+    Prediction model using the inference model.
+
+    Returns
+    -------
+    Bunch
+        The predicted brain regions along the probe.
+    """
 
     region_ids, depths = inference.predict(controller, items)
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
     return get_region_boundaries(regions, depths / 1e6)
 
+
 def compute_cumulative_predictions(
         controller: 'AlignmentGUIController',
         items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
-
     """
-    Example prediction model that plots cumulative prediction of brain regions.
-
+    Cumulative prediction model using the inference model.
     Returns
     -------
     Bunch
-        A bunch containing the predicted brain regions.
+        A bunch containing the probability of predicted brain regions along the probe.
     """
 
     cprobas, depths, colours, regions = inference.predict_cumulative(controller, items)

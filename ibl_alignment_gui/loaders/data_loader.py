@@ -798,7 +798,7 @@ class SpikeGLXLoader(ABC):
     def _get_lf_snippet(
             sr: spikeglx.Reader | Streamer,
             t: float,
-            twin: float = 5,
+            twin: float = 3,
             **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -822,11 +822,13 @@ class SpikeGLXLoader(ABC):
         end_sample = start_sample + int(twin * sr.fs)
         raw = sr[start_sample:end_sample, :-sr.nsync].T
 
+        butter_kwargs = {"N": 3, "Wn": 2 / sr.fs * 2, "btype": "highpass"}
         # Detect bad channels and destripe
-        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, k_filter=None)
+        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, channel_labels=True,
+                                      butter_kwargs=butter_kwargs, h=sr.geometry, k_filter=None)
 
         # Extract a window in time (1–2 seconds)
-        window = slice(int(1 * sr.fs), int(3 * sr.fs))
+        window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
         return raw[:, window].T
 
     @staticmethod

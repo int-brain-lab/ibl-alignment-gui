@@ -11,6 +11,7 @@ from ibl_alignment_gui.app.shank_controller import ShankController
 from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerCSV,
     ProbeHandlerLocal,
+    ProbeHandlerLocalYaml,
     ProbeHandlerONE,
 )
 from ibl_alignment_gui.plugins.add_plugins import Plugins
@@ -77,18 +78,26 @@ class AlignmentGUIController:
         A mapping of plugin names to plugin instances.
     """
 
-    def __init__(self, offline: bool = False, csv: str | None = None):
+    def __init__(self, offline: bool = False, csv: str | None = None, yaml: str | None = None):
+        self.offline = offline
+        self.csv: str | None = csv
+        self.yaml: str | None = yaml
 
-        self.csv: str | bool | None = False if csv is None else csv
-        self.offline: bool = offline
-        self.view: AlignmentGUIView = AlignmentGUIView(offline=self.offline, csv=self.csv)
         if offline:
-            self.model = ProbeHandlerLocal()
-        elif csv:
-            self.model = ProbeHandlerCSV(csv)
-            self.view.populate_selection_dropdown('subject', self.model.get_subjects())
-        else:
+            if self.yaml is None:
+                self.model = ProbeHandlerLocal()
+            else:
+                self.model = ProbeHandlerLocalYaml(self.yaml)
+        elif self.csv is None:
             self.model = ProbeHandlerONE()
+        else:
+            self.model = ProbeHandlerCSV(self.csv)
+
+        self.view: AlignmentGUIView = AlignmentGUIView(
+            offline=self.offline, config=len(self.model.configs) > 1
+        )
+
+        if not offline:
             self.view.populate_selection_dropdown('subject', self.model.get_subjects())
 
         # Keep track of whether data has been loaded or not
@@ -136,14 +145,19 @@ class AlignmentGUIController:
         # Setup plugins
         Plugins(self)
 
+        if self.yaml is not None:
+            self.on_folder_selected(self.yaml)
+            self.data_button_pressed()
+
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
         # Setup connections for selection dropdowns and buttons
         if not self.offline:
             self.view.connect_selection_dropdown('subject', self.on_subject_selected)
             self.view.connect_selection_dropdown('session', self.on_session_selected)
-        else:
+        elif self.yaml is None:
             self.view.connect_selection_button('folder', self.on_folder_selected)
+
         self.view.connect_selection_dropdown('shank', self.on_shank_selected)
         self.view.connect_selection_dropdown('align', self.on_alignment_selected)
         self.view.connect_selection_dropdown('config', self.on_config_selected)
@@ -159,8 +173,9 @@ class AlignmentGUIController:
 
         # Setup connections for tab / grid views
         self.view.connect_tabs('slice', self.slice_tab_changed)
-        self.view.connect_tabs('shank', self.shank_tab_changed,
-                               layout_callback=self.tab_layout_changed)
+        self.view.connect_tabs(
+            'shank', self.shank_tab_changed, layout_callback=self.tab_layout_changed
+        )
 
         # Setup connections for fit figures
         self.view.connect_lin_fit(self.lin_fit_option_changed)
@@ -837,11 +852,14 @@ class AlignmentGUIController:
             self.execute_plugins('on_config_selected')
             self.view.focus()
 
-    def on_folder_selected(self) -> None:
+    def on_folder_selected(self, folder_path: str | None = None) -> None:
         """Triggered in offline mode when the folder button is clicked."""
         self.loaded = None
         self.view.clear_selection_dropdown(['align', 'shank'])
-        folder_path = self.view.get_selected_path()
+        if folder_path:
+            self.view.set_selected_path(folder_path)
+        else:
+            folder_path = self.view.get_selected_path()
         shank_options = self.model.get_shanks(folder_path)
         self.view.populate_selection_dropdown('shank', shank_options)
         self.on_shank_selected(0)
@@ -873,7 +891,7 @@ class AlignmentGUIController:
         # Add all the plot options to the menubar
         self.populate_menubar()
         # If csv add the config options
-        if self.csv:
+        if self.view.config:
             self.view.populate_selection_dropdown('config', self.model.possible_configs)
         # Load in the shank panels and configure figures for initial config
         self.on_config_selected(0, init=True)

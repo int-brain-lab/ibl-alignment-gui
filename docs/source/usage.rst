@@ -111,12 +111,13 @@ The GUI supports visualization of up to four probes simultaneously. This is part
 
 .. code-block:: yaml
 
+   path: /path/to/session_data
+
    defaults:
      histology:
        path: /common/path/to/histology
 
    probes:
-     path: /path/to/session_data
 
      shank_0:
        datasets:
@@ -357,17 +358,17 @@ The YAML configuration supports ``path`` keys at multiple hierarchical levels to
 
 **Path Resolution Priority**
 
-When a relative path is specified for a dataset, the system searches for a base directory in the following order (highest to lowest priority):
+When a relative path is specified for a dataset, the system searches for a base directory in the following order:
 
 1. **Dataset-level path** — explicitly defined within the dataset's ``path`` field
-2. **Per-probe path** — defined within an individual probe configuration
-3. **Probe-group path** — defined directly under the ``probes`` section
+2. **Default path** — defined in the ``defaults`` section
+3. **Per-probe path** — defined within an individual probe configuration
 4. **Per-configuration path** — defined within an individual configuration
-5. **Configuration-group path** — defined directly under the ``configurations`` section
-6. **Top-level path** — defined at the root of the YAML file
-7. **Default path** — defined in the ``defaults`` section
+5. **Top-level path** — defined at the root of the YAML file
 
-The first matching base path is used to resolve the relative path. If a dataset uses an empty specification (``{}``), the default path is appended to the resolved base path.
+During the search for the base directory it will join together relative paths to build the final absolute path.
+
+If a dataset uses an empty specification (``{}``), the default path is appended to the resolved base path.
 
 .. note::
    Absolute paths (those starting with ``/`` on Unix/Linux/macOS or a drive letter on Windows) always take precedence and are used as-is, ignoring any base paths defined at higher levels.
@@ -379,7 +380,7 @@ The first matching base path is used to resolve the relative path. If a dataset 
 Examples Using Base Paths
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each example below demonstrates path resolution at a specific hierarchical level.
+Each example below demonstrates the path resolution logic used to determine the final dataset paths.
 
 **1. Top-level base path**
 
@@ -397,27 +398,7 @@ Resolves to::
 
    /mnt/data/probe_00/kilosort
 
-**2. Configuration-group base path**
-
-.. code-block:: yaml
-
-   path: /mnt/data
-
-   configurations:
-     path: Subject_01/2025-03-14
-
-     dense:
-       probes:
-         probe_00:
-           datasets:
-             spike_sorting:
-               path: kilosort
-
-Resolves to::
-
-   /mnt/data/Subject_01/2025-03-14/kilosort
-
-**3. Per-configuration base path**
+**2. Per-configuration base path**
 
 .. code-block:: yaml
 
@@ -436,25 +417,7 @@ Resolves to::
 
    /mnt/data/dense_session/kilosort
 
-**4. Probe-group base path**
-
-.. code-block:: yaml
-
-   path: /mnt/data
-
-   probes:
-     path: probe_data
-
-     probe_00:
-       datasets:
-         spike_sorting:
-           path: probe_00/kilosort
-
-Resolves to::
-
-   /mnt/data/probe_data/probe_00/kilosort
-
-**5. Per-probe base path**
+**3. Per-probe base path**
 
 .. code-block:: yaml
 
@@ -471,7 +434,7 @@ Resolves to::
 
    /mnt/data/probe_00/kilosort
 
-**6. Dataset-level path (highest priority)**
+**4. Dataset-level path (highest priority)**
 
 .. code-block:: yaml
 
@@ -488,7 +451,7 @@ Resolves to::
 
    /custom/location/kilosort
 
-**7. Using defaults with empty dataset specification**
+**5. Using defaults with empty dataset specification**
 
 .. code-block:: yaml
 
@@ -501,8 +464,7 @@ Resolves to::
    probes:
      probe_00:
        path: probe_00
-       datasets:
-         spike_sorting: {}
+       datasets: {}
 
 Resolves to::
 
@@ -529,18 +491,14 @@ This comprehensive example demonstrates how different path resolution levels wor
        backend: spikeglx
 
    configurations:
-     path: Subject_01/2025-03-14
-
      dense:
        path: dense_session
        probes:
          probe_00:
            path: probe_00
            datasets:
-             spike_sorting: {}  # Uses default: pykilosort
              processed_ephys:
                path: pykilosort
-             raw_ephys: {}  # Uses default: spikeglx
              picks:
                path: /custom/path/to/picks  # Absolute path overrides
              output:
@@ -573,15 +531,15 @@ This comprehensive example demonstrates how different path resolution levels wor
 
    * - **Dense / probe_00**
      - spike_sorting
-     - /mnt/s0/Data/Subject_01/2025-03-14/dense_session/probe_00/pykilosort
+     - /mnt/s0/Data/dense_session/probe_00/pykilosort
 
    * -
      - processed_ephys
-     - /mnt/s0/Data/Subject_01/2025-03-14/dense_session/probe_00/pykilosort
+     - /mnt/s0/Data/dense_session/probe_00/pykilosort
 
    * -
      - raw_ephys
-     - /mnt/s0/Data/Subject_01/2025-03-14/dense_session/probe_00/spikeglx
+     - /mnt/s0/Data/dense_session/probe_00/spikeglx
 
    * -
      - picks
@@ -593,23 +551,23 @@ This comprehensive example demonstrates how different path resolution levels wor
 
    * -
      - output
-     - /mnt/s0/Data/Subject_01/2025-03-14/dense_session/probe_00/alignment_outputs
+     - /mnt/s0/Data/dense_session/probe_00/alignment_outputs
 
    * - **Sparse / probe_00**
      - spike_sorting
-     - /mnt/s0/Data/Subject_01/2025-03-14/sparse_session/probe_00/kilosort
+     - /mnt/s0/Data/sparse_session/probe_00/kilosort
 
    * -
      - processed_ephys
-     - /mnt/s0/Data/Subject_01/2025-03-14/sparse_session/probe_00/raw_ephys_data
+     - /mnt/s0/Data/sparse_session/probe_00/raw_ephys_data
 
    * -
      - raw_ephys
-     - /mnt/s0/Data/Subject_01/2025-03-14/sparse_session/probe_00/spikeglx
+     - /mnt/s0/Data/sparse_session/probe_00/spikeglx
 
    * -
      - picks
-     - /mnt/s0/Data/Subject_01/2025-03-14/sparse_session/probe_00/kilosort
+     - /mnt/s0/Data/sparse_session/probe_00/kilosort
 
    * -
      - histology
@@ -617,4 +575,4 @@ This comprehensive example demonstrates how different path resolution levels wor
 
    * -
      - output
-     - /mnt/s0/Data/Subject_01/2025-03-14/sparse_session/probe_00/kilosort
+     - /mnt/s0/Data/sparse_session/probe_00/kilosort

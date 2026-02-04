@@ -7,6 +7,7 @@ import spikeglx
 
 import ibl_alignment_gui.loaders.data_loader as dloader
 import one.alf.io as alfio
+from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
 from one.api import ONE
@@ -384,11 +385,9 @@ class GeometryLoaderLocal(GeometryLoader):
          and metadata data.
     """
 
-    def __init__(self, probe_path: Path, collections: dloader.CollectionData):
-
-        self.probe_path: Path = probe_path
-        self.spike_path: Path = probe_path.joinpath(collections.spike_collection)
-        self.meta_path: Path = probe_path.joinpath(collections.meta_collection)
+    def __init__(self, data_paths: DatasetPaths):
+        self.spike_path: Path = data_paths.spike_sorting
+        self.meta_path: Path = data_paths.raw_ephys
 
         super().__init__()
 

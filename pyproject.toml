@@ -1,7 +1,11 @@
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
 [project]
 name = "ibl_alignment_gui"
 version = "0.1.0"
-description = "Electrophysiology and histology alignment tool"
+description = "Electrophysiology alignment tool"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
@@ -15,34 +19,91 @@ dependencies = [
   "ibllib",
   "iblatlas",
   "matplotlib",
-  "simpleitk"
+  "simpleitk",
+  "pydantic",
+  #"ibl-datoviz"
 ]
-
-requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
+requires-python = ">=3.10"
 
-[build-system]
-requires = ["pdm-backend"]
-build-backend = "pdm.backend"
+[project.urls]
+Changelog = "https://github.com/int-brain-lab/ibl-alignment-gui/blob/main/CHANGELOG.md"
+Documentation = "https://int-brain-lab.github.io/ibl-alignment-gui/"
+Homepage = "https://github.com/int-brain-lab/ibl-alignment-gui"
+Issues = "https://github.com/int-brain-lab/ibl-alignment-gui/issues"
+Repository = "https://github.com/int-brain-lab/ibl-alignment-gui.git"
 
 [project.scripts]
 alignment-gui = "ibl_alignment_gui.app.main:launch_app"
-
-[tool.pdm]
-distribution = true
+alignment-gui-ibl = "ibl_alignment_gui.app.main:launch_app_ibl"
 
 
 [dependency-groups]
 dev = [
-    "ruff>=0.12.10",
+    {include-group = "doc"},
+    {include-group = "lint"},
+    {include-group = "test"},
+    {include-group = "typing"},
 ]
-lint = ["ruff>=0.9.2"]
+doc = [
+  "myst-parser>=4.0.1",
+  "sphinx-autobuild>=2024.10.3",
+  "sphinx-autodoc-typehints>=3.0.1",
+  "sphinx-copybutton>=0.5.2",
+  "sphinx-rtd-theme>=3.0.2",
+  "sphinx<=8.2.3",
+  "sphinx-jsonschema>=1.19.1",
+  "sphinx-design>=0.6.1",
+  "sphinx-toolbox>=4.0.0",
+  "sphinx-github-style>=1.2.2",
+  "sphinx-togglebutton"
+]
+lint = [
+  "ruff>=0.9.2",
+]
+test = [
+  {include-group = "typing"},
+  {include-group = "lint"},
+  "pytest-cov>=6.1.1",
+  "pytest>=8.3.5",
+  "ruff>=0.11.5",
+  "tox>=4.25.0",
+  "tox-uv>=0.7.2",
+  "packaging>=25.0",
+  "pytest-mock>=3.14.1",
+]
+typing = [
+  "appdirs-stubs>=0.1.0",
+  "docutils-stubs>=0.0.22",
+  "mypy>=1.15.0",
+  "types-docutils>=0.22.0.20250822",
+  "types-pyserial>=3.5.0.20250326",
+  "types-pyyaml>=6.0.12.20250822",
+]
+#ea = [
+#  "ibleatools>=0.3.0",
+#]
+
+[tool.uv]
+required-environments = [
+  "sys_platform == 'win32'",
+  "sys_platform == 'linux'",
+  "sys_platform == 'darwin'",
+]
+
+[tool.uv.build-backend]
+module-name = "ibl_alignment_gui"
+module-root = ""
+source-exclude = [
+  "tests/*.py",
+  "docs/source/**/*",
+]
 
 [tool.ruff]
 line-length = 99
-include = ["pyproject.toml", "ibl_alignment_gui/**/*.py", "tests/**/*.py"]
-exclude = ["ibl_alignment_gui/utils/qt/adapted_axis.py", "ibl_alignment_gui/plugins/*.py"]
+include = ["pyproject.toml", "ibl_alignment_gui/**/*.py", "tests/**/*.py", "docs/source/**/*.py"]
+exclude = ["ibl_alignment_gui/utils/qt/adapted_axis.py", "ibl_alignment_gui/utils/qt/qrange_slider.py"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -83,3 +144,13 @@ convention = "numpy"
 
 [tool.ruff.lint.isort]
 known-first-party = ["brainbox*", "ibl*", "one*" ]
+
+[tool.mypy]
+packages = ["ibl_alignment_gui", "tests"]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.coverage.run]
+source_pkgs = ["ibl_alignment_gui"]
+relative_files = true

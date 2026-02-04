@@ -922,6 +922,8 @@ class SelectionWidget(QtWidgets.QWidget):
             layout.addWidget(self.dropdowns['shank']['combobox'])
             layout.addWidget(self.dropdowns['align']['combobox'])
             layout.addWidget(self.buttons['data']['button'])
+            if self.config:
+                layout.addWidget(self.dropdowns['config']['combobox'])
 
         self.setLayout(layout)
 

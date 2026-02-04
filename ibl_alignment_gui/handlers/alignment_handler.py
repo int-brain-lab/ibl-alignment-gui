@@ -33,7 +33,6 @@ class CircularIndexTracker:
     """
 
     def __init__(self, max_idx: int):
-
         self.max_idx: int = max_idx
         self.current_idx: int = 0
         self.total_idx: int = 0
@@ -89,8 +88,9 @@ class CircularIndexTracker:
         Returns: bool
             Whether the tracker moved to the next index.
         """
-        if ((self.current_idx < self.total_idx) &
-                (self.current_idx > self.total_idx - self.max_idx)):
+        if (self.current_idx < self.total_idx) & (
+            self.current_idx > self.total_idx - self.max_idx
+        ):
             self.current_idx += 1
             self.idx = np.mod(self.current_idx, self.max_idx)
 
@@ -143,11 +143,11 @@ class AlignmentHandler:
     """
 
     def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: AllenAtlas):
-
         self.buffer: CircularIndexTracker = CircularIndexTracker(10)
         self.brain_atlas: AllenAtlas = brain_atlas
-        self.ephysalign: EphysAlignment = EphysAlignment(xyz_picks, chn_depths,
-                                                         brain_atlas=self.brain_atlas)
+        self.ephysalign: EphysAlignment = EphysAlignment(
+            xyz_picks, chn_depths, brain_atlas=self.brain_atlas
+        )
         self.tracks: list = [0] * (self.buffer.max_idx + 1)
         self.features: list = [0] * (self.buffer.max_idx + 1)
         self.hist_mapping: str = 'Allen'
@@ -193,8 +193,9 @@ class AlignmentHandler:
         np.ndarray
             xyz positions of channels in 3D space
         """
-        return self.ephysalign.get_channel_locations(self.features[self.idx],
-                                                     self.tracks[self.idx])
+        return self.ephysalign.get_channel_locations(
+            self.features[self.idx], self.tracks[self.idx]
+        )
 
     @property
     def track_lines(self) -> list[np.ndarray]:
@@ -278,9 +279,7 @@ class AlignmentHandler:
         return self.buffer.prev_idx()
 
     def set_init_feature_track(
-            self,
-            feature: np.ndarray | None = None,
-            track: np.ndarray | None = None
+        self, feature: np.ndarray | None = None, track: np.ndarray | None = None
     ) -> None:
         """
         Set the initial feature and track values for the current buffer index.
@@ -296,8 +295,7 @@ class AlignmentHandler:
             self.ephysalign.feature_init = feature
         if track is not None:
             self.ephysalign.track_init = track
-        self.features[self.idx], self.tracks[self.idx], _ = (
-            self.ephysalign.get_track_and_feature())
+        self.features[self.idx], self.tracks[self.idx], _ = self.ephysalign.get_track_and_feature()
 
     def reset_features_and_tracks(self) -> None:
         """Reset features and tracks to their initial alignment state."""
@@ -326,18 +324,25 @@ class AlignmentHandler:
         region = None
         colour = self.ephysalign.region_colour
 
-        hist_data['region'], hist_data['axis_label'] = (
-            self.ephysalign.scale_histology_regions(
-                self.features[self.idx], self.tracks[self.idx],
-                region=region, region_label=region_label))
+        hist_data['region'], hist_data['axis_label'] = self.ephysalign.scale_histology_regions(
+            self.features[self.idx],
+            self.tracks[self.idx],
+            region=region,
+            region_label=region_label,
+        )
         hist_data['colour'] = colour
 
-        scale_data['region'], scale_data['scale'] = (
-            self.ephysalign.get_scale_factor(hist_data['region'], region_orig=region))
+        scale_data['region'], scale_data['scale'] = self.ephysalign.get_scale_factor(
+            hist_data['region'], region_orig=region
+        )
         hist_data_ref['region'], hist_data_ref['axis_label'] = (
-            self.ephysalign.scale_histology_regions(self.ephysalign.track_extent,
-                                                    self.ephysalign.track_extent,
-                                                    region=region, region_label=region_label))
+            self.ephysalign.scale_histology_regions(
+                self.ephysalign.track_extent,
+                self.ephysalign.track_extent,
+                region=region,
+                region_label=region_label,
+            )
+        )
 
         hist_data_ref['colour'] = colour
 
@@ -355,15 +360,15 @@ class AlignmentHandler:
             Offset value to apply to the track alignment.
         """
         self.buffer.next_idx_to_fill()
-        self.tracks[self.idx] = (self.tracks[self.idx_prev] + offset)
-        self.features[self.idx] = (self.features[self.idx_prev])
+        self.tracks[self.idx] = self.tracks[self.idx_prev] + offset
+        self.features[self.idx] = self.features[self.idx_prev]
 
     def scale_hist_data(
-            self,
-            line_track: np.ndarray,
-            line_feature: np.ndarray,
-            extend_feature: int = 1,
-            lin_fit: bool = True
+        self,
+        line_track: np.ndarray,
+        line_feature: np.ndarray,
+        extend_feature: int = 1,
+        lin_fit: bool = True,
     ) -> None:
         """
         Scale brain regions along the probe track.
@@ -387,16 +392,20 @@ class AlignmentHandler:
 
         depths_track = np.sort(np.r_[self.tracks[self.idx_prev][[0, -1]], line_track])
 
-        self.tracks[self.idx] = self.ephysalign.feature2track(depths_track,
-                                                              self.features[self.idx_prev],
-                                                              self.tracks[self.idx_prev])
+        self.tracks[self.idx] = self.ephysalign.feature2track(
+            depths_track, self.features[self.idx_prev], self.tracks[self.idx_prev]
+        )
         self.features[self.idx] = np.sort(
-            np.r_[self.features[self.idx_prev][[0, -1]], line_feature])
+            np.r_[self.features[self.idx_prev][[0, -1]], line_feature]
+        )
 
         if (self.features[self.idx].size >= 5) & lin_fit:
             self.features[self.idx], self.tracks[self.idx] = (
                 self.ephysalign.adjust_extremes_linear(
-                    self.features[self.idx], self.tracks[self.idx], extend_feature))
+                    self.features[self.idx], self.tracks[self.idx], extend_feature
+                )
+            )
         else:
             self.tracks[self.idx] = self.ephysalign.adjust_extremes_uniform(
-                self.features[self.idx], self.tracks[self.idx])
+                self.features[self.idx], self.tracks[self.idx]
+            )

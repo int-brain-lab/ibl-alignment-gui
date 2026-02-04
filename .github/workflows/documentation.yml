@@ -1,0 +1,46 @@
+name: Documentation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/documentation.yaml'
+      - 'docs/**'
+      - 'ibl_alignment_gui/**'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: 3.13
+      - name: sync dependencies
+        run: uv sync --no-default-groups --group doc
+      - name: build documentation
+        run: uv run sphinx-build docs/source docs/build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/build/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -6,4 +6,6 @@ of recording electrodes in the brain.
 
 This project is maintained by the software development team at the International Brain Lab.
 
+[Documentation](https://int-brain-lab.github.io/ibl-alignment-gui/)
+
 

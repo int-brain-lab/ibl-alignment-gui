@@ -241,16 +241,17 @@ class RangeController:
     def set_init_levels(self) -> None:
         """Set the initial levels for image, probe, and line plots based on controller settings."""
         self.plot_keys['image'] = self.controller.img_init
-        self.view.labels['image'].setText(f"Image: {self.plot_keys['image']}")
-        self.on_plot_changed(self.plot_keys['image'],
-                             self.get_image_plot_type(self.plot_keys['image']))
+        self.view.labels['image'].setText(f'Image: {self.plot_keys["image"]}')
+        self.on_plot_changed(
+            self.plot_keys['image'], self.get_image_plot_type(self.plot_keys['image'])
+        )
 
         self.plot_keys['probe'] = self.controller.probe_init
-        self.view.labels['probe'].setText(f"Probe: {self.plot_keys['probe']}")
+        self.view.labels['probe'].setText(f'Probe: {self.plot_keys["probe"]}')
         self.on_plot_changed(self.plot_keys['probe'], 'probe')
 
         self.plot_keys['line'] = self.controller.line_init
-        self.view.labels['line'].setText(f"Line: {self.plot_keys['line']}")
+        self.view.labels['line'].setText(f'Line: {self.plot_keys["line"]}')
         self.on_plot_changed(self.plot_keys['line'], 'line')
 
     def get_image_plot_type(self, plot_key: str) -> str | None:
@@ -295,13 +296,16 @@ class RangeController:
         # Find the extremes across all shanks and configs
         data = get_levels(self.controller, plot_key, plot_type)
         max_levels = np.array([dat['data'].levels for dat in data if dat['data'] is not None])
-        self.view.sliders[key].set_slider_intervals(
-            [np.nanmin(max_levels), np.nanmax(max_levels)])
+        self.view.sliders[key].set_slider_intervals([np.nanmin(max_levels), np.nanmax(max_levels)])
 
         # Find the level for the currently selected shank and configs
-        data = get_levels(self.controller, plot_key, plot_type,
-                          shanks=self.view.get_selected_shanks(),
-                          configs=self.view.get_selected_configs())
+        data = get_levels(
+            self.controller,
+            plot_key,
+            plot_type,
+            shanks=self.view.get_selected_shanks(),
+            configs=self.view.get_selected_configs(),
+        )
         levels = np.array([dat['data'].levels for dat in data if dat['data'] is not None])
         if len(levels) == 0:
             levels = np.nanquantile(max_levels, [0.1, 0.9])
@@ -309,7 +313,7 @@ class RangeController:
 
         # Update the slider and label
         self.view.sliders[key].set_slider_values(levels)
-        self.view.labels[key].setText(f"{key.capitalize()}: {self.plot_keys[key]}")
+        self.view.labels[key].setText(f'{key.capitalize()}: {self.plot_keys[key]}')
 
     def plot_panels(self, plot_key: str, plot_type: str) -> None:
         """
@@ -356,9 +360,14 @@ class RangeController:
         if plot_type == 'image':
             plot_type = self.get_image_plot_type(plot_key)
 
-        set_levels(self.controller, plot_key, plot_type, levels,
-                   shanks=self.view.get_selected_shanks(),
-                   configs=self.view.get_selected_configs())
+        set_levels(
+            self.controller,
+            plot_key,
+            plot_type,
+            levels,
+            shanks=self.view.get_selected_shanks(),
+            configs=self.view.get_selected_configs(),
+        )
 
         slider_widget.set_slider_values(levels)
 
@@ -391,12 +400,12 @@ class RangeController:
 
 @shank_loop
 def set_levels(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController',
-        plot_key: str,
-        plot_type: str,
-        levels: tuple[float, float],
-        **kwargs
+    controller: 'AlignmentGUIController',
+    items: 'ShankController',
+    plot_key: str,
+    plot_type: str,
+    levels: tuple[float, float],
+    **kwargs,
 ) -> None:
     """
     Set the levels for a given plot key and type.
@@ -419,11 +428,11 @@ def set_levels(
 
 @shank_loop
 def reset_default_levels(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController',
-        plot_key: str,
-        plot_type: str,
-        **kwargs
+    controller: 'AlignmentGUIController',
+    items: 'ShankController',
+    plot_key: str,
+    plot_type: str,
+    **kwargs,
 ) -> None:
     """
     Reset the levels to default for a given plot key and type.
@@ -444,11 +453,11 @@ def reset_default_levels(
 
 @shank_loop
 def get_levels(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController',
-        plot_key: str,
-        plot_type: str,
-        **kwargs
+    controller: 'AlignmentGUIController',
+    items: 'ShankController',
+    plot_key: str,
+    plot_type: str,
+    **kwargs,
 ) -> dict[str, Any]:
     """
     Get the levels for a given plot key and type.

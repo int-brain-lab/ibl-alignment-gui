@@ -1,14 +1,14 @@
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.utils.utils import shank_loop
-from iblutil.util import Bunch
 from iblutil.numerical import ismember
+from iblutil.util import Bunch
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
@@ -47,15 +47,16 @@ def setup(controller: 'AlignmentGUIController') -> None:
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
-        'Cumulative': compute_cumulative_distribution
+        'Cumulative': compute_cumulative_distribution,
     }
 
     for model, model_func in predictions_models.items():
         action = QtWidgets.QAction(model, controller.view)
         action.setCheckable(True)
         action.setChecked(model == 'Original')
-        action.triggered.connect(lambda _, m=model, func=model_func:
-                                 channel_prediction.plot_regions(_, m, func))
+        action.triggered.connect(
+            lambda _, m=model, func=model_func: channel_prediction.plot_regions(_, m, func)
+        )
         action_group.addAction(action)
         plugin_menu.addAction(action)
 
@@ -99,11 +100,11 @@ def plot_original_regions(_, items: 'ShankController', **kwargs) -> None:
 
 @shank_loop
 def plot_predicted_regions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController',
-        model: str,
-        func: Callable,
-        **kwargs
+    controller: 'AlignmentGUIController',
+    items: 'ShankController',
+    model: str,
+    func: Callable,
+    **kwargs,
 ) -> None:
     """
     Plot the model predictions on the reference histology plot.
@@ -123,14 +124,17 @@ def plot_predicted_regions(
         items.model.predictions[model] = func(controller, items)
 
     if 'probability' in items.model.predictions[model]:
-        items.view.plot_histology_cumulative(items.view.fig_hist_ref,items.model.predictions[model])
+        items.view.plot_histology_cumulative(
+            items.view.fig_hist_ref, items.model.predictions[model]
+        )
     else:
-        items.view.plot_histology(items.view.fig_hist_ref, items.model.predictions[model], ax='right')
+        items.view.plot_histology(
+            items.view.fig_hist_ref, items.model.predictions[model], ax='right'
+        )
 
 
 def compute_cosmos_predictions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
     """
     Example prediction model that returns cosmos brain regions.
@@ -152,8 +156,7 @@ def compute_cosmos_predictions(
 
 
 def compute_random_predictions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
     """
     Example prediction model that uses the spikes data to assign random brain regions.
@@ -186,10 +189,8 @@ def compute_random_predictions(
 
 
 def compute_cumulative_distribution(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
-
     """
     Example prediction model that plots cumulative prediction of brain regions.
 
@@ -198,7 +199,6 @@ def compute_cumulative_distribution(
     Bunch
         A bunch containing the predicted brain regions.
     """
-
     if Path('/Users/admin/Downloads/ea_features.pqt').exists():
         df = pd.read_parquet('/Users/admin/Downloads/ea_features.pqt')
         int_cols = [c for c in df.columns if c.isdigit()]
@@ -222,7 +222,7 @@ def compute_cumulative_distribution(
 
         colours = [controller.model.brain_atlas.regions.rgb[idx] for idx in region_idxs]
 
-        ndepths = depth_samples.size # number of depths
+        ndepths = depth_samples.size  # number of depths
         nregions = region_ids.size  # number of regions
 
         # Generate random probabilities
@@ -232,13 +232,7 @@ def compute_cumulative_distribution(
         # Cumulative sum across regions (for stacking)
         cprobas = probas.cumsum(axis=1)
 
-
-    data = Bunch(
-        depths=depth_samples,
-        regions=region_ids,
-        colours=colours,
-        probability=cprobas
-    )
+    data = Bunch(depths=depth_samples, regions=region_ids, colours=colours, probability=cprobas)
 
     return data
 
@@ -275,10 +269,6 @@ def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.nd
         region_label[i, :] = (np.mean(depths[[start, end]]) * 1e6, regions.acronym[end])
         region_colour[i, :] = regions.rgb[end]
 
-    data = Bunch(
-        region=region,
-        axis_label=region_label,
-        colour=region_colour
-    )
+    data = Bunch(region=region, axis_label=region_label, colour=region_colour)
 
     return data

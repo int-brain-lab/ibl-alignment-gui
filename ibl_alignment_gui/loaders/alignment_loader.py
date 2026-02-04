@@ -27,10 +27,10 @@ class AlignmentLoader(ABC):
     """
 
     def __init__(self, user: str | None = None, xyz_picks: np.ndarray | None = None) -> None:
-
         self.user: str | None = user
-        self.xyz_picks: np.ndarray | None = self.load_xyz_picks() \
-            if xyz_picks is None else xyz_picks
+        self.xyz_picks: np.ndarray | None = (
+            self.load_xyz_picks() if xyz_picks is None else xyz_picks
+        )
 
         self.alignments: Bunch | dict = Bunch()
         self.alignment_keys: list = ['original']
@@ -138,7 +138,6 @@ class AlignmentLoaderOne(AlignmentLoader):
     """
 
     def __init__(self, insertion: dict, one: ONE, user: str | None = None):
-
         self.insertion: dict[str, Any] = insertion
         self.one: ONE = one
         self.traj_id: str | None = None
@@ -166,15 +165,24 @@ class AlignmentLoaderOne(AlignmentLoader):
         dict or None
             Dictionary of alignments, or None if not found.
         """
-        traj = self.one.alyx.rest('trajectories', 'list', probe_insertion=self.insertion['id'],
-                                  provenance='Ephys aligned histology track', no_cache=True)
+        traj = self.one.alyx.rest(
+            'trajectories',
+            'list',
+            probe_insertion=self.insertion['id'],
+            provenance='Ephys aligned histology track',
+            no_cache=True,
+        )
         if traj:
             return traj[0]['json']
 
     def load_trajectory(self) -> None:
         """Load the histology track trajectory and stores the trajectory id."""
-        hist = self.one.alyx.rest('trajectories', 'list', probe_insertion=self.insertion['id'],
-                                  provenance='Histology track')
+        hist = self.one.alyx.rest(
+            'trajectories',
+            'list',
+            probe_insertion=self.insertion['id'],
+            provenance='Histology track',
+        )
 
         if hist and hist[0]['x'] is not None:
             self.traj_id = hist[0]['id']
@@ -208,9 +216,14 @@ class AlignmentLoaderLocal(AlignmentLoader):
         Preloaded xyz picks. If not provided, it will attempt to load from file.
     """
 
-    def __init__(self, data_path: Path, shank_idx: int, n_shanks: int, user: str | None = None,
-                 xyz_picks: np.ndarray | None = None):
-
+    def __init__(
+        self,
+        data_path: Path,
+        shank_idx: int,
+        n_shanks: int,
+        user: str | None = None,
+        xyz_picks: np.ndarray | None = None,
+    ):
         self.data_path: Path = data_path
         self.shank_idx: int = shank_idx
         self.n_shanks: int = n_shanks
@@ -226,8 +239,11 @@ class AlignmentLoaderLocal(AlignmentLoader):
         np.ndarray or None
             The xyz picks as a (N, 3) array in m, or None if not found.
         """
-        xyz_name = '*xyz_picks.json' if self.n_shanks == 1 else \
-            f'*xyz_picks_shank{self.shank_idx + 1}.json'
+        xyz_name = (
+            '*xyz_picks.json'
+            if self.n_shanks == 1
+            else f'*xyz_picks_shank{self.shank_idx + 1}.json'
+        )
 
         xyz_file = sorted(self.data_path.glob(xyz_name))
 
@@ -247,8 +263,11 @@ class AlignmentLoaderLocal(AlignmentLoader):
         dict or None
             Dictionary of alignment data or None if file not found.
         """
-        prev_align_name = 'prev_alignments.json' if self.n_shanks == 1 else \
-            f'prev_alignments_shank{self.shank_idx + 1}.json'
+        prev_align_name = (
+            'prev_alignments.json'
+            if self.n_shanks == 1
+            else f'prev_alignments_shank{self.shank_idx + 1}.json'
+        )
 
         prev_align_file = self.data_path.joinpath(prev_align_name)
 

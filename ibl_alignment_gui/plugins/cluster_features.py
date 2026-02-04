@@ -54,10 +54,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
 
 def callback(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController',
-        _,
-        point: pg.ScatterPlotItem
+    controller: 'AlignmentGUIController', items: 'ShankController', _, point: pg.ScatterPlotItem
 ) -> None:
     """
     Triggered when a cluster in a scatter plot is clicked.
@@ -113,23 +110,32 @@ class ClusterPopup(PopupWindow):
     def setup(self) -> None:
         """Configure the plots inside the popup window."""
         autocorr_plot = pg.PlotItem()
-        autocorr_plot.setXRange(min=np.min(self.data['t_autocorr']),
-                                max=np.max(self.data['t_autocorr']))
+        autocorr_plot.setXRange(
+            min=np.min(self.data['t_autocorr']), max=np.max(self.data['t_autocorr'])
+        )
         autocorr_plot.setYRange(min=0, max=1.05 * np.max(self.data['autocorr']))
         set_axis(autocorr_plot, 'bottom', label='T (ms)')
         set_axis(autocorr_plot, 'left', label='Number of spikes')
-        plot = pg.BarGraphItem(x=self.data['t_autocorr'], height=self.data['autocorr'], width=0.24,
-                               brush=QtGui.QColor(160, 160, 160))
+        plot = pg.BarGraphItem(
+            x=self.data['t_autocorr'],
+            height=self.data['autocorr'],
+            width=0.24,
+            brush=QtGui.QColor(160, 160, 160),
+        )
         autocorr_plot.addItem(plot)
 
         template_plot = pg.PlotItem()
         plot = pg.PlotCurveItem()
-        template_plot.setXRange(min=np.min(self.data['t_template']),
-                                max=np.max(self.data['t_template']))
+        template_plot.setXRange(
+            min=np.min(self.data['t_template']), max=np.max(self.data['t_template'])
+        )
         set_axis(template_plot, 'bottom', label='T (ms)')
         set_axis(template_plot, 'left', label='Amplitude (a.u.)')
-        plot.setData(x=self.data['t_template'], y=self.data['template_wf'],
-                     pen=pg.mkPen(color='k', style=QtCore.Qt.SolidLine, width=2))
+        plot.setData(
+            x=self.data['t_template'],
+            y=self.data['template_wf'],
+            pen=pg.mkPen(color='k', style=QtCore.Qt.SolidLine, width=2),
+        )
         template_plot.addItem(plot)
 
         self.popup_widget.addItem(autocorr_plot, 0, 0)
@@ -172,7 +178,8 @@ class ClusterPopupManager:
         """
         name = f'{shank}_{config}' if config else shank
         clust_popup = ClusterPopup._get_or_create(
-            f'{name}: cluster {clust_no}', self.view, data=data)
+            f'{name}: cluster {clust_no}', self.view, data=data
+        )
         clust_popup.closed.connect(self.popup_closed)
         clust_popup.leave.connect(self.popup_left)
         clust_popup.enter.connect(self.popup_entered)
@@ -239,9 +246,11 @@ def compute_timescales(plot_loader: 'PlotLoader') -> tuple[np.ndarray, np.ndarra
     t_template: np.ndarray
         The time vector for template waveform (ms).
     """
-    t_autocorr = 1e3 * np.arange((AUTOCORR_WIN_SIZE / 2) - AUTOCORR_WIN_SIZE,
-                                 (AUTOCORR_WIN_SIZE / 2) + AUTOCORR_BIN_SIZE,
-                                 AUTOCORR_BIN_SIZE)
+    t_autocorr = 1e3 * np.arange(
+        (AUTOCORR_WIN_SIZE / 2) - AUTOCORR_WIN_SIZE,
+        (AUTOCORR_WIN_SIZE / 2) + AUTOCORR_BIN_SIZE,
+        AUTOCORR_BIN_SIZE,
+    )
     n_template = plot_loader.data['clusters']['waveforms'][0, :, 0].size
     t_template = 1e3 * (np.arange(n_template)) / FS
 
@@ -267,13 +276,18 @@ def get_autocorr(plot_loader: 'PlotLoader', clust_idx: int) -> tuple[np.ndarray,
         The cluster id of the selected cluster
     """
     idx = plot_loader.spike_clusters == plot_loader.cluster_idx[clust_idx]
-    autocorr = xcorr(plot_loader.spike_times[idx], plot_loader.spike_clusters[idx],
-                     AUTOCORR_BIN_SIZE, AUTOCORR_WIN_SIZE)
+    autocorr = xcorr(
+        plot_loader.spike_times[idx],
+        plot_loader.spike_clusters[idx],
+        AUTOCORR_BIN_SIZE,
+        AUTOCORR_WIN_SIZE,
+    )
     if plot_loader.data['clusters'].get('metrics', {}).get('cluster_id', None) is None:
         clust_id = plot_loader.cluster_idx[clust_idx]
     else:
         clust_id = plot_loader.data['clusters'].metrics.cluster_id[
-            plot_loader.cluster_idx[clust_idx]]
+            plot_loader.cluster_idx[clust_idx]
+        ]
 
     return autocorr[0, 0, :], clust_id
 
@@ -294,6 +308,7 @@ def get_template_wf(plot_loader: 'PlotLoader', clust_idx: int) -> np.ndarray:
     template_wf: np.ndarray
         The template waveform of the selected cluster
     """
-    template_wf = (plot_loader.data['clusters']['waveforms'][
-                   plot_loader.cluster_idx[clust_idx], :, 0])
+    template_wf = plot_loader.data['clusters']['waveforms'][
+        plot_loader.cluster_idx[clust_idx], :, 0
+    ]
     return template_wf * 1e6

@@ -32,12 +32,11 @@ class Geometry(ABC):
     """
 
     def __init__(
-            self,
-            x_coords: np.ndarray,
-            y_coords: np.ndarray,
-            chn_ind: np.ndarray,
+        self,
+        x_coords: np.ndarray,
+        y_coords: np.ndarray,
+        chn_ind: np.ndarray,
     ) -> None:
-
         self.x_coords: np.ndarray = x_coords
         self.y_coords: np.ndarray = y_coords
         self.chn_ind: np.ndarray = chn_ind
@@ -103,9 +102,9 @@ class Geometry(ABC):
             info['sites_min'] = np.nanmin(info['sites_y'])
             info['sites_max'] = np.nanmax(info['sites_y'])
             info['sites_pitch'] = np.min(np.abs(np.diff(np.unique(info['sites_y']))))
-            info['sites_full'] = np.arange(info['sites_min'],
-                                           info['sites_max'] + info['sites_pitch'],
-                                           info['sites_pitch'])
+            info['sites_full'] = np.arange(
+                info['sites_min'], info['sites_max'] + info['sites_pitch'], info['sites_pitch']
+            )
             info['idx_full'] = np.where(np.isin(info['sites_full'], info['sites_y']))[0]
             info['n_banks'] = np.unique(info['sites_x']).size
             self.shanks[i] = info
@@ -142,7 +141,6 @@ class ChannelGeometry(Geometry):
     """
 
     def __init__(self, channels: Bunch[str, np.ndarray], shank_diff: int = 100) -> None:
-
         self.shank_diff: int = shank_diff
         chn_x = channels['localCoordinates'][:, 0]
         chn_y = channels['localCoordinates'][:, 1]
@@ -186,7 +184,8 @@ class ChannelGeometry(Geometry):
             grp_shank = [grp_sort[0], grp_sort[-1]]
 
             shank_chns = np.bitwise_and(
-                self.x_coords >= grp_shank[0], self.x_coords <= grp_shank[-1])
+                self.x_coords >= grp_shank[0], self.x_coords <= grp_shank[-1]
+            )
             groups[i] = np.where(shank_chns)[0]
 
         return groups
@@ -203,7 +202,6 @@ class MetaGeometry(Geometry):
     """
 
     def __init__(self, meta: Bunch[str, Any]) -> None:
-
         self.meta = spikeglx.geometry_from_meta(meta, sort=False)
         elec_x = self.meta['x']
         elec_y = self.meta['y']
@@ -251,7 +249,6 @@ class GeometryLoader(ABC):
     """
 
     def __init__(self):
-
         self.electrodes: Geometry | None = None
         self.channels: Geometry | None = None
 
@@ -268,7 +265,7 @@ class GeometryLoader(ABC):
             self.channels.split_sites_per_shank()
 
         if self.electrodes is None and self.channels is None:
-            raise ValueError("Could not load geometry: metadata and channels both missing")
+            raise ValueError('Could not load geometry: metadata and channels both missing')
 
         # TODO we need to check that metadata and channels are equivalent.
         #  If they are not then we use the channels and put out a warning
@@ -302,11 +299,17 @@ class GeometryLoader(ABC):
         """
         if sites == 'channels':
             # TODO add a logger if channels don't exist to say we are using electrodes
-            shank_sites = self.channels._get_sites_for_shank(shank_idx) \
-                if self.channels is not None else self.electrodes._get_sites_for_shank(shank_idx)
+            shank_sites = (
+                self.channels._get_sites_for_shank(shank_idx)
+                if self.channels is not None
+                else self.electrodes._get_sites_for_shank(shank_idx)
+            )
         else:
-            shank_sites = self.electrodes._get_sites_for_shank(shank_idx) \
-                if self.electrodes is not None else self.channels._get_sites_for_shank(shank_idx)
+            shank_sites = (
+                self.electrodes._get_sites_for_shank(shank_idx)
+                if self.electrodes is not None
+                else self.channels._get_sites_for_shank(shank_idx)
+            )
 
         return shank_sites
 
@@ -327,9 +330,13 @@ class GeometryLoaderOne(GeometryLoader):
         The collection to the spike sorting data to load
     """
 
-    def __init__(self, insertion: dict[str, Any], one: ONE, session_path: Path | None = None,
-                 probe_collection: str | None = None):
-
+    def __init__(
+        self,
+        insertion: dict[str, Any],
+        one: ONE,
+        session_path: Path | None = None,
+        probe_collection: str | None = None,
+    ):
         self.one: ONE = one
         self.eid: str = insertion['session']
         self.session_path: Path = session_path or one.eid2path(self.eid)
@@ -349,8 +356,11 @@ class GeometryLoaderOne(GeometryLoader):
         """
         try:
             meta_file = self.one.load_dataset(
-                self.eid, '*.ap.meta', collection=f'raw_ephys_data/{self.probe_label}',
-                download_only=True)
+                self.eid,
+                '*.ap.meta',
+                collection=f'raw_ephys_data/{self.probe_label}',
+                download_only=True,
+            )
             return spikeglx.read_meta_data(meta_file)
         except ALFObjectNotFound:
             return None
@@ -365,8 +375,13 @@ class GeometryLoaderOne(GeometryLoader):
             A Bunch containing the channels data, or None if not found.
         """
         chns = dloader.DataLoader.load_data(
-            self.one.load_object, self.eid, 'channels', collection=self.probe_collection,
-            attribute=['localCoordinates', 'rawInd'], **kwargs)
+            self.one.load_object,
+            self.eid,
+            'channels',
+            collection=self.probe_collection,
+            attribute=['localCoordinates', 'rawInd'],
+            **kwargs,
+        )
 
         return chns if chns['exists'] else None
 
@@ -412,15 +427,18 @@ class GeometryLoaderLocal(GeometryLoader):
         Bunch or None
             A Bunch containing the channels data, or None if not found.
         """
-        chns = dloader.DataLoader.load_data(alfio.load_object, self.spike_path, 'channels',
-                                            attribute=['localCoordinates', 'rawInd'], **kwargs)
+        chns = dloader.DataLoader.load_data(
+            alfio.load_object,
+            self.spike_path,
+            'channels',
+            attribute=['localCoordinates', 'rawInd'],
+            **kwargs,
+        )
         return chns if chns['exists'] else None
 
 
 def arrange_channels_into_banks(
-        shank_geom: Bunch[str, Any],
-        data: np.ndarray,
-        bnk_width: int = 10
+    shank_geom: Bunch[str, Any], data: np.ndarray, bnk_width: int = 10
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Arrange channel data into probe banks for visualization.
@@ -458,14 +476,11 @@ def arrange_channels_into_banks(
     bnk_diff = np.min(bnk_diff)
 
     if bnk_diff != shank_geom['sites_pitch']:
-        bnk_data = np.full((shank_geom['sites_full'].shape[0] + 1,
-                            shank_geom['n_banks']), np.nan)
+        bnk_data = np.full((shank_geom['sites_full'].shape[0] + 1, shank_geom['n_banks']), np.nan)
     else:
-        bnk_data = np.full((shank_geom['sites_full'].shape[0],
-                            shank_geom['n_banks']), np.nan)
+        bnk_data = np.full((shank_geom['sites_full'].shape[0], shank_geom['n_banks']), np.nan)
 
     for ibank, bank in enumerate(np.unique(shank_geom['sites_x'])):
-
         # Find the channels in the current bank
         bnk_chns = np.where(shank_geom['sites_x'] == bank)[0]
         bnk_ycoords = shank_geom['sites_y'][bnk_chns]
@@ -482,7 +497,7 @@ def arrange_channels_into_banks(
             bnk_data[idx_full, ibank] = data[bnk_chns]
 
     # Get the scaling and offset for the shank
-    bnk_yscale = ((shank_geom['sites_max'] - shank_geom['sites_min']) / bnk_data.shape[0])
+    bnk_yscale = (shank_geom['sites_max'] - shank_geom['sites_min']) / bnk_data.shape[0]
     bnk_xscale = bnk_width
     bnk_offset = np.array([0, shank_geom['sites_min']])
 
@@ -507,14 +522,17 @@ def average_chns_at_same_depths(shank_geom: Bunch[str, Any], data: np.ndarray) -
         2D array with averaged data across equivalent depths.
     """
     # Identify channels at the same depth
-    _, chn_depth, chn_count = np.unique(shank_geom['sites_y'], return_index=True,
-                                        return_counts=True)
+    _, chn_depth, chn_count = np.unique(
+        shank_geom['sites_y'], return_index=True, return_counts=True
+    )
     chn_depth_eq = np.copy(chn_depth)
     chn_depth_eq[np.where(chn_count == 2)] += 1
 
     # Average pairs of channels at the same depth
     averaged_data = np.mean(
-        np.stack([data[:, chn_depth], data[:, chn_depth_eq]], axis=-1), axis=-1,)
+        np.stack([data[:, chn_depth], data[:, chn_depth_eq]], axis=-1),
+        axis=-1,
+    )
 
     return averaged_data
 

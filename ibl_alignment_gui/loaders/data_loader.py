@@ -38,7 +38,6 @@ class DataLoader(ABC):
     """
 
     def __init__(self):
-
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
 
@@ -76,12 +75,12 @@ class DataLoader(ABC):
 
     @staticmethod
     def load_data(
-            load_function: Callable,
-            *args: Any,
-            raise_message: str | None = None,
-            raise_exception: Exception = ALFObjectNotFound,
-            raise_error: bool = False,
-            **kwargs
+        load_function: Callable,
+        *args: Any,
+        raise_message: str | None = None,
+        raise_exception: Exception = ALFObjectNotFound,
+        raise_error: bool = False,
+        **kwargs,
     ) -> Bunch[str, Any]:
         """
         Safely load data using a provided function.
@@ -236,10 +235,7 @@ class DataLoader(ABC):
 
     @abstractmethod
     def load_spikes_data(
-            self,
-            alf_object: str,
-            attributes: list[str],
-            **kwargs
+        self, alf_object: str, attributes: list[str], **kwargs
     ) -> Bunch[str, Any]:
         """Abstract method to load spike sorting data."""
 
@@ -258,14 +254,13 @@ class DataLoader(ABC):
         channels: Bunch
             channels data
         """
-        spikes = self.load_spikes_data('spikes',
-                                       ['depths', 'amps', 'times', 'clusters'])
+        spikes = self.load_spikes_data('spikes', ['depths', 'amps', 'times', 'clusters'])
 
-        clusters = self.load_spikes_data('clusters',
-                                         ['metrics', 'peakToTrough', 'waveforms', 'channels'])
+        clusters = self.load_spikes_data(
+            'clusters', ['metrics', 'peakToTrough', 'waveforms', 'channels']
+        )
 
-        channels = self.load_spikes_data('channels',
-                                         ['rawInd', 'localCoordinates'])
+        channels = self.load_spikes_data('channels', ['rawInd', 'localCoordinates'])
 
         if self.filter and spikes['exists']:
             # Remove low firing rate clusters
@@ -277,10 +272,7 @@ class DataLoader(ABC):
         return spikes, clusters, channels
 
     def filter_spikes_by_chns(
-            self,
-            spikes: Bunch[str, Any],
-            clusters: Bunch[str, Any],
-            channels: Bunch[str, Any]
+        self, spikes: Bunch[str, Any], clusters: Bunch[str, Any], channels: Bunch[str, Any]
     ) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
         Filter spikes to only include data relevant to channels present on selected shank.
@@ -294,8 +286,10 @@ class DataLoader(ABC):
         channels: Bunch
             Filtered channels data
         """
-        spikes_idx = np.isin(channels['rawInd'][clusters['channels'][spikes['clusters']]],
-                             self.shank_sites['spikes_ind'])
+        spikes_idx = np.isin(
+            channels['rawInd'][clusters['channels'][spikes['clusters']]],
+            self.shank_sites['spikes_ind'],
+        )
 
         for key in spikes:
             if key == 'exists':
@@ -330,9 +324,7 @@ class DataLoader(ABC):
 
     @staticmethod
     def filter_spikes_by_fr(
-            spikes: Bunch[str, Any],
-            clusters: Bunch[str, Any],
-            min_fr: float = 50 / 3600
+        spikes: Bunch[str, Any], clusters: Bunch[str, Any], min_fr: float = 50 / 3600
     ) -> tuple[Bunch[str, Any], Bunch[str, Any]]:
         """
         Remove low-firing clusters and filter spikes accordingly.
@@ -386,9 +378,13 @@ class DataLoaderOne(DataLoader):
         Spike sorting algorithm to load (e.g. 'pykilosort', 'iblsorter').
     """
 
-    def __init__(self, insertion: dict, one: ONE,
-                 session_path: Path | None = None, spike_collection: str | None = None):
-
+    def __init__(
+        self,
+        insertion: dict,
+        one: ONE,
+        session_path: Path | None = None,
+        spike_collection: str | None = None,
+    ):
         self.one: ONE = one
         self.eid: str = insertion['session']
         self.session_path: Path = session_path or one.eid2path(self.eid)
@@ -453,14 +449,16 @@ class DataLoaderOne(DataLoader):
         -------
         Bunch
         """
-        return self.load_data(self.one.load_object, self.eid, alf_object,
-                              collection=f'raw_ephys_data/{self.probe_label}', **kwargs)
+        return self.load_data(
+            self.one.load_object,
+            self.eid,
+            alf_object,
+            collection=f'raw_ephys_data/{self.probe_label}',
+            **kwargs,
+        )
 
     def load_spikes_data(
-            self,
-            alf_object: str,
-            attributes: list[str],
-            **kwargs
+        self, alf_object: str, attributes: list[str], **kwargs
     ) -> Bunch[str, Any]:
         """
         Load spike sorting data using ONE.
@@ -470,8 +468,13 @@ class DataLoaderOne(DataLoader):
         Bunch
         """
         return self.load_data(
-            self.one.load_object, self.eid, alf_object, collection=self.probe_collection,
-            attribute=attributes, **kwargs)
+            self.one.load_object,
+            self.eid,
+            alf_object,
+            collection=self.probe_collection,
+            attribute=attributes,
+            **kwargs,
+        )
 
 
 class DataLoaderLocal(DataLoader):
@@ -490,7 +493,6 @@ class DataLoaderLocal(DataLoader):
     """
 
     def __init__(self, data_paths: DatasetPaths):
-
         self.spike_path: Path = data_paths.spike_sorting
         self.ephys_path: Path = data_paths.processed_ephys
         self.task_path: Path = data_paths.task
@@ -546,10 +548,7 @@ class DataLoaderLocal(DataLoader):
         return self.load_data(alfio.load_object, self.ephys_path, alf_object, **kwargs)
 
     def load_spikes_data(
-            self,
-            alf_object: str,
-            attributes: list[str],
-            **kwargs
+        self, alf_object: str, attributes: list[str], **kwargs
     ) -> Bunch[str, Any]:
         """
         Load spike sorting data from local path.
@@ -559,7 +558,8 @@ class DataLoaderLocal(DataLoader):
         Bunch
         """
         return self.load_data(
-            alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs)
+            alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs
+        )
 
 
 class SpikeGLXLoader(ABC):
@@ -577,11 +577,11 @@ class SpikeGLXLoader(ABC):
     """
 
     def __init__(self, save_path: Path | None = None):
-
         self.meta: Bunch | None = None
         self.save_path: Path | None = save_path
-        self.cached_path: Path | None = save_path.joinpath('alignment_gui_raw_data_snippets.npy') \
-            if save_path else None
+        self.cached_path: Path | None = (
+            save_path.joinpath('alignment_gui_raw_data_snippets.npy') if save_path else None
+        )
 
     def get_meta_data(self) -> Bunch[str, Any]:
         """
@@ -636,16 +636,12 @@ class SpikeGLXLoader(ABC):
         times = self.get_time_snippets(sr)
 
         # Thresholds for channel quality detection
-        detection_thresholds = {
-            'similarity_threshold': (-0.5, 1),
-            'psd_hf_threshold': 0.02
-        }
+        detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
 
         data = defaultdict(Bunch)
 
         for i, t in enumerate(times):
-            raw, labels, features = self._get_snippet(
-                sr, t, twin=twin, **detection_thresholds)
+            raw, labels, features = self._get_snippet(sr, t, twin=twin, **detection_thresholds)
 
             if i == 0:
                 chn_labels = np.zeros((raw.shape[1], len(times)))
@@ -661,27 +657,25 @@ class SpikeGLXLoader(ABC):
         channel_flags, _ = scipy.stats.mode(chn_labels, axis=1)
 
         data['dead_channels'] = Bunch(
-            values=chn_features_med["xcor_hf"],
+            values=chn_features_med['xcor_hf'],
             lines=[detection_thresholds['similarity_threshold'][0]],
-            points=channel_flags == 1
+            points=channel_flags == 1,
         )
 
         data['noisy_channels_coherence'] = Bunch(
-            values=chn_features_med["xcor_hf"],
+            values=chn_features_med['xcor_hf'],
             lines=[detection_thresholds['similarity_threshold'][1]],
-            points=chn_features_med["xcor_hf"] > detection_thresholds['similarity_threshold'][1]
+            points=chn_features_med['xcor_hf'] > detection_thresholds['similarity_threshold'][1],
         )
 
         data['noisy_channels_psd'] = Bunch(
-            values=chn_features_med["psd_hf"],
+            values=chn_features_med['psd_hf'],
             lines=[detection_thresholds['psd_hf_threshold']],
-            points=channel_flags == 2
+            points=channel_flags == 2,
         )
 
         data['outside_channels'] = Bunch(
-            values=chn_features_med["xcor_lf"],
-            lines=[-0.75, 0.75],
-            points=channel_flags == 3
+            values=chn_features_med['xcor_lf'], lines=[-0.75, 0.75], points=channel_flags == 3
         )
 
         data['exists'] = True
@@ -694,10 +688,7 @@ class SpikeGLXLoader(ABC):
 
     @staticmethod
     def _get_snippet(
-            sr: spikeglx.Reader | Streamer,
-            t: float,
-            twin: float = 1,
-            **kwargs
+        sr: spikeglx.Reader | Streamer, t: float, twin: float = 1, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of AP data centered at time t.
@@ -718,13 +709,11 @@ class SpikeGLXLoader(ABC):
         """
         start_sample = int(t * sr.fs)
         end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, :-sr.nsync].T
+        raw = sr[start_sample:end_sample, : -sr.nsync].T
 
         # Detect bad channels and destripe
-        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(
-            raw, sr.fs, **kwargs)
-        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry,
-                                      channel_labels=channel_labels)
+        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, sr.fs, **kwargs)
+        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels)
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.450 * sr.fs), int(0.500 * sr.fs))
@@ -775,12 +764,8 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
     """
 
     def __init__(
-            self,
-            insertion: dict,
-            one: ONE,
-            session_path: Path | None = None,
-            force: bool = False):
-
+        self, insertion: dict, one: ONE, session_path: Path | None = None, force: bool = False
+    ):
         self.one: ONE = one
         self.eid: str = insertion['session']
         self.session_path: Path = session_path or self.one.eid2path(self.eid)
@@ -802,8 +787,11 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         """
         try:
             meta_file = self.one.load_dataset(
-                self.eid, '*.ap.meta', collection=f'raw_ephys_data/{self.probe_label}',
-                download_only=True)
+                self.eid,
+                '*.ap.meta',
+                collection=f'raw_ephys_data/{self.probe_label}',
+                download_only=True,
+            )
             return spikeglx.read_meta_data(meta_file)
         except ALFObjectNotFound:
             return None
@@ -877,12 +865,7 @@ class FeatureLoaderOne(FeatureLoader):
     Loads feature from ephys feature table.
     """
 
-    def __init__(
-            self,
-            insertion: dict,
-            one: ONE,
-            session_path: Path | None = None):
-
+    def __init__(self, insertion: dict, one: ONE, session_path: Path | None = None):
         self.one: ONE = one
         self.pid: str = insertion['id']
 
@@ -923,5 +906,6 @@ class FeatureLoaderOne(FeatureLoader):
         s3, bucket_name = aws.get_s3_from_alyx(alyx=self.one.alyx)
         # Download file
         base_path = Path('aggregates/atlas/features/ea_active/2025_W43/agg_full/')
-        aws.s3_download_file(base_path.joinpath(fname), save_path.joinpath(fname), s3=s3,
-                             bucket_name=bucket_name)
+        aws.s3_download_file(
+            base_path.joinpath(fname), save_path.joinpath(fname), s3=s3, bucket_name=bucket_name
+        )

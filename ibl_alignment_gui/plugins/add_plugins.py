@@ -7,10 +7,12 @@ from ibl_alignment_gui.plugins.features_3d import setup as setup_3d_features
 from ibl_alignment_gui.plugins.qc_dialog import setup as setup_qc_dialog
 from ibl_alignment_gui.plugins.range_controller import setup as setup_control_range
 from ibl_alignment_gui.plugins.upload_dialog import setup as setup_upload_dialog
+
 # from ibl_alignment_gui.plugins.additional_plots import setup as setup_additional_plots
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+
 
 class Plugins:
     """
@@ -23,7 +25,6 @@ class Plugins:
     """
 
     def __init__(self, controller: 'AlignmentGUIController'):
-
         controller.plugin_options = controller.view.menu_widgets.addMenu('Plugins')
         controller.plugins = dict()
 

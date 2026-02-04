@@ -8,6 +8,7 @@ from pydantic import BaseModel
 # Pydantic Models
 # -------------------------------
 
+
 class DatasetPaths(BaseModel):
     """
     Container for resolved dataset paths for a single probe.
@@ -113,6 +114,7 @@ class AlignmentYAML(BaseModel):
 # Path resolution logic
 # -------------------------------
 
+
 def resolve_path(
     dataset_path: Path | None = None,
     probe_path: Path | None = None,
@@ -165,9 +167,11 @@ def resolve_path(
     # Still relative → cannot resolve fully
     raise ValueError('No absolute root provided to resolve relative path.')
 
+
 # -------------------------------
 # Loader
 # -------------------------------
+
 
 def load_alignment_yaml(
     yaml_file: str,

@@ -186,10 +186,8 @@ class AlignmentGUIController:
             'Fit': {'shortcut': 'Return', 'callback': self.fit_button_pressed},
             # Shortcuts to apply offset
             'Offset': {'shortcut': 'O', 'callback': self.offset_button_pressed},
-            'Offset + 100um': {'shortcut': 'Shift+Up',
-                               'callback': self.moveup_button_pressed},
-            'Offset - 100um': {'shortcut': 'Shift+Down',
-                               'callback': self.movedown_button_pressed},
+            'Offset + 100um': {'shortcut': 'Shift+Up', 'callback': self.moveup_button_pressed},
+            'Offset - 100um': {'shortcut': 'Shift+Down', 'callback': self.movedown_button_pressed},
             # Shortcut to remove a reference line
             'Remove Line': {'shortcut': 'Shift+D', 'callback': self.delete_reference_line},
             # Shortcut to move between previous/next moves
@@ -201,73 +199,94 @@ class AlignmentGUIController:
             'Upload': {'shortcut': 'Shift+U', 'callback': self.complete_button_pressed},
         }
         display_options = {
-                # Shortcuts to toggle between plots options
-                'Toggle Image Plots ->': {'shortcut': 'Alt+1',
-                                          'callback': lambda: self.toggle_plots('image', 1)},
-                'Toggle Line Plots ->': {'shortcut': 'Alt+2',
-                                         'callback': lambda: self.toggle_plots('line', 1)},
-                'Toggle Probe Plots ->': {'shortcut': 'Alt+3',
-                                          'callback': lambda: self.toggle_plots('probe', 1)},
-                'Toggle Slice Plots ->': {'shortcut': 'Alt+4',
-                                          'callback': lambda: self.toggle_plots('slice', 1)},
-                'Toggle Image Plots <-': {'shortcut': 'Shift+Alt+1',
-                                          'callback': lambda: self.toggle_plots('image', -1)},
-                'Toggle Line Plots <-': {'shortcut': 'Shift+Alt+2',
-                                         'callback': lambda: self.toggle_plots('line', -1)},
-                'Toggle Probe Plots <-': {'shortcut': 'Shift+Alt+3',
-                                          'callback': lambda: self.toggle_plots('probe', -1)},
-                'Toggle Slice Plots <-': {'shortcut': 'Shift+Alt+4',
-                                          'callback': lambda: self.toggle_plots('slice', -1)},
-                # Shortcut to reset axis on figures
-                'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
-                # Shortcut to hide/show region labels
-                'Hide/Show Labels': {'shortcut': 'Shift+L', 'callback': self.toggle_labels},
-                # Shortcut to hide/show reference lines
-                'Hide/Show Lines': {'shortcut': 'Shift+H',
-                                    'callback': self.toggle_reference_lines},
-                # Shortcut to hide/show reference lines and channels on slice image
-                'Hide/Show Channels': {'shortcut': 'Shift+C',
-                                       'callback': self.toggle_channels},
-                # Shortcut to change toggle between grid and tab view
-                'Toggle layout': {'shortcut': 'T', 'callback': self.toggle_layout},
-                # Shortcuts to move between shanks
-                'Next shank': {'shortcut': 'Right',
-                               'callback': lambda: self.loop_through_tabs(1)},
-                'Previous shank': {'shortcut': 'Left',
-                                   'callback': lambda: self.loop_through_tabs(-1)},
-                # Shortcut to reset all plots to their default range
-                'Reset Range': {'shortcut': 'R', 'callback': self.on_reset_levels},
-            }
+            # Shortcuts to toggle between plots options
+            'Toggle Image Plots ->': {
+                'shortcut': 'Alt+1',
+                'callback': lambda: self.toggle_plots('image', 1),
+            },
+            'Toggle Line Plots ->': {
+                'shortcut': 'Alt+2',
+                'callback': lambda: self.toggle_plots('line', 1),
+            },
+            'Toggle Probe Plots ->': {
+                'shortcut': 'Alt+3',
+                'callback': lambda: self.toggle_plots('probe', 1),
+            },
+            'Toggle Slice Plots ->': {
+                'shortcut': 'Alt+4',
+                'callback': lambda: self.toggle_plots('slice', 1),
+            },
+            'Toggle Image Plots <-': {
+                'shortcut': 'Shift+Alt+1',
+                'callback': lambda: self.toggle_plots('image', -1),
+            },
+            'Toggle Line Plots <-': {
+                'shortcut': 'Shift+Alt+2',
+                'callback': lambda: self.toggle_plots('line', -1),
+            },
+            'Toggle Probe Plots <-': {
+                'shortcut': 'Shift+Alt+3',
+                'callback': lambda: self.toggle_plots('probe', -1),
+            },
+            'Toggle Slice Plots <-': {
+                'shortcut': 'Shift+Alt+4',
+                'callback': lambda: self.toggle_plots('slice', -1),
+            },
+            # Shortcut to reset axis on figures
+            'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
+            # Shortcut to hide/show region labels
+            'Hide/Show Labels': {'shortcut': 'Shift+L', 'callback': self.toggle_labels},
+            # Shortcut to hide/show reference lines
+            'Hide/Show Lines': {'shortcut': 'Shift+H', 'callback': self.toggle_reference_lines},
+            # Shortcut to hide/show reference lines and channels on slice image
+            'Hide/Show Channels': {'shortcut': 'Shift+C', 'callback': self.toggle_channels},
+            # Shortcut to change toggle between grid and tab view
+            'Toggle layout': {'shortcut': 'T', 'callback': self.toggle_layout},
+            # Shortcuts to move between shanks
+            'Next shank': {'shortcut': 'Right', 'callback': lambda: self.loop_through_tabs(1)},
+            'Previous shank': {'shortcut': 'Left', 'callback': lambda: self.loop_through_tabs(-1)},
+            # Shortcut to reset all plots to their default range
+            'Reset Range': {'shortcut': 'R', 'callback': self.on_reset_levels},
+        }
 
         self.view.add_shortcuts_to_menu('fit', fit_options)
         self.view.add_shortcuts_to_menu('display', display_options)
 
-    def load_data(self):
+    def load_data(self) -> None:
+        """Load data for the selected session."""
         self.model.load_data()
         self.loaded = True
         self.create_shanks()
         self.execute_plugins('load_data', self)
 
-    def load_plots(self):
+    def load_plots(self) -> None:
+        """Load available plots for the selected session."""
         self.model.load_plots()
 
     def populate_menubar(self):
         """Populate menu bar tabs based on avaialble plots."""
         self.img_init = self.view.populate_menu_tab(
-            'image', self.plot_image_panels, self.model.image_keys)
+            'image', self.plot_image_panels, self.model.image_keys
+        )
         self.view.populate_menu_tab(
-            'image', self.plot_scatter_panels, self.model.scatter_keys, set_checked=False)
+            'image', self.plot_scatter_panels, self.model.scatter_keys, set_checked=False
+        )
         self.probe_init = self.view.populate_menu_tab(
-            'probe', self.plot_probe_panels, self.model.probe_keys)
+            'probe', self.plot_probe_panels, self.model.probe_keys
+        )
         self.line_init = self.view.populate_menu_tab(
-            'line', self.plot_line_panels, self.model.line_keys)
+            'line', self.plot_line_panels, self.model.line_keys
+        )
         self.feature_init = self.view.populate_menu_tab(
-            'feature', self.plot_feature_panels, self.model.feature_keys)
+            'feature', self.plot_feature_panels, self.model.feature_keys
+        )
         self.slice_init = self.view.populate_menu_tab(
-            'slice', self.plot_slice_panels, self.model.slice_keys)
+            'slice', self.plot_slice_panels, self.model.slice_keys
+        )
         filter_keys = ['All', 'KS good', 'KS mua', 'IBL good']
         self.filter_init = self.view.populate_menu_tab(
-            'filter', self.filter_unit_pressed, filter_keys)
+            'filter', self.filter_unit_pressed, filter_keys
+        )
 
     # --------------------------------------------------------------------------------------------
     # Plugins
@@ -294,8 +313,9 @@ class AlignmentGUIController:
         if 'Cluster Features' in self.plugins and items.cluster:
             scatter = items.view.ephys_plot
             scatter.sigClicked.connect(
-                lambda plot, points:
-                self.plugins['Cluster Features']['callback'](self, items, plot, points)
+                lambda plot, points: self.plugins['Cluster Features']['callback'](
+                    self, items, plot, points
+                )
             )
 
     # --------------------------------------------------------------------------------------------
@@ -306,16 +326,19 @@ class AlignmentGUIController:
         self.shank_items = defaultdict(Bunch)
         for i, shank in enumerate(self.all_shanks):
             for c in self.model.configs:
-                self.shank_items[shank][c] = (
-                    ShankController(self.model.shanks[shank][c], shank, i, c))
+                self.shank_items[shank][c] = ShankController(
+                    self.model.shanks[shank][c], shank, i, c
+                )
 
     def init_shanks(self) -> None:
         """Initialise the plots for each ShankController and add callbacks to plot scenes."""
-        shank_tabs = self.view.init_tabs(self.shank_items,
-                                         self.model.selected_config,
-                                         self.model.default_config,
-                                         self.model.non_default_config,
-                                         feature_view=self.show_feature)
+        shank_tabs = self.view.init_tabs(
+            self.shank_items,
+            self.model.selected_config,
+            self.model.default_config,
+            self.model.non_default_config,
+            feature_view=self.show_feature,
+        )
         for tab in shank_tabs:
             tab.setup_double_click(self.on_mouse_double_clicked)
             tab.setup_mouse_hover(self.on_mouse_hover)
@@ -339,8 +362,11 @@ class AlignmentGUIController:
         config: str
             The config to use
         """
-        return (self.model.default_config if self.model.selected_config == 'both'
-                else self.model.selected_config)
+        return (
+            self.model.default_config
+            if self.model.selected_config == 'both'
+            else self.model.selected_config
+        )
 
     # --------------------------------------------------------------------------------------------
     # Plotting functions
@@ -389,7 +415,7 @@ class AlignmentGUIController:
         return Bunch(shank=kwargs.get('shank'), config=kwargs.get('config'), cbar=cbar)
 
     @shank_loop
-    def plot_fit_panels(self,  items: ShankController, **kwargs) -> None:
+    def plot_fit_panels(self, items: ShankController, **kwargs) -> None:
         """Plot fit panel per shank and config."""
         items.plot_fit()
 
@@ -437,13 +463,15 @@ class AlignmentGUIController:
 
         self.slice_figs = Bunch()
         if self.model.selected_config == 'both':
-            results = self._plot_slice_panels(plot_key, data_only=data_only,
-                                              configs=[self.model.default_config])
+            results = self._plot_slice_panels(
+                plot_key, data_only=data_only, configs=[self.model.default_config]
+            )
             self.slice_figs = {res['shank']: res['fig'] for res in results}
             self.plot_channel_panels()
         else:
-            results = self._plot_slice_panels(plot_key, data_only=data_only,
-                                              configs=[self.model.selected_config])
+            results = self._plot_slice_panels(
+                plot_key, data_only=data_only, configs=[self.model.selected_config]
+            )
             self.slice_figs = {res['shank']: res['fig'] for res in results}
             self.plot_channel_panels(configs=[self.model.selected_config])
 
@@ -486,11 +514,7 @@ class AlignmentGUIController:
 
     @shank_loop
     def _plot_line_panels(
-            self,
-            items: ShankController,
-            plot_key: str,
-            data_only: bool = True,
-            **kwargs
+        self, items: ShankController, plot_key: str, data_only: bool = True, **kwargs
     ) -> None:
         """
         Plot line panels per shank and config.
@@ -528,11 +552,7 @@ class AlignmentGUIController:
 
     @shank_loop
     def _plot_feature_panels(
-            self,
-            items: ShankController,
-            plot_key: str,
-            data_only: bool = True,
-            **kwargs
+        self, items: ShankController, plot_key: str, data_only: bool = True, **kwargs
     ) -> None:
         """
         Plot feature panels per shank and config.
@@ -547,15 +567,15 @@ class AlignmentGUIController:
         items.plot_feature(plot_key)
 
     def plot_panels(
-            self,
-            plot_key: str,
-            plot_type: str,
-            plot_func: str,
-            init_attr: str,
-            dual_cb_name: str | None = None,
-            plugin_event: str | None = None,
-            data_only: bool = True,
-            **kwargs
+        self,
+        plot_key: str,
+        plot_type: str,
+        plot_func: str,
+        init_attr: str,
+        dual_cb_name: str | None = None,
+        plugin_event: str | None = None,
+        data_only: bool = True,
+        **kwargs,
     ) -> None:
         """
         Plot a generic panel per shank and config.
@@ -587,8 +607,7 @@ class AlignmentGUIController:
             return
 
         if self.model.selected_config == 'both':
-            results = self._plot_panels(plot_key, plot_type, plot_func, data_only,
-                                        **kwargs)
+            results = self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
@@ -600,13 +619,13 @@ class AlignmentGUIController:
 
     @shank_loop
     def _plot_panels(
-            self,
-            items: ShankController,
-            plot_key: str,
-            plot_type: str,
-            plot_func: str,
-            data_only: bool = True,
-            **kwargs
+        self,
+        items: ShankController,
+        plot_key: str,
+        plot_type: str,
+        plot_func: str,
+        data_only: bool = True,
+        **kwargs,
     ) -> Bunch:
         """
         Plot the panel per shank and config.
@@ -635,9 +654,16 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
-        self.plot_panels(plot_key, plot_type='scatter', plot_func='plot_scatter',
-                         init_attr='img_init', dual_cb_name='fig_dual_img_cb',
-                         plugin_event='plot_scatter_panels', data_only=data_only, **kwargs)
+        self.plot_panels(
+            plot_key,
+            plot_type='scatter',
+            plot_func='plot_scatter',
+            init_attr='img_init',
+            dual_cb_name='fig_dual_img_cb',
+            plugin_event='plot_scatter_panels',
+            data_only=data_only,
+            **kwargs,
+        )
 
     def plot_image_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -650,9 +676,16 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
-        self.plot_panels(plot_key, plot_type='image', plot_func='plot_image',
-                         init_attr='img_init', dual_cb_name='fig_dual_img_cb',
-                         plugin_event='plot_image_panels', data_only=data_only, **kwargs)
+        self.plot_panels(
+            plot_key,
+            plot_type='image',
+            plot_func='plot_image',
+            init_attr='img_init',
+            dual_cb_name='fig_dual_img_cb',
+            plugin_event='plot_image_panels',
+            data_only=data_only,
+            **kwargs,
+        )
 
     def plot_probe_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -665,9 +698,16 @@ class AlignmentGUIController:
         data_only: bool
             Whether the plot can be generated without histology data
         """
-        self.plot_panels(plot_key, plot_type='probe', plot_func='plot_probe',
-                         init_attr='probe_init', dual_cb_name='fig_dual_probe_cb',
-                         plugin_event='plot_probe_panels', data_only=data_only, **kwargs)
+        self.plot_panels(
+            plot_key,
+            plot_type='probe',
+            plot_func='plot_probe',
+            init_attr='probe_init',
+            dual_cb_name='fig_dual_probe_cb',
+            plugin_event='plot_probe_panels',
+            data_only=data_only,
+            **kwargs,
+        )
 
     def plot_dual_colorbar(self, results: Bunch, fig: str) -> None:
         """
@@ -691,8 +731,13 @@ class AlignmentGUIController:
         for shank in cbs:
             cb_default = cbs[shank].get(self.model.default_config)
             cb_non_default = cbs[shank].get(self.model.non_default_config)
-            cmap = cb_non_default.cmap_name \
-                if cb_non_default else cb_default.cmap_name if cb_default else None
+            cmap = (
+                cb_non_default.cmap_name
+                if cb_non_default
+                else cb_default.cmap_name
+                if cb_default
+                else None
+            )
             if not cmap:
                 continue
             fig_cb = getattr(self.shank_items[shank][self.model.default_config].view, fig)
@@ -979,13 +1024,9 @@ class AlignmentGUIController:
 
     @shank_loop
     def _filter_units(
-            self,
-            items: ShankController,
-            *args,
-            data_only: bool = True,
-            **kwargs
+        self, items: ShankController, *args, data_only: bool = True, **kwargs
     ) -> None:
-        """"See :meth:`ShankController.filter_units` for details."""
+        """See :meth:`ShankController.filter_units` for details."""
         items.filter_units(*args)
 
     # --------------------------------------------------------------------------------------------
@@ -1003,7 +1044,6 @@ class AlignmentGUIController:
             shanks_to_upload = self.all_shanks
 
         for shank in shanks_to_upload:
-
             self.model.selected_shank = shank
             self.model.current_shank = shank
 
@@ -1015,8 +1055,9 @@ class AlignmentGUIController:
             upload = self.view.upload_prompt()
             if upload:
                 info = self.model.upload_data()
-                self.view.populate_selection_dropdown('align',
-                                                      self.model.load_previous_alignments())
+                self.view.populate_selection_dropdown(
+                    'align', self.model.load_previous_alignments()
+                )
                 self.model.get_starting_alignment(0)
                 self.view.upload_info(upload, info)
             else:
@@ -1068,7 +1109,7 @@ class AlignmentGUIController:
 
         Called when Shift+down arrow is pressed.
         """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=-100/1e6)
+        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=-100 / 1e6)
 
     def moveup_button_pressed(self) -> None:
         """
@@ -1076,7 +1117,7 @@ class AlignmentGUIController:
 
         Called when Shift+up arrow is pressed.
         """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=100/1e6)
+        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=100 / 1e6)
 
     def fit_button_pressed(self) -> None:
         """
@@ -1173,11 +1214,7 @@ class AlignmentGUIController:
                 self.create_reference_line(pos.y() * items.view.y_scale, items)
 
     def on_mouse_hover(
-            self,
-            hover_items: list[pg.GraphicsObject],
-            name: str,
-            idx: int,
-            config: str
+        self, hover_items: list[pg.GraphicsObject], name: str, idx: int, config: str
     ) -> None:
         """
         Handle a mouse hover event over the pyqtgraph plot items.
@@ -1239,7 +1276,7 @@ class AlignmentGUIController:
         self._toggle_labels()
 
     @shank_loop
-    def _toggle_labels(self,  items: ShankController, **kwargs) -> None:
+    def _toggle_labels(self, items: ShankController, **kwargs) -> None:
         """See :meth:`ShankController.toggle_labels` for details."""
         items.toggle_labels(self.show_labels)
 
@@ -1375,7 +1412,9 @@ class AlignmentGUIController:
     @shank_loop
     def _get_yaxis_lims(self, items: ShankController, data_only=True, **kwargs) -> Bunch:
         """See :meth:`ShankController.get_yaxis_lims` for details."""
-        return Bunch(shank=kwargs.get('shank'), config=kwargs.get('config'), ylim=items.get_yaxis_lims())
+        return Bunch(
+            shank=kwargs.get('shank'), config=kwargs.get('config'), ylim=items.get_yaxis_lims()
+        )
 
     # --------------------------------------------------------------------------------------------
     # Grid / Tab display interactions
@@ -1468,23 +1507,26 @@ class AlignmentGUIController:
             Y-axis position at which to create the reference line.
         """
         # Create lines and point
-        line_track, line_features, point = (
-            items.create_reference_line_and_point(pos, fix_colour=len(self.all_shanks) > 1))
+        line_track, line_features, point = items.create_reference_line_and_point(
+            pos, fix_colour=len(self.all_shanks) > 1
+        )
         # Add callbacks
         line_track.sigPositionChanged.connect(
-            lambda track, i=items.index, c=items.config:
-            self.update_track_reference_line(track, i, c))
+            lambda track, i=items.index, c=items.config: self.update_track_reference_line(
+                track, i, c
+            )
+        )
         for line_feature in line_features:
             line_feature.sigPositionChanged.connect(
-                lambda feature, i=items.index, c=items.config:
-                self.update_feature_reference_line(feature, i, c))
+                lambda feature, i=items.index, c=items.config: self.update_feature_reference_line(
+                    feature, i, c
+                )
+            )
         # Add point to fit figure
         self.view.add_point(point)
 
     def create_reference_lines(
-            self,
-            positions: np.ndarray | list[float],
-            items: ShankController
+        self, positions: np.ndarray | list[float], items: ShankController
     ) -> None:
         """
         Create reference lines across at multiple positions.
@@ -1507,8 +1549,9 @@ class AlignmentGUIController:
             return
 
         line_idx = None
-        configs_to_check = self.model.configs if self.hover_config == 'both' else \
-            [self.hover_config]
+        configs_to_check = (
+            self.model.configs if self.hover_config == 'both' else [self.hover_config]
+        )
 
         for config in configs_to_check:
             items = self.shank_items[self.hover_shank][config]
@@ -1527,7 +1570,7 @@ class AlignmentGUIController:
         self._delete_reference_line(line_idx, shanks=[self.hover_shank])
 
     @shank_loop
-    def _delete_reference_line(self, items: ShankController, line_idx: int,  **kwargs) -> None:
+    def _delete_reference_line(self, items: ShankController, line_idx: int, **kwargs) -> None:
         """
         Delete a reference line from the display and remove from tracking arrays.
 
@@ -1544,10 +1587,7 @@ class AlignmentGUIController:
         items.delete_reference_line_and_point(line_idx)
 
     def update_feature_reference_line(
-            self,
-            feature_line: pg.InfiniteLine,
-            idx: int,
-            config: str
+        self, feature_line: pg.InfiniteLine, idx: int, config: str
     ) -> None:
         """
         Triggered when a reference line is moved in one of the electrophysiology plots.
@@ -1570,8 +1610,9 @@ class AlignmentGUIController:
 
         items = self.shank_items[self.model.selected_shank][config]
         line_idx, fig_idx = items.match_feature_line(feature_line)
-        self._update_feature_reference_line(feature_line, line_idx, fig_idx,
-                                            shanks=[self.model.selected_shank])
+        self._update_feature_reference_line(
+            feature_line, line_idx, fig_idx, shanks=[self.model.selected_shank]
+        )
 
     @shank_loop
     def _update_feature_reference_line(self, items: ShankController, *args, **kwargs) -> None:
@@ -1579,10 +1620,7 @@ class AlignmentGUIController:
         items.update_feature_reference_line_and_point(*args)
 
     def update_track_reference_line(
-            self,
-            track_line: pg.InfiniteLine,
-            idx: int,
-            config: str
+        self, track_line: pg.InfiniteLine, idx: int, config: str
     ) -> None:
         """
         Triggered when a reference line in the histology plot is moved.
@@ -1604,8 +1642,7 @@ class AlignmentGUIController:
 
         items = self.shank_items[self.model.selected_shank][config]
         line_idx = items.match_track_line(track_line)
-        self._update_track_reference_line(track_line, line_idx,
-                                          shanks=[self.model.selected_shank])
+        self._update_track_reference_line(track_line, line_idx, shanks=[self.model.selected_shank])
 
     @shank_loop
     def _update_track_reference_line(self, items: ShankController, *args, **kwargs) -> None:

@@ -1,9 +1,16 @@
-from ibl_alignment_gui.loaders.plot_loader import ScatterData, LineData, ImageData, ProbeData, skip_missing
+from types import MethodType
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+
+from ibl_alignment_gui.loaders.plot_loader import ScatterData, skip_missing
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
-import numpy as np
-from typing import Any
-from types import MethodType
+
+if TYPE_CHECKING:
+    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.shank_controller import ShankController
+
 
 PLUGIN_NAME = 'Additional Plots'
 
@@ -24,12 +31,25 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
 
 @shank_loop
-def add_plots(_, items, **kwargs):
+def add_plots(_, items: 'ShankController', **kwargs) -> None:
+    """
+    Add additional plots to the plot loader.
+
+    Parameters
+    ----------
+    _
+    items: ShankController
+        A ShankController instance.
+    -------
+
+    """
     # Add the additional data that may be required for the plots
     items.model.raw_data['clusters']['predicted_region'] = np.random.randint(
-        0, 500, size=items.model.raw_data['clusters']['peakToTrough'].shape)
-    items.model.loaders['plots'].scatter_amp_depth_prediction = (
-        MethodType(scatter_amp_depth_prediction, items.model.loaders['plots']))
+        0, 500, size=items.model.raw_data['clusters']['peakToTrough'].shape
+    )
+    items.model.loaders['plots'].scatter_amp_depth_prediction = MethodType(
+        scatter_amp_depth_prediction, items.model.loaders['plots']
+    )
 
 
 @skip_missing(['spikes'])
@@ -55,14 +75,16 @@ def scatter_amp_depth_prediction(self) -> dict[str, Any]:
         pen='k',
         size=np.array(8),
         symbol=np.array('o'),
-        xrange=np.array([0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
-                         1.1 * np.nanmax(self.avg_amp[self.cluster_idx])]),
+        xrange=np.array(
+            [
+                0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
+                1.1 * np.nanmax(self.avg_amp[self.cluster_idx]),
+            ]
+        ),
         xaxis='Amplitude (uV)',
         title='Prediction',
         cmap='Purples',
-        cluster=True
+        cluster=True,
     )
 
     return {'Cluster Amp vs Depth vs Prediction': scatter}
-
-

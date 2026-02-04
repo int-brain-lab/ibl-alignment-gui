@@ -41,7 +41,6 @@ class ShankController:
     """
 
     def __init__(self, model: ShankHandler, name: str, index: int, config: str):
-
         self.name: str = name
         self.index: int = index
         self.config: str = config
@@ -51,11 +50,11 @@ class ShankController:
         self.cluster_data: np.ndarray | None = None
 
     def init_reference_line_arrays(self):
-        """" See :meth:`ShankView.init_reference_line_arrays` for details."""
+        """See :meth:`ShankView.init_reference_line_arrays` for details."""
         self.view.init_reference_line_arrays()
 
     def init_plot_items(self):
-        """" See :meth:`ShankView.init_plot_items` for details."""
+        """See :meth:`ShankView.init_plot_items` for details."""
         self.view.init_plot_items()
 
     # --------------------------------------------------------------------------------------------
@@ -292,6 +291,7 @@ class ShankController:
     def get_yaxis_lims(self) -> list[float, float]:
         """
         Get the y-axis limits from the model.
+
         Returns
         -------
         list[float, float]
@@ -346,8 +346,9 @@ class ShankController:
             Whether to use a linear fit or not
         """
         line_feature, line_track = self.view.get_feature_and_track_coords()
-        self.model.scale_hist_data(line_track, line_feature,
-                                   extend_feature=extend_feature, lin_fit=lin_fit)
+        self.model.scale_hist_data(
+            line_track, line_feature, extend_feature=extend_feature, lin_fit=lin_fit
+        )
 
     def get_scaled_histology(self) -> None:
         """See :meth:`ShankHandler.get_scaled_histology` for details."""
@@ -394,7 +395,7 @@ class ShankController:
         self.view.align_reference_lines_and_points()
 
     def remove_reference_lines_from_display(self) -> None:
-        """" See :meth:`ShankView.remove_reference_lines_to_display` for details."""
+        """See :meth:`ShankView.remove_reference_lines_to_display` for details."""
         self.view.remove_reference_lines_from_display()
 
     def add_reference_lines_to_display(self) -> None:

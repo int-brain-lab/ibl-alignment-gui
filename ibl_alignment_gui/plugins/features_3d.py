@@ -18,14 +18,9 @@ if TYPE_CHECKING:
 
 from ibl_alignment_gui.utils.utils import shank_loop
 
-PLUGIN_NAME = "3D features"
+PLUGIN_NAME = '3D features'
 
-SHANK_COLOURS = {
-    'a': '#000000',
-    'b': '#30B666',
-    'c': '#ff0044',
-    'd': '#0000ff'
-}
+SHANK_COLOURS = {'a': '#000000', 'b': '#30B666', 'c': '#ff0044', 'd': '#0000ff'}
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -70,7 +65,8 @@ def setup(controller: 'AlignmentGUIController') -> None:
     region_action.setCheckable(True)
     region_action.setChecked(False)
     region_action.triggered.connect(
-        lambda a=region_action: feature3d_plugin.toggle_regions(region_action.isChecked()))
+        lambda a=region_action: feature3d_plugin.toggle_regions(region_action.isChecked())
+    )
     plugin_menu.addAction(region_action)
     feature3d_plugin.region_toggle = region_action
 
@@ -280,15 +276,17 @@ class Features3D:
             text = sorted(markers, key=lambda x: x['name'])
             self.texts = urchin.text.create(len(text))
             urchin.text.set_texts(self.texts, [t['name'] for t in text])
-            urchin.text.set_positions(self.texts,
-                                      [[-0.95, 0.95], [-0.95, 0.9], [-0.95, 0.85], [-0.95, 0.8]])
+            urchin.text.set_positions(
+                self.texts, [[-0.95, 0.95], [-0.95, 0.9], [-0.95, 0.85], [-0.95, 0.8]]
+            )
             urchin.text.set_font_sizes(self.texts, [24, 24, 24, 24])
             urchin.text.set_colors(self.texts, [t['col'] for t in text])
 
     def update_plots(self) -> None:
         """Update the plots in the 3D view based on the current selection."""
-        self.plot_channels(self.plot_type) if self.plot == 'channels' \
-            else self.plot_clusters(self.plot_type)
+        self.plot_channels(self.plot_type) if self.plot == 'channels' else self.plot_clusters(
+            self.plot_type
+        )
 
     def plot_channels(self, plot_key: str, *args) -> None:
         """
@@ -329,19 +327,21 @@ class Features3D:
         """
         self.plot_type = plot_key
 
-        if (self.controller.model.selected_config == 'both'
-                or not self.controller.model.selected_config):
+        if (
+            self.controller.model.selected_config == 'both'
+            or not self.controller.model.selected_config
+        ):
             data = update_function(self.controller, plot_key)
         else:
-            data = update_function(self.controller, plot_key,
-                                   configs=[self.controller.model.selected_config])
+            data = update_function(
+                self.controller, plot_key, configs=[self.controller.model.selected_config]
+            )
 
         colours = []
         positions = []
         markers = []
 
         for dat in data:
-
             if dat['xyz'] is None:
                 continue
 
@@ -358,9 +358,11 @@ class Features3D:
             # Find the position to put the shank indicators
             min_idx = np.argmin(mlapdv[:, 2])
 
-            sh_info = {'name': shank,
-                       'pos': [mlapdv[min_idx, 1], mlapdv[min_idx, 0], mlapdv[min_idx, 2] - 200],
-                       'col': SHANK_COLOURS.get(shank[-1], create_random_color())}
+            sh_info = {
+                'name': shank,
+                'pos': [mlapdv[min_idx, 1], mlapdv[min_idx, 0], mlapdv[min_idx, 2] - 200],
+                'col': SHANK_COLOURS.get(shank[-1], create_random_color()),
+            }
             if self.controller.model.selected_config != 'both' or dat['config'] == 'quarter':
                 markers.append(sh_info)
 
@@ -385,12 +387,7 @@ def create_random_color() -> str:
     return rgb2hex((r / 255, g / 255, b / 255))
 
 
-def data_to_colors(
-        data: list | np.ndarray,
-        cmap: str,
-        vmin: float,
-        vmax: float
-) -> list:
+def data_to_colors(data: list | np.ndarray, cmap: str, vmin: float, vmax: float) -> list:
     """
     Convert data values to hex color codes.
 

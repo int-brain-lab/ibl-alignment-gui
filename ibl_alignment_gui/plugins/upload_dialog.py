@@ -7,7 +7,7 @@ from ibl_alignment_gui.utils.qt.custom_widgets import CheckBoxGroup
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
 
-PLUGIN_NAME = "Upload dialog"
+PLUGIN_NAME = 'Upload dialog'
 
 
 def setup(controller: 'AlignmentGUIController'):
@@ -70,9 +70,8 @@ class UploadDialog(QtWidgets.QDialog):
         self.dialog_layout.addWidget(button_box)
         self.setLayout(self.dialog_layout)
 
-
     def add_shanks(self) -> None:
-        """Add the current shanks to the dropdown options"""
+        """Add the current shanks to the dropdown options."""
         # Replace the options in the CheckBoxGroup
         options = ['All'] + self.controller.all_shanks
         self.shank_options.add_options(options)

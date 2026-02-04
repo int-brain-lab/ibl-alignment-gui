@@ -4,13 +4,14 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 # -- Path setup --------------------------------------------------------------
-from pathlib import Path
-from datetime import date
 import sys
-project_root = Path(__file__).parents[2].resolve()
-sys.path.insert(0, project_root)
+from datetime import date
+from pathlib import Path
 
 from ibl_alignment_gui import __version__
+
+project_root = Path(__file__).parents[2].resolve()
+sys.path.insert(0, project_root)
 
 
 # -- Project information -----------------------------------------------------

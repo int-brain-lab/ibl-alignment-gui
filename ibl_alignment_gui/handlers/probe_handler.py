@@ -114,11 +114,18 @@ class ProbeHandler(ABC):
         # one (if it exists)
         if self.non_default_config is not None:
             self.get_selected_shank()[self.non_default_config].loaders['align'].alignments = (
-                self.get_selected_shank()[self.default_config].loaders['align'].alignments)
+                self.get_selected_shank()[self.default_config].loaders['align'].alignments
+            )
 
-            self.get_selected_shank()[self.non_default_config].loaders['align'].get_previous_alignments()
+            self.get_selected_shank()[self.non_default_config].loaders[
+                'align'
+            ].get_previous_alignments()
 
-        return self.get_selected_shank()[self.default_config].loaders['align'].get_previous_alignments()
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_previous_alignments()
+        )
 
     def get_previous_alignments(self) -> dict:
         """
@@ -131,8 +138,11 @@ class ProbeHandler(ABC):
         dict
             Previous alignments for the selected shank
         """
-        return (self.get_selected_shank()[self.default_config].loaders['align']
-                .get_previous_alignments())
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_previous_alignments()
+        )
 
     def get_starting_alignment(self, idx: int) -> None:
         """
@@ -415,11 +425,11 @@ class ProbeHandlerONE(ProbeHandler):
     """
 
     def __init__(
-            self,
-            one: ONE = None,
-            brain_atlas: AllenAtlas | None = None,
-            spike_collection: str | None = None):
-
+        self,
+        one: ONE = None,
+        brain_atlas: AllenAtlas | None = None,
+        spike_collection: str | None = None,
+    ):
         self.one = one or ONE()
         self.spike_collection = spike_collection
         super().__init__(brain_atlas)
@@ -433,8 +443,9 @@ class ProbeHandlerONE(ProbeHandler):
         np.ndarray
             An array of subject names
         """
-        self.sess_ins = self.one.alyx.rest('insertions', 'list', dataset_type='spikes.times',
-                                           expires=timedelta(days=1))
+        self.sess_ins = self.one.alyx.rest(
+            'insertions', 'list', dataset_type='spikes.times', expires=timedelta(days=1)
+        )
         self.subj_ins = [sess['session_info']['subject'] for sess in self.sess_ins]
         self.subjects = np.unique(self.subj_ins)
 
@@ -512,9 +523,13 @@ class ProbeHandlerONE(ProbeHandler):
         str:
             A string with the session info and probe name
         """
-        return (ins['session_info']['start_time'][:10] + ' ' +
-                f"{ins['session_info']['number']:03}" + ' ' +
-                self.normalize_shank_label(ins['name']))
+        return (
+            ins['session_info']['start_time'][:10]
+            + ' '
+            + f'{ins["session_info"]["number"]:03}'
+            + ' '
+            + self.normalize_shank_label(ins['name'])
+        )
 
     def set_info(self, idx):
         """
@@ -569,10 +584,8 @@ class ProbeHandlerCSV(ProbeHandler):
     """
 
     def __init__(
-            self,
-            csv_file: str | Path,
-            one: ONE = None,
-            brain_atlas: AllenAtlas | None = None):
+        self, csv_file: str | Path, one: ONE = None, brain_atlas: AllenAtlas | None = None
+    ):
         super().__init__(brain_atlas)
 
         csv_file = Path(csv_file)
@@ -832,8 +845,7 @@ class ProbeHandlerLocal(ProbeHandler):
 
 class ProbeHandlerLocalYaml(ProbeHandler):
     """
-    Local file system implementation of ProbeHandler that uses a yaml file to configure
-    the data paths.
+    Local file system implementation of ProbeHandler that uses a yaml file.
 
     The yaml file contains information about where to read the relevant data from.
     """
@@ -855,10 +867,12 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         """
         Initialise the shanks based on the yaml file.
 
-        If only one probe label is given we load in the geometry to see if it is a multi-shank recording.
-        Otherwise, we assume the yaml has specified all shanks and these are treated individually.
+        If only one probe label is given we load in the geometry to see if it is a
+        multi-shank recording. Otherwise, we assume the yaml has specified all shanks
+        and these are treated individually.
         """
-        # If we have only one probe label we load in the geometry to see if it is a multi-shank recording
+        # If we have only one probe label we load in the geometry to see if it is a
+        # multi-shank recording
         if len(self.probes) == 1:
             # Load in the geometry and find the number of shanks
             data_path = self.data_paths[self.default_config][self.probes[0]]
@@ -893,7 +907,6 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
     def download_histology(self) -> NrrdSliceLoader:
         """Load in the histology slice data."""
-        # TODO this is a bit of a hack. We assume histology path is the same for all shanks and configs
         histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
         return NrrdSliceLoader(histology_path, self.brain_atlas)
 

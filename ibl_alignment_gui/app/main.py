@@ -5,7 +5,8 @@ from qtpy import QtWidgets
 from ibl_alignment_gui.app.app_controller import AlignmentGUIController
 
 
-def launch_app():
+def launch_app() -> None:
+    """Launch the alignment GUI application in offline mode with optional YAML file."""
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-y', '--yaml', required=False, type=str, help='Path to the YAML file')
@@ -18,7 +19,8 @@ def launch_app():
     app.exec_()
 
 
-def launch_app_ibl():
+def launch_app_ibl() -> None:
+    """Launch the alignment GUI application in IBL mode with optional CSV file."""
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-c', '--csv', required=False, type=str, help='Path to the CSV file')

@@ -20,15 +20,13 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     ----------
     offline: bool
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
-    csv: Path or str or None
-        Path to a CSV file containing local sessions on the filesystem.
+    config: bool
+        Whether multiple configs are to be used
     """
 
-    def __init__(self, offline: bool = False, csv: bool = False):
-
+    def __init__(self, offline: bool = False, config: bool = False):
         super().__init__()
-        self.offline: bool = offline
-        self.csv: bool = csv
+        self.config = config
 
         self.resize(1600, 800)
         self.setWindowTitle('IBL alignment GUI')
@@ -37,7 +35,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         # Create custom widgets that will be added to the main window
         self.button_widgets = custom_widgets.ButtonWidget(parent=self)
         self.selection_widgets = custom_widgets.SelectionWidget(
-            offline=self.offline, config=self.csv, parent=self)
+            offline=offline, config=self.config, parent=self
+        )
         self.menu_widgets = custom_widgets.MenuWidget(self)
         self.setMenuBar(self.menu_widgets)
         self.menu_widgets.setCornerWidget(self.selection_widgets, corner=QtCore.Qt.TopRightCorner)
@@ -437,10 +436,20 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         selected_path: Path
             The user selected path that contains data to load
         """
-        selected_path = Path(QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select Folder"))
+        selected_path = Path(QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder'))
         self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
         return selected_path
+
+    def set_selected_path(self, selected_path: Path | str) -> None:
+        """
+        Set the text line edit to show the selected folder path.
+
+        Parameters
+        ----------
+        selected_path: Path or str
+            The user selected path that contains data to load
+        """
+        self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
 
     # --------------------------------------------------------------------------------------------
     # LUT widget

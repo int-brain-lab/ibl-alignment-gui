@@ -3,7 +3,6 @@ import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ import spikeglx
 import ibldsp.voltage
 import one.alf.io as alfio
 from brainbox.io.spikeglx import Streamer
+from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -22,34 +22,6 @@ from one.api import ONE
 from one.remote import aws
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CollectionData:
-    """
-    Container for dataset collection names used in an experiment.
-
-    Attributes
-    ----------
-    spike_collection : str or None
-        Collection name for spike-sorted data (e.g., 'alf/probe00/iblsorter'),
-        default is empty string.
-    ephys_collection : str or None
-        Collection name for raw electrophysiology data (e.g., 'raw_ephys_data').
-    task_collection : str or None
-        Collection name for task data (e.g., 'alf/task01').
-    raw_task_collection : str or None
-        Collection name for raw task data (e.g., 'raw_task01').
-    meta_collection : str or None
-        Collection name for raw electrophysiology metadata with probe info
-        (e.g., 'raw_ephys_data').
-    """
-
-    spike_collection: str | None = ''
-    ephys_collection: str | None = ''
-    task_collection: str | None = ''
-    raw_task_collection: str | None = ''
-    meta_collection: str | None = ''
 
 
 class DataLoader(ABC):
@@ -139,8 +111,9 @@ class DataLoader(ABC):
                 data['exists'] = True
             return data
         except raise_exception as e:
-            raise_message = raise_message or (f'{alf_object} data was not found, '
-                                              f'some plots will not display')
+            raise_message = raise_message or (
+                f'{alf_object} data was not found, some plots will not display'
+            )
             logger.warning(raise_message)
             if raise_error:
                 logger.error(raise_message)
@@ -172,9 +145,10 @@ class DataLoader(ABC):
         try:
             rf_data = self.load_passive_data('passiveRFM')
             frame_path = self.load_raw_passive_data('RFMapStim')
-            frames = np.fromfile(frame_path['raw'], dtype="uint8")
-            rf_data['frames'] = np.transpose(np.reshape(frames, [15, 15, -1],
-                                                        order="F"), [2, 1, 0])
+            frames = np.fromfile(frame_path['raw'], dtype='uint8')
+            rf_data['frames'] = np.transpose(
+                np.reshape(frames, [15, 15, -1], order='F'), [2, 1, 0]
+            )
         except Exception:
             logger.warning('passiveRFM data was not found, some plots will not display')
             rf_data = Bunch(exists=False)
@@ -190,9 +164,11 @@ class DataLoader(ABC):
             else:
                 vis_stim = Bunch()
                 vis_stim['leftGabor'] = gabor['start'][
-                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)]
+                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)
+                ]
                 vis_stim['rightGabor'] = gabor['start'][
-                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)]
+                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)
+                ]
                 vis_stim['exists'] = True
         except Exception:
             logger.warning('Failed to process passiveGabor data, some plots will not display')
@@ -513,15 +489,14 @@ class DataLoaderLocal(DataLoader):
         Object containing subcollection paths for spike, ephys, task, raw_task, and metadata.
     """
 
-    def __init__(self, probe_path: Path, collections: CollectionData):
+    def __init__(self, data_paths: DatasetPaths):
 
-        self.probe_path: Path = probe_path
-        self.spike_path: Path = probe_path.joinpath(collections.spike_collection)
-        self.ephys_path: Path = probe_path.joinpath(collections.ephys_collection)
-        self.task_path: Path = probe_path.joinpath(collections.task_collection)
-        self.raw_task_path: Path = probe_path.joinpath(collections.raw_task_collection)
-        self.meta_path: Path = probe_path.joinpath(collections.meta_collection)
-        self.probe_collection: str = collections.spike_collection
+        self.spike_path: Path = data_paths.spike_sorting
+        self.ephys_path: Path = data_paths.processed_ephys
+        self.task_path: Path = data_paths.task
+        self.raw_task_path: Path = data_paths.raw_task
+        self.meta_path: Path = data_paths.raw_ephys
+        self.probe_collection: str = self.spike_path.name
 
         super().__init__()
 
@@ -541,9 +516,24 @@ class DataLoaderLocal(DataLoader):
 
         Returns
         -------
-        Bunch
+        Bunch or None
         """
         return self.load_data(alfio.load_object, self.raw_task_path, alf_object)
+
+    def get_passive_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
+        """
+        Load passive data from local path.
+
+        Only attempts to load if both task_path and raw_task_path are defined.
+
+        Returns
+        -------
+        Bunch or None
+        """
+        if self.task_path is None and self.raw_task_path is None:
+            return Bunch(exists=False), Bunch(exists=False), Bunch(exists=False)
+
+        return super().get_passive_data()
 
     def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
         """
@@ -842,9 +832,8 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         Name of subfolder containing meta and binary files.
     """
 
-    def __init__(self, probe_path: Path, meta_collection: str):
-
-        self.meta_path: Path = probe_path.joinpath(meta_collection)
+    def __init__(self, meta_path: Path):
+        self.meta_path: Path = meta_path
 
         super().__init__(self.meta_path)
 

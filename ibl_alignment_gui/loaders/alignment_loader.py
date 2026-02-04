@@ -1,4 +1,5 @@
 import json
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,8 @@ import numpy as np
 
 from iblutil.util import Bunch
 from one.api import ONE
+
+logger = logging.getLogger(__name__)
 
 
 class AlignmentLoader(ABC):

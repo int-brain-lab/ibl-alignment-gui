@@ -347,7 +347,6 @@ class ShankHandler:
                 'alignments': self.loaders['align'].alignments,
                 'cluster_chns': self.cluster_chns,
                 'probe_collection': self.loaders['data'].probe_collection,
-                'probe_path': self.loaders['data'].probe_path,
                 'chn_depths': self.chn_depths,
                 'xyz_picks': self.loaders['align'].xyz_picks,
                 }

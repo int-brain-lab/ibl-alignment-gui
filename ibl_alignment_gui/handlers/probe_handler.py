@@ -18,7 +18,6 @@ from ibl_alignment_gui.loaders.alignment_uploader import (
     AlignmentUploaderOne,
 )
 from ibl_alignment_gui.loaders.data_loader import (
-    CollectionData,
     DataLoaderLocal,
     DataLoaderOne,
     FeatureLoaderOne,
@@ -34,6 +33,7 @@ from ibl_alignment_gui.loaders.histology_loader import (
     download_histology_data,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
+from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
 from iblatlas.atlas import AllenAtlas
 from iblutil.util import Bunch
 from one import params
@@ -58,7 +58,6 @@ class ProbeHandler(ABC):
     """
 
     def __init__(self, brain_atlas: AllenAtlas):
-
         self.brain_atlas: AllenAtlas = brain_atlas or AllenAtlas()
         self.shanks: dict[str, Bunch] = defaultdict(Bunch)
 
@@ -482,8 +481,11 @@ class ProbeHandlerONE(ProbeHandler):
         """
         self.chosen_probe = self.sessions[idx]
 
-        sess_idx = [i for i, e in enumerate(self.sess) if
-                    self.get_session_probe_name(e) == self.chosen_probe]
+        sess_idx = [
+            i
+            for i, e in enumerate(self.sess)
+            if self.get_session_probe_name(e) == self.chosen_probe
+        ]
         self.shank_labels = [self.sess[idx] for idx in sess_idx]
         shanks = [s['name'] for s in self.shank_labels]
         idx = np.argsort(shanks)
@@ -541,8 +543,9 @@ class ProbeHandlerONE(ProbeHandler):
         for ins in self.shank_labels:
             loaders = Bunch()
             loaders['data'] = DataLoaderOne(ins, self.one, spike_collection=self.spike_collection)
-            loaders['geom'] = GeometryLoaderOne(ins, self.one,
-                                                probe_collection=loaders['data'].probe_collection)
+            loaders['geom'] = GeometryLoaderOne(
+                ins, self.one, probe_collection=loaders['data'].probe_collection
+            )
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
@@ -617,8 +620,9 @@ class ProbeHandlerCSV(ProbeHandler):
             All probes with spikesorting data for the chosen session
         """
         self.session_df = self.df.loc[self.df['session_strip'] == self.subjects[idx]]
-        self.sessions = np.unique([self.normalize_shank_label(pr)
-                                   for pr in self.session_df['probe'].values])
+        self.sessions = np.unique(
+            [self.normalize_shank_label(pr) for pr in self.session_df['probe'].values]
+        )
         return self.sessions
 
     def get_shanks(self, idx: int) -> np.ndarray:
@@ -637,7 +641,8 @@ class ProbeHandlerCSV(ProbeHandler):
         """
         shank = self.sessions[idx]
         self.shank_df = self.session_df.loc[
-            self.session_df['probe'].str.contains(shank)].sort_values('probe')
+            self.session_df['probe'].str.contains(shank)
+        ].sort_values('probe')
         self.initialise_shanks()
         self.shank_labels = self.shank_df['probe'].unique()
         return self.shank_labels
@@ -666,42 +671,44 @@ class ProbeHandlerCSV(ProbeHandler):
 
         for _, shank in self.shank_df.iterrows():
             loaders = Bunch()
-            collections = CollectionData(
-                spike_collection=shank.spike_collection or '',
-                ephys_collection=shank.ephys_collection or '',
-                task_collection=shank.task_collection or '',
-                raw_task_collection=shank.raw_task_collection or '',
-                meta_collection=shank.meta_collection or '')
-
             local_path = self.root_path.joinpath(shank.local_path)
+
+            data_paths = DatasetPaths(
+                spike_sorting=local_path.joinpath(shank.spike_collection or ''),
+                processed_ephys=local_path.joinpath(shank.ephys_collection or ''),
+                raw_ephys=local_path.joinpath(shank.meta_collection or ''),
+                task=local_path.joinpath(shank.task_collection or ''),
+                raw_task=local_path.joinpath(shank.raw_task_collection or ''),
+            )
 
             ins = self.get_insertion(shank)
             xyz_picks = ins['json'].get('xyz_picks', None)
             xyz_picks = np.array(xyz_picks) / 1e6 if xyz_picks is not None else None
 
             if shank.is_quarter:  # Quarter is offline
-                loaders['data'] = DataLoaderLocal(local_path, collections)
-                loaders['geom'] = GeometryLoaderLocal(local_path, collections)
+                loaders['data'] = DataLoaderLocal(data_paths)
+                loaders['geom'] = GeometryLoaderLocal(data_paths)
                 loaders['align'] = AlignmentLoaderLocal(
-                    local_path.joinpath(collections.spike_collection), 0, 1,
-                    user=user, xyz_picks=xyz_picks)
+                    data_paths.spike_sorting, 0, 1, user=user, xyz_picks=xyz_picks
+                )
                 loaders['upload'] = AlignmentUploaderLocal(
-                    local_path.joinpath(collections.spike_collection), 0, loaders['geom'],
-                    self.brain_atlas, user=user)
-                loaders['ephys'] = SpikeGLXLoaderLocal(local_path, collections.meta_collection)
+                    data_paths.spike_sorting, 0, loaders['geom'], self.brain_atlas, user=user
+                )
+                loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
                 loaders['plots'] = PlotLoader()
                 loaders['features'] = FeatureLoaderOne(ins, self.one)
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
                 # If we don't have the data locally we download it
-                if collections.spike_collection == '':
+                if data_paths.spike_sorting == local_path:
                     loaders['data'] = DataLoaderOne(ins, self.one)
                     loaders['geom'] = GeometryLoaderOne(
-                        ins, self.one, probe_collection=loaders['data'].probe_collection)
+                        ins, self.one, probe_collection=loaders['data'].probe_collection
+                    )
                 # Otherwise we load from local
                 else:
-                    loaders['data'] = DataLoaderLocal(local_path, collections)
-                    loaders['geom'] = GeometryLoaderLocal(local_path, collections)
+                    loaders['data'] = DataLoaderLocal(data_paths)
+                    loaders['geom'] = GeometryLoaderLocal(data_paths)
 
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
@@ -765,19 +772,26 @@ class ProbeHandlerLocal(ProbeHandler):
         folder_path : Path
             A path to the folder on the local disk that contains the data
         """
-        self.folder_path = folder_path
-        collections = CollectionData()
+        self.data_paths = DatasetPaths(
+            spike_sorting=folder_path,
+            processed_ephys=folder_path,
+            raw_ephys=folder_path,
+            histology=folder_path,
+            picks=folder_path,
+            output=folder_path,
+        )
 
         # Load in the geometry and find the number of shnaks
-        self.geom = GeometryLoaderLocal(self.folder_path, collections)
+        self.geom = GeometryLoaderLocal(self.data_paths)
         self.geom.get_geometry()
 
         self.n_shanks = self.geom.channels.n_shanks
         if self.n_shanks == 1:
             self.shank_labels = ['1/1']
         else:
-            self.shank_labels = [f'{iShank + 1}/{self.n_shanks}'
-                                 for iShank in range(self.n_shanks)]
+            self.shank_labels = [
+                f'{iShank + 1}/{self.n_shanks}' for iShank in range(self.n_shanks)
+            ]
 
         self.initialise_shanks()
 
@@ -797,7 +811,7 @@ class ProbeHandlerLocal(ProbeHandler):
 
     def download_histology(self) -> NrrdSliceLoader:
         """Load in the histology slice data."""
-        return NrrdSliceLoader(self.folder_path, self.brain_atlas)
+        return NrrdSliceLoader(self.data_paths.histology, self.brain_atlas)
 
     def initialise_shanks(self) -> None:
         """Initialise each shank with the loaders."""
@@ -806,10 +820,100 @@ class ProbeHandlerLocal(ProbeHandler):
         for ish, ishank in enumerate(self.shank_labels):
             loaders = Bunch()
             loaders['geom'] = self.geom
-            loaders['data'] = DataLoaderLocal(self.folder_path, CollectionData())
-            loaders['align'] = AlignmentLoaderLocal(self.folder_path, ish, self.n_shanks)
-            loaders['upload'] = AlignmentUploaderLocal(self.folder_path, ish, self.n_shanks,
-                                                       self.brain_atlas)
-            loaders['ephys'] = SpikeGLXLoaderLocal(self.folder_path, '')
+            loaders['data'] = DataLoaderLocal(self.data_paths)
+            loaders['align'] = AlignmentLoaderLocal(self.data_paths.picks, ish, self.n_shanks)
+            loaders['upload'] = AlignmentUploaderLocal(
+                self.data_paths.output, ish, self.n_shanks, self.brain_atlas
+            )
+            loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
             loaders['plots'] = PlotLoader()
             self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
+
+
+class ProbeHandlerLocalYaml(ProbeHandler):
+    """
+    Local file system implementation of ProbeHandler that uses a yaml file to configure
+    the data paths.
+
+    The yaml file contains information about where to read the relevant data from.
+    """
+
+    def __init__(self, yaml_file: str | Path, brain_atlas: AllenAtlas | None = None):
+        super().__init__(brain_atlas)
+        configs, probes, self.data_paths = load_alignment_yaml(yaml_file)
+
+        if len(configs) > 1:
+            self.configs = configs
+            self.default_config = self.configs[0]
+            self.non_default_config = self.configs[1]
+            self.possible_configs = self.configs + ['both']
+            self.selected_config = self.configs[0]
+
+        self.probes = probes
+
+    def get_shanks(self, _) -> list[str]:
+        """
+        Initialise the shanks based on the yaml file.
+
+        If only one probe label is given we load in the geometry to see if it is a multi-shank recording.
+        Otherwise, we assume the yaml has specified all shanks and these are treated individually.
+        """
+        # If we have only one probe label we load in the geometry to see if it is a multi-shank recording
+        if len(self.probes) == 1:
+            # Load in the geometry and find the number of shanks
+            data_path = self.data_paths[self.default_config][self.probes[0]]
+            self.geom = GeometryLoaderLocal(data_path)
+            self.geom.get_geometry()
+
+            self.n_shanks = self.geom.channels.n_shanks
+            if self.n_shanks == 1:
+                self.shank_labels = self.probes
+            else:
+                self.shank_labels = [f'shank_{iShank + 1}' for iShank in range(self.n_shanks)]
+        # Otherwise we assume the yaml has specified all shanks and these are treated individually
+        else:
+            self.shank_labels = self.probes
+            self.n_shanks = 1
+
+        self.initialise_shanks()
+
+        return self.shank_labels
+
+    def set_info(self, idx: int) -> None:
+        """
+        Set the information about the selected shank.
+
+        Parameters
+        ----------
+        idx: int
+            The index of the selected shank
+        """
+        self.selected_shank = self.shank_labels[idx]
+        self.selected_idx = idx
+
+    def download_histology(self) -> NrrdSliceLoader:
+        """Load in the histology slice data."""
+        # TODO this is a bit of a hack. We assume histology path is the same for all shanks and configs
+        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
+        return NrrdSliceLoader(histology_path, self.brain_atlas)
+
+    def initialise_shanks(self) -> None:
+        """Initialise each shank and config with the selected loaders."""
+        self.shanks = defaultdict(Bunch)
+
+        for ish, shank in enumerate(self.shank_labels):
+            ishank = ish if self.n_shanks > 1 else 0
+
+            for config in self.configs:
+                data_paths = self.data_paths[config][shank]
+
+                loaders = Bunch()
+                loaders['data'] = DataLoaderLocal(data_paths)
+                loaders['geom'] = GeometryLoaderLocal(data_paths)
+                loaders['align'] = AlignmentLoaderLocal(data_paths.picks, ishank, self.n_shanks)
+                loaders['upload'] = AlignmentUploaderLocal(
+                    data_paths.output, ishank, loaders['geom'], self.brain_atlas
+                )
+                loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
+                loaders['plots'] = PlotLoader()
+                self.shanks[shank][config] = ShankHandler(loaders, ishank)

@@ -162,12 +162,12 @@ class DataLoader(ABC):
                 vis_stim = Bunch(exists=False)
             else:
                 vis_stim = Bunch()
-                vis_stim['leftGabor'] = gabor['start'][
+                vis_stim['leftGabor'] = np.array(gabor['start'][
                     (gabor['position'] == 35) & (gabor['contrast'] > 0.1)
-                ]
-                vis_stim['rightGabor'] = gabor['start'][
+                ], dtype=np.float64)
+                vis_stim['rightGabor'] =  np.array(gabor['start'][
                     (gabor['position'] == -35) & (gabor['contrast'] > 0.1)
-                ]
+                ], dtype=np.float64)
                 vis_stim['exists'] = True
         except Exception:
             logger.warning('Failed to process passiveGabor data, some plots will not display')

@@ -17,7 +17,7 @@ from brainbox.io.spikeglx import Streamer
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFObjectNotFound
+from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
 from one.api import ONE
 from one.remote import aws
 
@@ -78,7 +78,10 @@ class DataLoader(ABC):
         load_function: Callable,
         *args: Any,
         raise_message: str | None = None,
-        raise_exception: Exception = ALFObjectNotFound,
+        raise_exception: type[Exception] | tuple[type[Exception], ...] = (
+            ALFObjectNotFound,
+            ALFMultipleCollectionsFound,
+        ),
         raise_error: bool = False,
         **kwargs,
     ) -> Bunch[str, Any]:
@@ -110,9 +113,16 @@ class DataLoader(ABC):
                 data['exists'] = True
             return data
         except raise_exception as e:
-            raise_message = raise_message or (
-                f'{alf_object} data was not found, some plots will not display'
-            )
+            if raise_message is None:
+                if isinstance(e, ALFMultipleCollectionsFound):
+                    raise_message = (
+                        f'{alf_object} data matches multiple collections ({e}); '
+                        f'cannot disambiguate, some plots will not display'
+                    )
+                else:
+                    raise_message = (
+                        f'{alf_object} data was not found, some plots will not display'
+                    )
             logger.warning(raise_message)
             if raise_error:
                 logger.error(raise_message)

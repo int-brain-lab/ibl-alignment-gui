@@ -1,254 +1,561 @@
+from iblatlas.atlas import AllenAtlas
 import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+from torch.utils.data import DataLoader
 
 import numpy as np
 import pandas as pd
-
 import torch
-from torch.utils.data import DataLoader
 import ephysatlas.data
 
-from ephysatlas.spatial_encoder.utils import (ContextAtlasManager, AtlasPCAConfig, GridDS, LoadInsertionData,
-                                              build_channels_plus_emptyvoxels_with_neighbors, NeighborCollate, FEATURE_LIST)
-from ephysatlas.spatial_encoder.model import NeighborInpaintingModel
+MODEL_VINTAGE = "2026_W12"
+MODEL_NAME = "Spatial encoder"
 
-from typing import Optional
-from dataclasses import dataclass
+# -----------------------------------------------------------------------------
+# Ephys Atlas repository imports
+# -----------------------------------------------------------------------------
+from ephysatlas.spatial_encoder.utils import (
+    AtlasPCAConfig,
+    ContextAtlasManager,
+    LoadInsertionData,
+    build_channels_plus_emptyvoxels_with_neighbors,
+    FEATURE_LIST,
+    region_ids_from_xyz,
+    GridDS,
+    NeighborCollate,
+)
 
-
-MODEL_NAME = 'Spatial encoder'
+from ephysatlas.spatial_encoder.model import (
+    NeighborInpaintingModel,
+    ProbeConfidenceTrainConfig,
+    ProbeSequenceConfidenceTransformer,
+    predict_probe_confidence_classes,
+)
 
 @dataclass
 class AlignmentEngine:
-    device: str
-    cfg: 'AtlasPCAConfig'
-    ctx_manager: 'ContextAtlasManager'
-    model: 'NeighborInpaintingModel'
+    device: torch.device
+    cfg: AtlasPCAConfig
+    ctx_manager: ContextAtlasManager
+    model: NeighborInpaintingModel
     handles: dict
-    e_mean: 'torch.Tensor'
-    e_std:  'torch.Tensor'
-    ctx_mean: 'torch.Tensor'
-    ctx_std:  'torch.Tensor'
+    e_mean: torch.Tensor
+    e_std: torch.Tensor
+    ctx_mean: torch.Tensor
+    ctx_std: torch.Tensor
     M_MAX: int
     RADIUS_UM: float
     optimization_features: np.ndarray
+    model_name: str
+    local_path: Path
+    conf_model: Optional[torch.nn.Module] = None
 
-def load_alignment_engine(controller: 'AlignmentGUIController') -> AlignmentEngine:
-    print('Data loading and model initialization (one-time)')
+
+def alignment_handles_from_loader(train_loader):
+    collate = train_loader.collate_fn
+    return dict(
+        bank_xyz=collate.bank_xyz,
+        bank_feat=collate.bank_feat,
+        bank_pid=collate.bank_pid,
+        nn_bank=collate.nn,
+    )
+
+
+def _as_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _load_optional_conf_model(*, model_path: Path, device: torch.device, f_ctx: int, f_e: int):
+    conf_path = model_path / "probe_conf_model.pt"
+    if not conf_path.exists():
+        print(f"[Alignment engine] No confidence model found at {conf_path}; continuing without it.")
+        return None
+
+    ckpt = torch.load(conf_path, map_location=device)
+    conf_cfg = ProbeConfidenceTrainConfig(**ckpt.get("cfg", {}))
+    conf_model = ProbeSequenceConfidenceTransformer(
+        f_ctx=f_ctx,
+        f_e=f_e,
+        d_model=conf_cfg.d_model,
+        nhead=conf_cfg.nhead,
+        depth=conf_cfg.depth,
+        mlp_ratio=conf_cfg.mlp_ratio,
+        drop=conf_cfg.drop,
+    ).to(device)
+    conf_model.load_state_dict(ckpt["conf_model_state"])
+    conf_model.eval()
+    return conf_model
+
+
+def _build_context_manager(cfg: AtlasPCAConfig, *, model_name: str, local_path: Path, model_path: Path):
+    """Compatibility wrapper for old/new ContextAtlasManager signatures."""
+    try:
+        # Old GUI/debug version sometimes accepted model_name and output_dir=local_path.
+        return ContextAtlasManager(
+            cfg,
+            regenerate_context=False,
+            model_name=model_name,
+            output_dir=local_path,
+        )
+    except TypeError:
+        # New split utils.py signature: ContextAtlasManager(cfg, regenerate_context, output_dir).
+        # The downloaded PCA files are usually inside model_path.
+        return ContextAtlasManager(
+            cfg,
+            regenerate_context=False,
+            output_dir=model_path,
+        )
+
+
+def _unpack_loader_outputs(loaders):
+    """Support both the new 9-item and older 7-item dataset builder returns."""
+    if len(loaders) == 9:
+        train_loader, _conf_train_loader, _val_loader, _test_loader, e_mean, e_std, ctx_mean, ctx_std, split_info = loaders
+    elif len(loaders) == 7:
+        train_loader, _val_loader, _test_loader, e_mean, e_std, ctx_mean, ctx_std = loaders
+        split_info = None
+    else:
+        raise RuntimeError(f"Unexpected loader return length: {len(loaders)}")
+    return train_loader, e_mean, e_std, ctx_mean, ctx_std, split_info
+
+
+def load_alignment_engine(controller) -> AlignmentEngine:
+    print("Data loading and model initialization (one-time)")
     t0 = time.time()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _as_device()
 
-    model_name = '2024_W43_SE_model'
+    model_name = f"{MODEL_VINTAGE}_SE_model"
+
     one = controller.model.one
-    local_path = one.cache_dir.joinpath('ephys_atlas_features')
-    model_path = local_path.joinpath(model_name)
+    local_path = Path(one.cache_dir).joinpath("ephys_atlas_features")
+    model_path = local_path / model_name
     model_path.mkdir(parents=True, exist_ok=True)
-    _ = ephysatlas.data.download_model(local_path=model_path, model_name=model_name, one=one)
 
-    optimization_features = np.arange(len(FEATURE_LIST))
+    try:
+        from ephysatlas.regionclassifier import download_model
+        model_path = download_model(model_path, f"encoding_models/{MODEL_VINTAGE}", one=one)
+    except Exception as e:
+        print(f"[Alignment engine] download_model skipped/failed: {e}")
 
-    # Context manager + config
+    optimization_features = np.arange(len(FEATURE_LIST), dtype=int)
+
     cfg = AtlasPCAConfig()
-    ctx_manager = ContextAtlasManager(cfg, regenerate_context=False, model_name=model_name, output_dir=local_path)
+    ctx_manager = _build_context_manager(
+        cfg,
+        model_name=model_name,
+        local_path=local_path,
+        model_path=model_path,
+    )
 
-    # Load ephys & probe positions
-    pid_str, ephys, probe_positions, _ = (
-        LoadInsertionData(raw_data=True, VINTAGE=controller.model.ea_model, path_data=local_path))
+    pid_str, ephys, probe_positions, _ = LoadInsertionData(
+        VINTAGE=MODEL_VINTAGE,
+        path_data=local_path,
+    )
 
-    # Build dataset & splits ONCE
     M_MAX = 8
     RADIUS_UM = 500
-    train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std = (
-        build_channels_plus_emptyvoxels_with_neighbors(
+
+    loaders = build_channels_plus_emptyvoxels_with_neighbors(
         ctx_manager=ctx_manager,
         ephys=ephys,
         probe_positions=probe_positions,
         RADIUS_UM=RADIUS_UM,
-        M_MAX=M_MAX
-    ))
+        M_MAX=M_MAX,
+        pid_names=pid_str,
+    )
 
+    train_loader, e_mean, e_std, ctx_mean, ctx_std, _split_info = _unpack_loader_outputs(loaders)
     handles = alignment_handles_from_loader(train_loader)
 
-    # Model (reuse across calls)
-    F_ctx = cfg.n_cell_pcs + cfg.n_gene_pcs
-    F_e = ephys.shape[-1]
-    F_REG = 0
-    heteroscedastic = False
+    F_ctx = int(ctx_mean.numel())
+    F_e = int(ephys.shape[-1])
+
     model = NeighborInpaintingModel(
-        f_ctx=F_ctx, f_ephys=F_e, f_out=F_e, f_region=F_REG,
-        e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
-        d_model=128, nhead=8, depth=2, neighbor_self_attn=False,
-        heteroscedastic=heteroscedastic, drop=0.15
+        f_ctx=F_ctx,
+        f_ephys=F_e,
+        f_out=F_e,
+        e_mean=e_mean,
+        e_std=e_std,
+        ctx_mean=ctx_mean,
+        ctx_std=ctx_std,
+        d_model=128,
+        nhead=8,
+        depth=2,
+        drop=0.15,
     ).to(device)
-    model.load_state_dict(torch.load(local_path.joinpath(model_name, 'SE_model.pth'), map_location=device))
+
+    ckpt_path = model_path / f"SE_model_{MODEL_VINTAGE}.pt"
+    model.load_state_dict(torch.load(ckpt_path, map_location=device)["model_state"])
     model.eval()
     torch.set_grad_enabled(False)
+
+    conf_model = _load_optional_conf_model(
+        model_path=model_path,
+        device=device,
+        f_ctx=F_ctx,
+        f_e=F_e,
+    )
 
     print(f"[Alignment engine ready] build time: {time.time() - t0:.2f}s")
 
     return AlignmentEngine(
-        device=device, cfg=cfg, ctx_manager=ctx_manager, model=model,
-        handles=handles, e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
-        M_MAX=M_MAX, RADIUS_UM=RADIUS_UM, optimization_features=optimization_features
+        device=device,
+        cfg=cfg,
+        ctx_manager=ctx_manager,
+        model=model,
+        handles=handles,
+        e_mean=e_mean,
+        e_std=e_std,
+        ctx_mean=ctx_mean,
+        ctx_std=ctx_std,
+        M_MAX=M_MAX,
+        RADIUS_UM=RADIUS_UM,
+        optimization_features=optimization_features,
+        model_name=model_name,
+        local_path=local_path,
+        conf_model=conf_model,
     )
 
-def ensure_engine(controller: 'AlignmentGUIController') -> AlignmentEngine:
-    plug = controller.plugins['Channel Prediction']
+
+def ensure_engine(controller) -> AlignmentEngine:
+    plug = controller.plugins.setdefault("Channel Prediction", {})
     if MODEL_NAME not in plug or plug[MODEL_NAME] is None:
         plug[MODEL_NAME] = load_alignment_engine(controller)
     return plug[MODEL_NAME]
 
-def get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei):
-    p_rel = p_n - p_q[:, None, :]
-    h_q = model.qenc(ctx_q, reg_q, p_q)                    # [B,1,D]
-    h_n = model.nenc(e_n, reg_n, p_n, p_rel, mask_nei)     # [B,M,D]
-    for blk in model.blocks:
-        h_q = blk(h_q, h_n, mask_nei)                      # [B,1,D]
-    mu, logvar = model.pred(h_q)                           # [B,F], [B,F] or None
-    return h_q.squeeze(1), mu, logvar
 
-# ==== alignment algorithm utils ====
+def _extract_recorded_features(items):
+    if not items.model.raw_data["features"]["exists"]:
+        raise RuntimeError("No raw ephys feature table is available for this insertion.")
+
+    df = items.model.raw_data["features"]["df"].copy()
+    df = df.sort_values("axial_um", ascending=True).reset_index(drop=True)
+
+    recorded_full = df[FEATURE_LIST].to_numpy(dtype=np.float32)
+    recorded_full[~np.isfinite(recorded_full)] = 0.0
+
+    return recorded_full, df
+
+
+def _get_current_pid(controller, items) -> str:
+    for obj in (items.model, controller.model):
+        for attr in ("pid", "probe_id", "eid"):
+            val = getattr(obj, attr, None)
+            if val is not None:
+                return str(val)
+    return "unknown_pid"
+
+
+def _depths_for_extended_trace(*, df: pd.DataFrame, sampling_trk: np.ndarray, j_start: int, j_end: int, trace_len: int):
+    """Preserve old GUI depth convention: channel depths plus extra depths."""
+    depth_samples = df["axial_um"].to_numpy(dtype=float) / 1e6
+    trk = np.asarray(sampling_trk, dtype=float)
+
+    if trk.shape[0] != trace_len:
+        trk = np.arange(trace_len, dtype=float) * 20e-6
+
+    j_start = int(np.clip(j_start, 0, trace_len - 1))
+    j_end = int(np.clip(j_end, j_start, trace_len - 1))
+
+    depths_top = (trk[:j_start] - trk[j_start] + depth_samples[-1])[::-1]
+    depths_bottom = (trk[j_end + 1:] - trk[j_end])[::-1]
+    return depths_bottom, depth_samples, depths_top
+
+
+def gui_region_ids_from_xyz(xyz_m, brain_atlas):
+    return np.asarray(brain_atlas.get_labels(xyz_m, mode="clip")).astype(int).reshape(-1)
+
+
+def extend_xyz_samples_to_brain(
+    xyz_samples: np.ndarray,   # [C,3] meters (ground-truth channel positions; may include zeros)
+    *,
+    n_edge: int = 100,
+    max_extra: int = 4096,
+    brain_atlas=None,
+    mapping: str = "Cosmos",
+) -> np.ndarray:
+    """
+    Extends xyz_samples on both ends by estimating a CONSTANT step (gradient) separately
+    for the top and bottom edges, then linearly extrapolating until leaving the brain (rid==0).
+
+    This is tailored to probes where positions repeat in pairs (e.g. every two channels
+    share the exact same xyz), so the "effective" step is captured by robustly averaging
+    non-zero deltas within each edge window.
+    """
+    if brain_atlas is None:
+        brain_atlas = AllenAtlas()
+
+    xyz = np.asarray(xyz_samples, dtype=np.float64)
+    if not (xyz.ndim == 2 and xyz.shape[1] == 3):
+        raise ValueError(f"xyz_samples must be (C,3), got {xyz.shape}")
+
+    # Valid (non-zero) channels
+    valid = np.isfinite(xyz).all(axis=1) & ~(np.all(xyz == 0.0, axis=1))
+    if valid.sum() < 2:
+        return xyz_samples.astype(np.float32)
+
+    # Keep contiguous valid block
+    idx = np.where(valid)[0]
+    i0, i1 = int(idx[0]), int(idx[-1])
+    xyzv = xyz[i0:i1 + 1]  # [Cv,3]
+    Cv = xyzv.shape[0]
+    if Cv < 2:
+        return xyz_samples.astype(np.float32)
+
+    n_edge = int(min(n_edge, Cv))
+    if n_edge < 2:
+        return xyz_samples.astype(np.float32)
+
+    def _first_rid0_index(xarr: np.ndarray) -> int | None:
+        xarr = np.asarray(xarr, dtype=np.float32)
+        if xarr.ndim == 1:
+            xarr = xarr[None, :]
+        rids = region_ids_from_xyz(brain_atlas, xarr, mapping=mapping, mode="clip")
+        rids = np.atleast_1d(np.asarray(rids))
+        bad = np.where(rids == 0)[0]
+        return int(bad[0]) if bad.size > 0 else None
+
+    def _estimate_constant_step(edge_xyz: np.ndarray) -> np.ndarray:
+        """
+        Estimate constant step from a window of points [K,3] by averaging non-zero
+        consecutive deltas. If everything is repeated (all deltas zero), fall back to
+        the farthest difference / (K-1).
+        """
+        edge_xyz = np.asarray(edge_xyz, dtype=np.float64)
+        if edge_xyz.shape[0] < 2:
+            return np.zeros((3,), dtype=np.float64)
+
+        d = edge_xyz[1:] - edge_xyz[:-1]  # [K-1,3]
+        mag = np.linalg.norm(d, axis=1)
+        nz = mag > 0  # ignore repeated pairs (zero deltas)
+
+        if np.any(nz):
+            step = d[nz].mean(axis=0)
+        else:
+            # Fully repeated? Use overall displacement as fallback (might still be zero).
+            step = (edge_xyz[-1] - edge_xyz[0]) / max(1, (edge_xyz.shape[0] - 1))
+
+        return step.astype(np.float64)
+
+    # Top edge (near xyzv[0]) and bottom edge (near xyzv[-1])
+    top_edge = xyzv[:n_edge]
+    bot_edge = xyzv[-n_edge:]
+
+    step_top = _estimate_constant_step(top_edge)   # direction "downwards" along probe from top
+    step_bot = _estimate_constant_step(bot_edge)   # direction "downwards" along probe near bottom
+
+    # If one side ended up ~0 (degenerate), reuse the other if it exists
+    if np.linalg.norm(step_top) < 1e-12 and np.linalg.norm(step_bot) >= 1e-12:
+        step_top = step_bot.copy()
+    if np.linalg.norm(step_bot) < 1e-12 and np.linalg.norm(step_top) >= 1e-12:
+        step_bot = step_top.copy()
+
+    # If still degenerate, can't extend meaningfully
+    if np.linalg.norm(step_top) < 1e-12 and np.linalg.norm(step_bot) < 1e-12:
+        return xyz_samples.astype(np.float32)
+
+    # ---- extend BEFORE (prepend): go "upwards" opposite to top-step direction ----
+    pre = []
+    cur = xyzv[0].copy()
+    for _ in range(int(max_extra)):
+        cur = cur - step_top
+        # stop when outside brain (rid==0)
+        if _first_rid0_index(cur) is not None:
+            break
+        pre.append(cur.copy())
+    if len(pre) > 0:
+        pre = pre[::-1]  # earliest -> latest
+
+    # ---- extend AFTER (append): go "downwards" following bottom-step direction ----
+    post = []
+    cur = xyzv[-1].copy()
+    for _ in range(int(max_extra)):
+        cur = cur + step_bot
+        if _first_rid0_index(cur) is not None:
+            break
+        post.append(cur.copy())
+
+    pre_arr  = np.asarray(pre, dtype=np.float64).reshape(-1, 3)
+    post_arr = np.asarray(post, dtype=np.float64).reshape(-1, 3)
+
+    xyz_ext = np.concatenate([pre_arr, xyzv, post_arr], axis=0).astype(np.float32)
+
+    return xyz_ext
+
+
+# -----------------------------------------------------------------------------
+# Automatic alignment utils
+# -----------------------------------------------------------------------------
+
+def _concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
+    return np.concatenate([cell_pc, gene_pc], axis=1).astype(np.float32)
+
+
+@torch.no_grad()
+def _sample_and_standardize_ctx_for_xyz(
+    ctx_manager,
+    xyz_m: np.ndarray,
+    ctx_mean: torch.Tensor,
+    ctx_std: torch.Tensor,
+    *,
+    chunk: int = 8192,
+) -> torch.Tensor:
+    assert xyz_m.ndim == 2 and xyz_m.shape[1] == 3
+
+    ctx_list = []
+    for s in range(0, xyz_m.shape[0], chunk):
+        xyz_chunk = xyz_m[s : s + chunk].astype(np.float32, copy=False)
+        pack = ctx_manager.sample_context_numpy_m(xyz_chunk, mode="clip")
+        ctx_chunk = _concat_context(pack["cell_pc"], pack["gene_pc"])
+        ctx_list.append(ctx_chunk)
+
+    ctx = np.concatenate(ctx_list, axis=0).astype(np.float32)
+    ctx_t = torch.from_numpy(ctx).float()
+
+    ctx_mean = ctx_mean.detach().cpu()
+    ctx_std = ctx_std.detach().cpu()
+
+    has_ctx = ctx_t.abs().sum(dim=1) != 0
+    ctx_t[has_ctx] = (ctx_t[has_ctx] - ctx_mean) / (ctx_std + 1e-8)
+
+    return ctx_t
+
+
 @torch.no_grad()
 def predict_features_at_xyz(
-    engine: AlignmentEngine,
-    xyz: np.ndarray,      # [K,3] meters
+    model,
+    ctx_manager,
+    handles: dict,
+    xyz_m: np.ndarray,
+    *,
     batch_size: int = 512,
-    radius_um: float = 500.0,
-    M_max: int = 8,
-    device: Optional[str] = None,
-):
-    """
-    Returns standardized predictions at given XYZ:
-      mu_std: [K, F], logvar: [K, F] or None
-    """
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = engine.model.to(device).eval()
+    radius_um: float,
+    M_max: int,
+    device: torch.device,
+) -> torch.Tensor:
+    model.eval()
 
-    # Build RAW context at query xyz
-    pack = engine.ctx_manager.sample_context_numpy_m(xyz, mode='clip')
-    ctx_raw = torch.from_numpy(np.concatenate([pack['cell_pc'], pack['gene_pc']], axis=1)).float()
-    xyz_t = torch.from_numpy(xyz.copy()).float()
+    xyz_m = np.asarray(xyz_m, dtype=np.float32)
+    xyz_t = torch.from_numpy(xyz_m).float()
 
-    C = xyz_t.shape[0]
+    ctx_q = _sample_and_standardize_ctx_for_xyz(
+        ctx_manager,
+        xyz_m,
+        model.ctx_mean,
+        model.ctx_std,
+        chunk=8192,
+    )
 
-    allen = torch.ones(C) * pack['allen_ix'][0]
+    F_e = int(model.e_mean.numel())
+    qds = GridDS(ctx_q, xyz_t, F_e)
 
-    qds = GridDS(ctx_raw, allen, xyz_t, engine.e_mean.shape[-1])
-
-    # Collate with neighbors
     collate = NeighborCollate(
-        engine.ctx_manager,
-        engine.handles["bank_xyz"], engine.handles["bank_feat"], engine.handles["bank_pid"], engine.handles["nn_bank"],
-        e_feat_dim=engine.e_mean.shape[-1], M_max=M_max, radius_um=radius_um
+        ctx_manager,
+        handles["bank_xyz"],
+        handles["bank_feat"],
+        handles["bank_pid"],
+        handles["nn_bank"],
+        e_feat_dim=F_e,
+        M_max=M_max,
+        radius_um=radius_um,
     )
 
     dl = DataLoader(
-        qds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=False, drop_last=False, collate_fn=collate
+        qds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+        drop_last=False,
+        collate_fn=collate,
     )
 
-    mu_std, logvar_list = [], []
+    mu_all = []
+    device_type = device.type
+    use_autocast = device_type == "cuda"
+
     for batch in dl:
-        (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y_e, vox_count, *_) = [
+        ctx_b, p_b, e_n, p_n, mask, *_ = [
             x.to(device) if torch.is_tensor(x) else x for x in batch
         ]
-        if device == "cuda":
-            with torch.amp.autocast("cuda"):
-                _, mu, logvar = get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask)
-        else:
-            _, mu, logvar = get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask)
-        mu_std.append(mu.detach().float().cpu())
-        logvar_list.append(None if logvar is None else logvar.detach().float().cpu())
 
-    mu_std = torch.cat(mu_std, dim=0)
-    logvar = None if logvar_list[0] is None else torch.cat(logvar_list, dim=0)
-    return mu_std, logvar
+        with torch.amp.autocast(device_type=device_type, enabled=use_autocast):
+            _, mu = model(ctx_b, p_b, e_n, p_n, mask)
 
-def alignment_handles_from_loader(train_loader):
-    """
-    Extract the neighbor bank and full-channel lookup from NeighborCollateV2
-    attached to the train_loader. Also returns ctx stats and ephys stats.
-    """
-    collate = train_loader.collate_fn
+        mu_all.append(mu.detach().cpu())
 
-    # Neighbor bank (TRAIN-ONLY)
-    bank_xyz = collate.bank_xyz
-    bank_feat = collate.bank_feat
-    bank_pid = collate.bank_pid
-    nn_bank = collate.nn
+    return torch.cat(mu_all, dim=0)
 
-    return dict(
-        bank_xyz=bank_xyz, bank_feat=bank_feat, bank_pid=bank_pid, nn_bank=nn_bank,
-    )
 
-def build_cost_matrix(A, B, logvar, use_nll=False):
-    """
-    Compute cost matrix between actual features A and predicted features B.
-    """
-    if use_nll and (logvar is not None):
-        sigma2 = np.exp(logvar.cpu().numpy().astype(np.float64)) # [M,F_all]
-        C = np.empty((A.shape[0], B.shape[0]), dtype=np.float64)
-        for j in range(B.shape[0]):
-            diff2 = (A - B[j])**2
-            C[:, j] = 0.5 * (diff2 / (sigma2[j][:B.shape[1]] + 1e-12) + np.log(sigma2[j][:B.shape[1]] + 1e-12)).sum(axis=1)
-        return C
+def build_cost_matrix(A, B):
+    A = np.asarray(A, dtype=np.float64)
+    B = np.asarray(B, dtype=np.float64)
 
-    # L2 in standardized space
-    AA = np.sum(A*A, axis=1, keepdims=True)
-    BB = np.sum(B*B, axis=1, keepdims=True).T
+    AA = np.sum(A * A, axis=1, keepdims=True)
+    BB = np.sum(B * B, axis=1, keepdims=True).T
     AB = A @ B.T
-    return (AA + BB - 2.0*AB).clip(min=0.0)
 
-def soft_dynamic_time_warping(C, lam_d, lam_u, lam_l, band=None):
-    """
-    Soft Dynamic Time Warping (DTW) for aligning two sequences.
+    return (AA + BB - 2.0 * AB).clip(min=0.0)
 
-    Finds the optimal alignment path between two sequences by minimizing
-    the cumulative cost, allowing for diagonal, upward, and leftward moves
-    with different penalties.
-    """
+
+def dynamic_time_warping_debug(C, lam_d=0.0, lam_u=0.1, lam_l=0.1, band=None, open_begin=True):
+    C = np.asarray(C, dtype=np.float64)
+    C = np.where(np.isfinite(C), C, np.inf)
+
     N, M = C.shape
-
-    # Initialize cumulative cost matrix (D) and path direction matrix (P)
     D = np.full((N, M), np.inf, dtype=np.float64)
-    P = np.full((N, M), -1, dtype=np.int8)  # -1 = unvisited, 0 = diagonal, 1 = up, 2 = left
+    P = np.full((N, M), -1, dtype=np.int8)
 
-    # Initialize first row with base costs (no prior path)
-    D[0, :] = C[0, :] if band is None else np.where(band[0, :], C[0, :], np.inf)
+    if band is None:
+        band = np.ones((N, M), dtype=bool)
+    else:
+        band = np.asarray(band, dtype=bool)
+
+    if band[0, 0]:
+        D[0, 0] = C[0, 0]
+
+    for j in range(1, M):
+        if not band[0, j]:
+            continue
+        if open_begin:
+            D[0, j] = C[0, j]
+            P[0, j] = -1
+        else:
+            D[0, j] = C[0, j] + D[0, j - 1] + lam_l
+            P[0, j] = 2
 
     for i in range(1, N):
-        # Determine which columns to consider (all or band-constrained)
-        j_iter = range(1, M) if band is None else np.where(band[i, :])[0]
-        for j in j_iter:
-            # Skip positions outside the band
-            if band is not None and not band[i, j]:
+        if not band[i, 0]:
+            continue
+        D[i, 0] = C[i, 0] + D[i - 1, 0] + lam_u
+        P[i, 0] = 1
+
+    for i in range(1, N):
+        for j in range(1, M):
+            if not band[i, j]:
                 continue
-            # Calculate costs for three possible moves:
-            # 1. Diagonal: match i with j
-            c_diag = D[i - 1, j - 1] + lam_d if j - 1 >= 0 else np.inf
-            # 2. Up: skip j in second sequence (insertion)
-            c_up = D[i - 1, j] + lam_u
-            # 3. Left: skip i in first sequence (deletion)
-            c_left = D[i, j - 1] + lam_l if j - 1 >= 0 else np.inf
-            # Choose the move with the minimum cost
-            if c_diag <= c_up and c_diag <= c_left:
-                D[i, j] = C[i, j] + c_diag
-                P[i, j] = 0
-            elif c_up <= c_left:
-                D[i, j] = C[i, j] + c_up
-                P[i, j] = 1
-            else:
-                D[i, j] = C[i, j] + c_left
-                P[i, j] = 2
 
-    # Find the ending position with minimum cost in the last row
-    j_end = int(np.argmin(D[N - 1, :]))
+            candidates = [
+                D[i - 1, j - 1] + lam_d,
+                D[i - 1, j] + lam_u,
+                D[i, j - 1] + lam_l,
+            ]
+
+            k = int(np.argmin(candidates))
+            D[i, j] = C[i, j] + candidates[k]
+            P[i, j] = k
+
+    j_end = int(np.nanargmin(D[N - 1]))
     total = float(D[N - 1, j_end])
-    i, j = N - 1, j_end
 
-    # Backtrack to find the optimal path
+    i, j = N - 1, j_end
     path = [(i, j)]
-    while i > 0:
+
+    while i > 0 or (not open_begin and j > 0):
         k = P[i, j]
+
         if k == 0:
             i, j = i - 1, j - 1
         elif k == 1:
@@ -257,131 +564,379 @@ def soft_dynamic_time_warping(C, lam_d, lam_u, lam_l, band=None):
             i, j = i, j - 1
         else:
             break
+
         path.append((i, j))
 
     path.reverse()
+    j_start = path[0][1]
 
-    return path[0][1], j_end, path, total
+    return j_start, j_end, path, total, D, P
 
 
 def rigid_assignment(A, B):
-    """Find the best rigid alignment using sliding window L2 matching."""
-
     best_k, best_mse = 0, np.inf
     Nr = A.shape[0]
+
     for k in range(0, B.shape[0] - Nr + 1):
-        m = ((B[k:k + Nr] - A) ** 2).mean()
+        m = ((B[k : k + Nr] - A) ** 2).mean()
         if m < best_mse:
             best_mse, best_k = m, k
-    j_start, j_end = best_k, best_k + Nr - 1
+
+    j_start = best_k
+    j_end = best_k + Nr - 1
     path = [(i, best_k + i) for i in range(Nr)]
 
     return j_start, j_end, path
 
 
-def xyz_to_region_ids(xyz_m, brain_atlas):
-    """
-    xyz_m: [C, 3] in meters. Convert to µm for atlas, return [C] region ids (int).
-    """
-    # brain_atlas.get_labels should broadcast over channels
-    region_ids = brain_atlas.get_labels(xyz_m, mode='clip')
+def _scatter_recorded_onto_trace(
+    recorded_full: np.ndarray,
+    j_map_all_i: np.ndarray,
+    trace_len: int,
+    *,
+    kp_mask: Optional[np.ndarray] = None,
+):
+    recorded_full = np.asarray(recorded_full)
+    j_map_all_i = np.asarray(j_map_all_i, dtype=int)
 
-    # ensure 1D int array
-    return np.asarray(region_ids).astype(int).reshape(-1)
+    C_rec, F = recorded_full.shape
+    L = int(trace_len)
+
+    if kp_mask is None:
+        kp_mask = np.ones((C_rec,), dtype=bool)
+    else:
+        kp_mask = np.asarray(kp_mask, dtype=bool)
+
+    sums = np.zeros((L, F), dtype=np.float64)
+    counts = np.zeros((L,), dtype=np.int64)
+
+    for c in range(C_rec):
+        if not kp_mask[c]:
+            continue
+        j = int(j_map_all_i[c])
+        if 0 <= j < L:
+            sums[j] += recorded_full[c]
+            counts[j] += 1
+
+    recorded_on_trace_raw = np.full((L, F), np.nan, dtype=np.float64)
+    recorded_on_trace_filled = np.zeros((L, F), dtype=np.float64)
+
+    hit = counts > 0
+    recorded_on_trace_raw[hit] = sums[hit] / counts[hit, None]
+    recorded_on_trace_filled[hit] = sums[hit] / counts[hit, None]
+
+    return recorded_on_trace_raw, recorded_on_trace_filled, counts
 
 
-def predict(controller, items):
-    # -------------- one-time caches (lazy) --------------
+@torch.no_grad()
+def classify_aligned_probe_channels(
+    *,
+    conf_model,
+    model,
+    ctx_manager,
+    recorded_full: np.ndarray,
+    est_xyz: np.ndarray,
+    mu_std_est: np.ndarray | torch.Tensor,
+    device: torch.device,
+):
+    conf_model.eval()
 
-    engine = ensure_engine(controller)
+    rec_raw = np.asarray(recorded_full, dtype=np.float32)
+    xyz_np = np.asarray(est_xyz, dtype=np.float32)
 
-    # -------------- prediction pipeline (fast) --------------
-    print("Ephys feature computation")
-    # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
-    #  need to update the model and change that
-    xyz_samples = items.model.align_handle.xyz_samples.copy()[::-1, :]
+    C, F_e = rec_raw.shape
 
-    # Get the ephys features recorded on the probe
-    # Need to flip the features as need to be ordered from top to bottom for model
-    if not items.model.raw_data['features']['exists']:
-        return
+    if torch.is_tensor(mu_std_est):
+        pred_std_np = mu_std_est.detach().cpu().numpy().astype(np.float32)
+    else:
+        pred_std_np = np.asarray(mu_std_est, dtype=np.float32)
 
-    df = items.model.raw_data['features']['df'].copy()
-    recorded = df.sort_values('axial_um', ascending=False)[FEATURE_LIST].to_numpy()
+    rec_is_finite = np.isfinite(rec_raw).all(axis=1)
+    rec_has_signal = ~np.all(np.nan_to_num(rec_raw, nan=0.0) == 0.0, axis=1)
+    xyz_is_finite = np.isfinite(xyz_np).all(axis=1)
+    pred_is_finite = np.isfinite(pred_std_np).all(axis=1)
 
-    # Number of channels on the probe
-    nc = recorded.shape[0]
-    # Remove channels that were not recorded (all zeros)
-    kp_mask = ~np.all(recorded == 0.0, axis=1)
-    if kp_mask.sum() < 2:
-        print('Need at least 2 recorded channels with non-zero features for spatial encoding.')
-        return
-    # Z score the recorded features so that they are in the same space as predicted features
-    recorded = ((torch.from_numpy(recorded.copy()) - engine.e_mean.cpu()) / (engine.e_std.cpu() + 1e-8)).numpy().astype(np.float64)
-    # Recorded features
-    recorded = recorded[kp_mask][:, engine.optimization_features]
+    valid_mask = rec_is_finite & rec_has_signal & xyz_is_finite & pred_is_finite
+    valid_t = torch.from_numpy(valid_mask).bool()
 
-    # Get the predicted ephys features along the probe trajectory
-    # Predict the features at all sample points along the probe
-    predicted, logvar_full = predict_features_at_xyz(
-        engine, xyz_samples, batch_size=512, radius_um=engine.RADIUS_UM, M_max=engine.M_MAX, device=engine.device
+    e_mean = model.e_mean.detach().cpu().numpy().astype(np.float32)
+    e_std = model.e_std.detach().cpu().numpy().astype(np.float32)
+
+    rec_raw_safe = np.nan_to_num(rec_raw, nan=0.0, posinf=0.0, neginf=0.0)
+    rec_std = (rec_raw_safe - e_mean) / (e_std + 1e-8)
+    rec_std[~valid_mask] = 0.0
+
+    pred_std_np = np.nan_to_num(pred_std_np, nan=0.0, posinf=0.0, neginf=0.0)
+    pred_std_np[~valid_mask] = 0.0
+
+    ctx_std_t = _sample_and_standardize_ctx_for_xyz(
+        ctx_manager,
+        xyz_np,
+        model.ctx_mean,
+        model.ctx_std,
+        chunk=8192,
+    ).float()
+    ctx_std_t[~valid_t] = 0.0
+
+    logits, probs, _ = predict_probe_confidence_classes(
+        conf_model=conf_model,
+        rec_std=torch.from_numpy(rec_std).float(),
+        pred_std=torch.from_numpy(pred_std_np).float(),
+        ctx_std=ctx_std_t,
+        valid_mask=valid_t,
+        device=device,
     )
-    predicted = predicted.cpu().numpy().astype(np.float64)
-    predicted = predicted[:, engine.optimization_features]
 
-    # Compute cost matrix
-    cost_matrix = build_cost_matrix(recorded, predicted, logvar_full)
+    probs_cpu = probs.detach().cpu().float()
+    pred_cls = probs_cpu.argmax(dim=1).numpy().astype(np.int64)
+    pred_cls[~valid_mask] = -1
 
-    # Find path that minimizes cost with soft DTW
-    j_start, j_end, path, total_cost = soft_dynamic_time_warping(cost_matrix, lam_d=0.0, lam_u=5.0, lam_l=5.0)
+    probs_np = probs_cpu.numpy().astype(np.float32)
+    probs_np[~valid_mask] = np.nan
 
-    # Ensure at least 90% of channels are used in the alignment, else use rigid assignment
-    min_overlap_channels = int(0.9*nc)
+    return pred_cls, probs_np
+
+
+@torch.no_grad()
+def align(
+    model,
+    ctx_manager,
+    xyz_samples_ext,
+    recorded_full,
+    handles,
+    optimization_features,
+    RADIUS_UM,
+    M_MAX,
+    device,
+    conf_model=None,
+    return_debug: bool = True,
+    brain_atlas=None,
+):
+    C_full = recorded_full.shape[0]
+    L_trace = xyz_samples_ext.shape[0]
+
+    kp_mask = ~np.all(recorded_full == 0.0, axis=1)
+    if kp_mask.sum() < 2:
+        print("Need at least 2 recorded (non-zero) channels with non-zero features for spatial encoding.")
+        return None
+
+    recorded_std = (
+        (torch.from_numpy(recorded_full.copy()) - model.e_mean.cpu())
+        / (model.e_std.cpu() + 1e-8)
+    ).numpy().astype(np.float64)
+    recorded_opt = recorded_std[kp_mask][:, optimization_features]
+
+    # full-trace prediction
+    pred_std_full = predict_features_at_xyz(
+        model,
+        ctx_manager,
+        handles,
+        xyz_samples_ext,
+        batch_size=512,
+        radius_um=RADIUS_UM,
+        M_max=M_MAX,
+        device=device,
+    )
+    pred_std_full_np = pred_std_full.detach().cpu().numpy().astype(np.float64)
+    pred_std_opt = pred_std_full_np[:, optimization_features]
+
+    ephys_cost_matrix = build_cost_matrix(recorded_opt, pred_std_opt)
+
+    region_cost_matrix = None
+    region_cost_norm = None
+    ephys_cost_norm = None
+    has_region_cost = None
+    trace_region_target_idx = None
+    trace_region_target_name = None
+
+    cost_matrix = ephys_cost_matrix
+
+    W_ephys = np.ones_like(ephys_cost_matrix, dtype=np.float64)
+    W_region = np.zeros_like(ephys_cost_matrix, dtype=np.float64)
+
+    finite_cost = cost_matrix[np.isfinite(cost_matrix)]
+    max_cost = float(np.median(np.nan_to_num(finite_cost)))
+    jump_frac = 0.5
+
+    lam_u = jump_frac * max_cost
+    lam_l = jump_frac * max_cost
+
+    j_start, j_end, path, total_cost, D, P = dynamic_time_warping_debug(
+        cost_matrix,
+        lam_d=0.0,
+        lam_u=lam_u,
+        lam_l=lam_l,
+        open_begin=True,
+    )
+
+    min_overlap_channels = int(0.9 * int(kp_mask.sum()))
     if (j_end - j_start + 1) < min_overlap_channels:
-        j_start, j_end, path = rigid_assignment(recorded, predicted)
+        print(f"Trace too short - resorting to rigid optimization")
+        j_start, j_end, path = rigid_assignment(recorded_opt, pred_std_opt)
 
-    # Convert path to arrays
     i_seq, j_seq = np.array(path, dtype=int).T
-
-    # Initialize mapping (A index → B index)
-    j_for_i = np.full(recorded.shape[0], np.nan)
+    j_for_i = np.full(recorded_opt.shape[0], np.nan)
     j_for_i[i_seq] = j_seq
-
-    # Fill gaps (forward then backward)
     j_for_i = (
         pd.Series(j_for_i)
         .ffill()
         .bfill()
         .astype(int)
-        .clip(0, predicted.shape[0] - 1)
+        .clip(0, pred_std_opt.shape[0] - 1)
         .to_numpy()
     )
 
-    # Interpolate to get mapping for all channels
-    j_map_all = np.interp(np.arange(nc), np.where(kp_mask)[0], j_for_i.astype(float))
-    j_map_all_i = np.clip(np.round(j_map_all).astype(int), 0, predicted.shape[0] - 1)
-    est_xyz = xyz_samples[j_map_all_i]
+    # map from ALL recorded channels -> full trace indices
+    j_map = np.interp(np.arange(C_full), np.where(kp_mask)[0], j_for_i.astype(float))
+    j_map_i = np.clip(np.round(j_map).astype(int), 0, pred_std_opt.shape[0] - 1)
 
-    # TODO: Currently flipping the probe since my model is trained on probes that goes from top to bottom,
-    #  need to update the model and change that
+    est_xyz = xyz_samples_ext[j_map_i]
 
-    # TODO: Flipping the probe back for consistency
-    trk = items.model.align_handle.ephysalign.sampling_trk.copy()[::-1]
+    if not return_debug:
+        return est_xyz
 
-    # Get the regions within the probe
-    region_ids = xyz_to_region_ids(est_xyz, controller.model.brain_atlas)[::-1]
-    depth_samples = df['axial_um'].to_numpy() / 1e6
+    # aligned-window prediction as before
+    mu_std_est = pred_std_full_np[j_map_i]
 
-    # Get the regions outside the probe
-    # Above the probe (from top of probe to top of brain)
-    region_ids_top = xyz_to_region_ids(xyz_samples[:j_start], controller.model.brain_atlas)[::-1]
-    depths_top = (trk[:j_start] - trk[j_start] + depth_samples[-1])[::-1]
+    # create full-trace recorded array with NaNs outside aligned channels
+    recorded_on_trace_raw, recorded_on_trace_filled, recorded_on_trace_counts = _scatter_recorded_onto_trace(
+        recorded_full=recorded_full,
+        j_map_all_i=j_map_i,
+        trace_len=L_trace,
+        kp_mask=kp_mask,
+    )
 
-    # Below the probe (from bottom of probe to bottom of brain)
-    region_ids_bottom =  xyz_to_region_ids(xyz_samples[j_end+1:], controller.model.brain_atlas)[::-1]
-    depths_bottom = (trk[j_end+1:] - trk[j_end])[::-1]
+    pred_cls_est = None
+    cls_probs_est = None
+    pred_cls_trace = None
+    cls_probs_trace = None
 
-    region_ids = np.concatenate([region_ids_bottom, region_ids, region_ids_top], axis=0)
-    depth_samples = np.concatenate([depths_bottom, depth_samples, depths_top], axis=0)
+    if conf_model is not None:
+        # per-channel class/confidence on aligned estimated probe (same as before)
+        pred_cls_est, cls_probs_est = classify_aligned_probe_channels(
+            conf_model=conf_model,
+            model=model,
+            ctx_manager=ctx_manager,
+            recorded_full=recorded_full,
+            est_xyz=est_xyz,
+            mu_std_est=mu_std_est,
+            device=device,
+        )
+
+        # full-trace class/confidence
+        # Use the NaN-padded trace for plotting and the zero-filled trace for inference.
+        pred_cls_trace, cls_probs_trace = classify_aligned_probe_channels(
+            conf_model=conf_model,
+            model=model,
+            ctx_manager=ctx_manager,
+            recorded_full=recorded_on_trace_raw,  # not recorded_on_trace_filled
+            est_xyz=xyz_samples_ext,
+            mu_std_est=pred_std_full_np,
+            device=device,
+        )
+
+    return dict(
+        est_xyz=est_xyz,
+        kp_mask=kp_mask,
+        j_map_all_i=j_map_i,
+        cost_matrix=cost_matrix,
+        path=np.array(path, dtype=int),
+        total_cost=float(total_cost),
+        j_start=int(j_start),
+        j_end=int(j_end),
+
+        pred_cls_est=pred_cls_est,
+        cls_probs_est=cls_probs_est,
+        mu_std_est=mu_std_est,
+
+        # full-trace outputs
+        xyz_samples_ext=xyz_samples_ext,
+        mu_std_trace=pred_std_full_np,
+        pred_cls_trace=pred_cls_trace,
+        cls_probs_trace=cls_probs_trace,
+        recorded_on_trace_raw=recorded_on_trace_raw,
+        recorded_on_trace_counts=recorded_on_trace_counts,
+        ephys_cost_matrix=ephys_cost_matrix,
+
+    )
+
+
+def predict(controller, items):
+    engine = ensure_engine(controller)
+
+    try:
+        recorded_full, df = _extract_recorded_features(items)
+    except RuntimeError as e:
+        print(e)
+        print("Could not extract ephys feature table. The automated alignment would not be computed")
+        return None
+
+    # align() expects the native GUI/histology trace order. Do not reverse here.
+    xyz_samples = items.model.align_handle.xyz_samples.copy().astype(np.float32)
+
+    xyz_samples_ext = extend_xyz_samples_to_brain(
+        xyz_samples,
+        brain_atlas=controller.model.brain_atlas,
+        mapping="Cosmos",
+    ).astype(np.float32)
+
+    out = align(
+        engine.model,
+        engine.ctx_manager,
+        xyz_samples_ext,
+        recorded_full,
+        engine.handles,
+        engine.optimization_features,
+        engine.RADIUS_UM,
+        engine.M_MAX,
+        engine.device,
+        conf_model=engine.conf_model,
+        return_debug=True,
+        brain_atlas=controller.model.brain_atlas,
+    )
+
+    if out is None:
+        return None
+
+    est_xyz = out["est_xyz"]
+    j_start = int(out["j_start"])
+    j_end = int(out["j_end"])
+
+    sampling_trk = items.model.align_handle.ephysalign.sampling_trk.copy()
+
+    region_ids_before = gui_region_ids_from_xyz(
+        out["xyz_samples_ext"][:j_start],
+        controller.model.brain_atlas,
+    )
+    region_ids_probe = gui_region_ids_from_xyz(
+        est_xyz,
+        controller.model.brain_atlas,
+    )
+    region_ids_after = gui_region_ids_from_xyz(
+        out["xyz_samples_ext"][j_end + 1:],
+        controller.model.brain_atlas,
+    )
+
+    region_ids = np.concatenate(
+        [region_ids_before, region_ids_probe, region_ids_after],
+        axis=0,
+    )
+
+    depth_samples = sampling_trk.copy()
+
+    if len(region_ids) != len(depth_samples):
+        print(
+            "[Alignment engine] WARNING: region_ids/depth_samples length mismatch:",
+            len(region_ids),
+            len(depth_samples),
+        )
+
+    print("[Alignment debug]")
+    print("j_start/j_end:", j_start, j_end)
+    print("region_ids len:", len(region_ids))
+    print("depth_samples len:", len(depth_samples))
+    print("sampling_trk first/last:", sampling_trk[0], sampling_trk[-1])
+    print("xyz_ext z first/last:", out["xyz_samples_ext"][0, 2], out["xyz_samples_ext"][-1, 2])
+    print("selected xyz z first/last:", est_xyz[0, 2], est_xyz[-1, 2])
 
     return region_ids, depth_samples

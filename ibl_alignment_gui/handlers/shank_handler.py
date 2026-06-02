@@ -31,6 +31,7 @@ class ShankHandler:
         self.loaders['align'].get_starting_alignment(0)
         self.align_exists: bool = True
         self.data_loaded: bool = False
+        self.align_handle = None
 
     # -------------------------------------------------------------------------
     # Alignment loader - attributes and methods in loaders['align']

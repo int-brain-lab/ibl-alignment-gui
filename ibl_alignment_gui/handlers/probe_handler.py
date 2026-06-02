@@ -197,7 +197,10 @@ class ProbeHandler(ABC):
         int
             The index of the current alignment
         """
-        return self.get_selected_shank()[self.default_config].align_handle.current_idx
+        try:
+            return self.get_selected_shank()[self.default_config].align_handle.current_idx
+        except AttributeError:
+            return 0
 
     @property
     def total_idx(self) -> int:
@@ -209,7 +212,10 @@ class ProbeHandler(ABC):
         int
             The total number of alignments stored in the circular buffer
         """
-        return self.get_selected_shank()[self.default_config].align_handle.total_idx
+        try:
+            return self.get_selected_shank()[self.default_config].align_handle.total_idx
+        except AttributeError:
+            return 0
 
     def get_plot(self, shank: str, plot: str, key: str, config: str | None = None) -> Any:
         """

@@ -37,7 +37,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
         'Cosmos': compute_cosmos_predictions,
         'Spatial Encoder': compute_spatial_encoder_predictions,
         'Inference Model': compute_inference_predictions,
-        'Inference Cumulative': compute_cumulative_predictions
+        'Inference Cumulative': compute_cumulative_predictions,
     }
 
     for model, model_func in predictions_models.items():
@@ -129,9 +129,13 @@ def plot_predicted_regions(
 
     if items.model.predictions[model] is not None:
         if 'probability' in items.model.predictions[model]:
-            items.view.plot_histology_cumulative(items.view.fig_hist_ref,items.model.predictions[model])
+            items.view.plot_histology_cumulative(
+                items.view.fig_hist_ref, items.model.predictions[model]
+            )
         else:
-            items.view.plot_histology(items.view.fig_hist_ref, items.model.predictions[model], ax='right')
+            items.view.plot_histology(
+                items.view.fig_hist_ref, items.model.predictions[model], ax='right'
+            )
 
 
 def compute_cosmos_predictions(
@@ -157,8 +161,7 @@ def compute_cosmos_predictions(
 
 
 def compute_spatial_encoder_predictions(
-    controller: 'AlignmentGUIController',
-    items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray] | None:
     """
     Prediction model using the spatial encoder.
@@ -179,8 +182,7 @@ def compute_spatial_encoder_predictions(
 
 
 def compute_inference_predictions(
-    controller: 'AlignmentGUIController',
-    items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray] | None:
     """
     Prediction model using the inference model.
@@ -202,8 +204,7 @@ def compute_inference_predictions(
 
 
 def compute_cumulative_predictions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray] | None:
     """
     Cumulative prediction model using the inference model.
@@ -218,12 +219,7 @@ def compute_cumulative_predictions(
         return
 
     cprobas, depths, colours, regions = result
-    data = Bunch(
-        depths=depths,
-        regions=regions,
-        colours=colours,
-        probability=cprobas
-    )
+    data = Bunch(depths=depths, regions=regions, colours=colours, probability=cprobas)
 
     return data
 

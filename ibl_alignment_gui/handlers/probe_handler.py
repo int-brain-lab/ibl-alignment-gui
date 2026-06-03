@@ -41,6 +41,7 @@ from one.api import ONE
 
 try:
     import ephysatlas.data
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -581,7 +582,9 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-            loaders['features'] = FeatureLoaderOne(ins, self.one, self.ea_model, multi_area=self.lab=='steinmetzlab')
+            loaders['features'] = FeatureLoaderOne(
+                ins, self.one, self.ea_model, multi_area=self.lab == 'steinmetzlab'
+            )
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
@@ -745,7 +748,9 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
                 if EPHYS_ATLAS:
-                    loaders['features'] = FeatureLoaderOne(ins, self.one, self.ea_model, multi_area=True)
+                    loaders['features'] = FeatureLoaderOne(
+                        ins, self.one, self.ea_model, multi_area=True
+                    )
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 

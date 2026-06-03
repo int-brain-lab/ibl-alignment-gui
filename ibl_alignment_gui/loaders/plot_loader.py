@@ -1053,7 +1053,6 @@ class PlotLoader:
         """
         return self._image_raw_data('lf')
 
-
     def _image_raw_data(self, band: str) -> dict[str, Any]:
         """
         Generate data for image plots of raw ephys data snippets.
@@ -1071,7 +1070,9 @@ class PlotLoader:
         raw_imgs = dict()
 
         for i, (t, raw_img) in enumerate(self.data[f'raw_{band}_snippets']['images'].items()):
-            x_range = np.array([0, raw_img.shape[0] - 1]) / self.data[f'raw_{band}_snippets']['fs'] * 1e3
+            x_range = (
+                np.array([0, raw_img.shape[0] - 1]) / self.data[f'raw_{band}_snippets']['fs'] * 1e3
+            )
             xscale = (x_range[1] - x_range[0]) / raw_img.shape[0]
             yscale = (self.chn_max - self.chn_min) / raw_img.shape[1]
             levels = 10 ** (-90 / 20) * 4 * np.array([-1, 1])

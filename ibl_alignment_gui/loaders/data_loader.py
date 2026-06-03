@@ -125,9 +125,7 @@ class DataLoader(ABC):
                         f'cannot disambiguate, some plots will not display'
                     )
                 else:
-                    raise_message = (
-                        f'{alf_object} data was not found, some plots will not display'
-                    )
+                    raise_message = f'{alf_object} data was not found, some plots will not display'
             logger.warning(raise_message)
             if raise_error:
                 logger.error(raise_message)
@@ -177,12 +175,14 @@ class DataLoader(ABC):
                 vis_stim = Bunch(exists=False)
             else:
                 vis_stim = Bunch()
-                vis_stim['leftGabor'] = np.array(gabor['start'][
-                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)
-                ], dtype=np.float64)
-                vis_stim['rightGabor'] =  np.array(gabor['start'][
-                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)
-                ], dtype=np.float64)
+                vis_stim['leftGabor'] = np.array(
+                    gabor['start'][(gabor['position'] == 35) & (gabor['contrast'] > 0.1)],
+                    dtype=np.float64,
+                )
+                vis_stim['rightGabor'] = np.array(
+                    gabor['start'][(gabor['position'] == -35) & (gabor['contrast'] > 0.1)],
+                    dtype=np.float64,
+                )
                 vis_stim['exists'] = True
         except Exception:
             logger.warning('Failed to process passiveGabor data, some plots will not display')
@@ -594,10 +594,12 @@ class SpikeGLXLoader(ABC):
     def __init__(self, save_path: Path | None = None):
         self.meta: Bunch | None = None
         self.save_path: Path | None = save_path
-        self.cached_ap_path: Path | None = save_path.joinpath(
-            'alignment_gui_raw_data_snippets.npy') if save_path else None
-        self.cached_lf_path: Path | None = save_path.joinpath(
-            'alignment_gui_raw_lf_data_snippets.npy') if save_path else None
+        self.cached_ap_path: Path | None = (
+            save_path.joinpath('alignment_gui_raw_data_snippets.npy') if save_path else None
+        )
+        self.cached_lf_path: Path | None = (
+            save_path.joinpath('alignment_gui_raw_lf_data_snippets.npy') if save_path else None
+        )
 
     def get_meta_data(self) -> Bunch[str, Any]:
         """
@@ -661,8 +663,7 @@ class SpikeGLXLoader(ABC):
         data = defaultdict(Bunch)
 
         for i, t in enumerate(times):
-            raw, labels, features = self._get_ap_snippet(
-                sr, t, twin=twin, **detection_thresholds)
+            raw, labels, features = self._get_ap_snippet(sr, t, twin=twin, **detection_thresholds)
 
             if i == 0:
                 chn_labels = np.zeros((raw.shape[1], len(times)))
@@ -752,10 +753,7 @@ class SpikeGLXLoader(ABC):
 
     @staticmethod
     def _get_ap_snippet(
-            sr: spikeglx.Reader | Streamer,
-            t: float,
-            twin: float = 1,
-            **kwargs
+        sr: spikeglx.Reader | Streamer, t: float, twin: float = 1, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of AP data centered at time t.
@@ -788,10 +786,7 @@ class SpikeGLXLoader(ABC):
 
     @staticmethod
     def _get_lf_snippet(
-            sr: spikeglx.Reader | Streamer,
-            t: float,
-            twin: float = 3,
-            **kwargs
+        sr: spikeglx.Reader | Streamer, t: float, twin: float = 3, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of LF data centered at time t.
@@ -812,12 +807,18 @@ class SpikeGLXLoader(ABC):
         """
         start_sample = int(t * sr.fs)
         end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, :-sr.nsync].T
+        raw = sr[start_sample:end_sample, : -sr.nsync].T
 
-        butter_kwargs = {"N": 3, "Wn": 2 / sr.fs * 2, "btype": "highpass"}
+        butter_kwargs = {'N': 3, 'Wn': 2 / sr.fs * 2, 'btype': 'highpass'}
         # Detect bad channels and destripe
-        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, channel_labels=True,
-                                      butter_kwargs=butter_kwargs, h=sr.geometry, k_filter=None)
+        raw = ibldsp.voltage.destripe(
+            raw,
+            fs=sr.fs,
+            channel_labels=True,
+            butter_kwargs=butter_kwargs,
+            h=sr.geometry,
+            k_filter=None,
+        )
 
         # Extract a window in time (1–2 seconds)
         window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
@@ -992,12 +993,7 @@ class FeatureLoaderOne(FeatureLoader):
     Loads feature from ephys feature table.
     """
 
-    def __init__(
-            self,
-            insertion: dict,
-            one: ONE,
-            feature_version: str,
-            multi_area: bool = False):
+    def __init__(self, insertion: dict, one: ONE, feature_version: str, multi_area: bool = False):
 
         self.one: ONE = one
         self.pid: str = insertion['id']
@@ -1047,9 +1043,8 @@ class FeatureLoaderOne(FeatureLoader):
         if not model_path.exists():
             self.download_features(project, feature, save_path)
 
-        data = (pd.read_parquet(
-            model_path.joinpath('agg_full', 'df_all_cols_merged.pqt'))
-                .reset_index())
+        data = pd.read_parquet(
+            model_path.joinpath('agg_full', 'df_all_cols_merged.pqt')
+        ).reset_index()
 
         return data[data['pid'] == self.pid]
-

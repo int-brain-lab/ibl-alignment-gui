@@ -5,8 +5,9 @@ import pandas as pd
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
 
-MODEL_VINTAGE = "2026_W12_Cosmos_careless-clover-dingo"
-MODEL_NAME = "Inference"
+MODEL_VINTAGE = '2026_W12_Cosmos_careless-clover-dingo'
+MODEL_NAME = 'Inference'
+
 
 def ensure_model(controller):
     plugin = controller.plugins['Channel Prediction']
@@ -25,6 +26,7 @@ def load_inference_model(controller):
 
     return Bunch(info=model_info, path=model_path)
 
+
 def predict(controller, items):
 
     if not items.model.raw_data['features']['exists']:
@@ -32,9 +34,13 @@ def predict(controller, items):
 
     df = items.model.raw_data['features']['df']
     model = ensure_model(controller)
-    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'].joinpath('folds'))
+    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(
+        df, path_model=model['path'].joinpath('folds')
+    )
 
-    cosmos_ids = np.array(model['info']['CLASSES'])[np.argmax(np.mean(predicted_probas, axis=0), axis=1)]
+    cosmos_ids = np.array(model['info']['CLASSES'])[
+        np.argmax(np.mean(predicted_probas, axis=0), axis=1)
+    ]
     depths = df['axial_um'].values
 
     return cosmos_ids, depths
@@ -47,7 +53,9 @@ def predict_cumulative(controller, items):
 
     df = items.model.raw_data['features']['df']
     model = ensure_model(controller)
-    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'].joinpath('folds'))
+    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(
+        df, path_model=model['path'].joinpath('folds')
+    )
 
     cprobas = np.mean(predicted_probas, axis=0).cumsum(axis=1)
     region_ids = np.array(model['info']['CLASSES']).astype(int)

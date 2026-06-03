@@ -29,7 +29,6 @@ class AlignmentUploader(ABC):
     """
 
     def __init__(self, brain_atlas: atlas.AllenAtlas) -> None:
-
         self.brain_atlas = brain_atlas
 
     @abstractmethod
@@ -52,12 +51,12 @@ class AlignmentUploaderOne(AlignmentUploader):
     """
 
     def __init__(self, insertion: dict[str, Any], one: ONE, brain_atlas: atlas.AllenAtlas):
-
         self.one: ONE = one
         self.pid: str = insertion['id']
         self.pname: str = insertion['name']
-        self.resolved: bool = insertion['json'].get('extended_qc', {}).get(
-            'alignment_resolved', False)
+        self.resolved: bool = (
+            insertion['json'].get('extended_qc', {}).get('alignment_resolved', False)
+        )
         self.qc_str: str | None = None
         self.confidence_str: str | None = None
         self.user: str = params.get().ALYX_LOGIN
@@ -107,16 +106,19 @@ class AlignmentUploaderOne(AlignmentUploader):
         """
         if channels and not resolved:
             # Channels saved alignment not resolved
-            return (f'Channels locations for {self.pname} saved to Alyx.'
-                    '\nAlignment not resolved')
+            return f'Channels locations for {self.pname} saved to Alyx.\nAlignment not resolved'
         if channels and resolved:
             # channels saved alignment resolved, writen to flatiron
-            return (f'Channel locations for {self.pname} saved to Alyx.'
-                    '\nAlignment resolved and channels datasets written to flatiron')
+            return (
+                f'Channel locations for {self.pname} saved to Alyx.'
+                '\nAlignment resolved and channels datasets written to flatiron'
+            )
         if not channels and resolved:
             # alignment already resolved, save alignment but channels not written
-            return (f'Channel locations for {self.pname} not saved to Alyx as alignment '
-                    f'has already been resolved. \nNew user reference lines have been saved')
+            return (
+                f'Channel locations for {self.pname} not saved to Alyx as alignment '
+                f'has already been resolved. \nNew user reference lines have been saved'
+            )
 
         return 'No changes made'
 
@@ -139,8 +141,13 @@ class AlignmentUploaderOne(AlignmentUploader):
 
         # Create new trajectory and overwrite previous one
         histology.register_aligned_track(
-            self.pid, data['xyz_channels'], chn_coords=data['chn_coords'], one=self.one,
-            overwrite=True, brain_atlas=self.brain_atlas)
+            self.pid,
+            data['xyz_channels'],
+            chn_coords=data['chn_coords'],
+            one=self.one,
+            overwrite=True,
+            brain_atlas=self.brain_atlas,
+        )
 
         return True
 
@@ -160,8 +167,9 @@ class AlignmentUploaderOne(AlignmentUploader):
         """
         align_time = datetime.now().replace(second=0, microsecond=0).isoformat()
         self.align_key = f'{align_time}_{self.user}'
-        extra_alignment = {self.align_key: [data['feature'], data['track'],
-                                            self.qc_str, self.confidence_str]}
+        extra_alignment = {
+            self.align_key: [data['feature'], data['track'], self.qc_str, self.confidence_str]
+        }
         alignments = self._remove_duplicate_users(data['alignments'])
         alignments.update(extra_alignment)
         self.save_alignments(alignments)
@@ -200,18 +208,23 @@ class AlignmentUploaderOne(AlignmentUploader):
             Updated alignments.
         """
         # Get the new trajectory and update
-        traj = self.one.alyx.rest('trajectories', 'list', probe_insertion=self.pid,
-                                  provenance='Ephys aligned histology track', no_cache=True)
+        traj = self.one.alyx.rest(
+            'trajectories',
+            'list',
+            probe_insertion=self.pid,
+            provenance='Ephys aligned histology track',
+            no_cache=True,
+        )
 
-        self.one.alyx.rest('trajectories', 'partial_update', id=traj[0]['id'],
-                           data={'probe_insertion': self.pid, 'json': alignments})
+        self.one.alyx.rest(
+            'trajectories',
+            'partial_update',
+            id=traj[0]['id'],
+            data={'probe_insertion': self.pid, 'json': alignments},
+        )
 
     def set_user_qc(
-            self,
-            align_qc: str,
-            ephys_qc: str,
-            ephys_desc: list[str],
-            force_resolve: bool
+        self, align_qc: str, ephys_qc: str, ephys_desc: list[str], force_resolve: bool
     ) -> None:
         """
         Set QC and confidence strings, optionally launching critical reasons GUI.
@@ -227,7 +240,7 @@ class AlignmentUploaderOne(AlignmentUploader):
         force_resolve : bool
             Whether to force the alignment to be resolved.
         """
-        ephys_desc_str = 'None' if len(ephys_desc) == 0 else ", ".join(ephys_desc)
+        ephys_desc_str = 'None' if len(ephys_desc) == 0 else ', '.join(ephys_desc)
         self.qc_str = ephys_qc.upper() + ': ' + ephys_desc_str
         self.confidence_str = f'Confidence: {align_qc}'
         self.force_resolve = force_resolve
@@ -251,12 +264,20 @@ class AlignmentUploaderOne(AlignmentUploader):
         self.resolved: bool
             Alignment resolved bool
         """
-        align_qc = AlignmentQC(self.pid, one=self.one, brain_atlas=self.brain_atlas,
-                               collection=data['probe_collection'])
+        align_qc = AlignmentQC(
+            self.pid,
+            one=self.one,
+            brain_atlas=self.brain_atlas,
+            collection=data['probe_collection'],
+        )
 
-        align_qc.load_data(prev_alignments=alignments, xyz_picks=data['xyz_picks'],
-                           depths=data['chn_depths'], cluster_chns=data['cluster_chns'],
-                           chn_coords=data['chn_coords'])
+        align_qc.load_data(
+            prev_alignments=alignments,
+            xyz_picks=data['xyz_picks'],
+            depths=data['chn_depths'],
+            cluster_chns=data['cluster_chns'],
+            chn_coords=data['chn_coords'],
+        )
 
         if self.force_resolve:
             align_qc.resolve_manual(self.align_key, force=True, upload_flatiron=False)
@@ -299,13 +320,13 @@ class AlignmentUploaderLocal(AlignmentUploader):
     """
 
     def __init__(
-            self,
-            data_path: Path,
-            shank_idx: int,
-            n_shanks: int,
-            brain_atlas: AllenAtlas,
-            user: str | None = None):
-
+        self,
+        data_path: Path,
+        shank_idx: int,
+        n_shanks: int,
+        brain_atlas: AllenAtlas,
+        user: str | None = None,
+    ):
         self.data_path: Path = data_path
         self.shank_idx: int = shank_idx
         self.n_shanks: int = n_shanks
@@ -313,11 +334,7 @@ class AlignmentUploaderLocal(AlignmentUploader):
         self.orig_idx: np.ndarray | None = None
         super().__init__(brain_atlas)
 
-    def upload_data(
-            self,
-            data: dict[str, Any],
-            shank_sites: Bunch[str, Any] | None = None
-    ) -> str:
+    def upload_data(self, data: dict[str, Any], shank_sites: Bunch[str, Any] | None = None) -> str:
         """
         Save channels and alignments to local files.
 
@@ -361,7 +378,8 @@ class AlignmentUploaderLocal(AlignmentUploader):
             Information about location of electrode channels in brain atlas
         """
         brain_regions = self.brain_atlas.regions.get(
-            self.brain_atlas.get_labels(data['xyz_channels']))
+            self.brain_atlas.get_labels(data['xyz_channels'])
+        )
         brain_regions['xyz'] = data['xyz_channels']
         brain_regions['lateral'] = data['chn_coords'][:, 0]
         brain_regions['axial'] = data['chn_coords'][:, 1]
@@ -392,7 +410,7 @@ class AlignmentUploaderLocal(AlignmentUploader):
                 'axial': np.float64(brain_regions.axial[i]),
                 'lateral': np.float64(brain_regions.lateral[i]),
                 'brain_region_id': int(brain_regions.id[i]),
-                'brain_region': brain_regions.acronym[i]
+                'brain_region': brain_regions.acronym[i],
             }
             if self.orig_idx is not None:
                 channel['original_channel_idx'] = int(self.orig_idx[i])
@@ -449,8 +467,11 @@ class AlignmentUploaderLocal(AlignmentUploader):
         alignments : dict[str, Any]
             Dictionary of alignment data.
         """
-        prev_align_filename = 'prev_alignments.json' if self.n_shanks == 1 else \
-            f'prev_alignments_shank{self.shank_idx + 1}.json'
+        prev_align_filename = (
+            'prev_alignments.json'
+            if self.n_shanks == 1
+            else f'prev_alignments_shank{self.shank_idx + 1}.json'
+        )
 
         self._save_json_file(prev_align_filename, alignments)
 
@@ -463,8 +484,11 @@ class AlignmentUploaderLocal(AlignmentUploader):
         channels: dict[str, dict]
             Dictionary of dictionaries containing data for each channel
         """
-        chan_loc_filename = 'channel_locations.json' if self.n_shanks == 1 else \
-            f'channel_locations_shank{self.shank_idx + 1}.json'
+        chan_loc_filename = (
+            'channel_locations.json'
+            if self.n_shanks == 1
+            else f'channel_locations_shank{self.shank_idx + 1}.json'
+        )
 
         self._save_json_file(chan_loc_filename, channels)
 
@@ -479,5 +503,5 @@ class AlignmentUploaderLocal(AlignmentUploader):
         json_data:
             The data to save to the JSON file. Must be JSON serializable
         """
-        with open(self.data_path.joinpath(file_path), "w") as f:
+        with open(self.data_path.joinpath(file_path), 'w') as f:
             json.dump(json_data, f, indent=2, separators=(',', ': '))

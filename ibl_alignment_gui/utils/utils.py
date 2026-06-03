@@ -30,9 +30,9 @@ def shank_loop(func: Callable) -> Callable:
         shanks and configurations, calling the original method for each, and
         returning a list of results.
     """
+
     @wraps(func)
     def wrapper(controller, *args, **kwargs) -> Any:
-
         shanks = kwargs.pop('shanks', controller.all_shanks)
         shanks = controller.all_shanks if shanks is None else shanks
         configs = kwargs.pop('configs', controller.model.configs)
@@ -42,12 +42,20 @@ def shank_loop(func: Callable) -> Callable:
         results = []
         for config in configs:
             for shank in shanks:
-                if (not controller.model.get_current_shank(shank, config).align_exists and
-                        not data_only):
+                if (
+                    not controller.model.get_current_shank(shank, config).align_exists
+                    and not data_only
+                ):
                     continue
 
-                result = func(controller, controller.shank_items[shank][config], *args, **kwargs,
-                              shank=shank, config=config)
+                result = func(
+                    controller,
+                    controller.shank_items[shank][config],
+                    *args,
+                    **kwargs,
+                    shank=shank,
+                    config=config,
+                )
                 results.append(result)
         return results
 

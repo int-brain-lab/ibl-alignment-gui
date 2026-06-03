@@ -3,7 +3,6 @@ import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +14,10 @@ import spikeglx
 import ibldsp.voltage
 import one.alf.io as alfio
 from brainbox.io.spikeglx import Streamer
+from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFObjectNotFound
+from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
 from one.api import ONE
 from one.remote import aws
 
@@ -27,34 +27,6 @@ except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CollectionData:
-    """
-    Container for dataset collection names used in an experiment.
-
-    Attributes
-    ----------
-    spike_collection : str or None
-        Collection name for spike-sorted data (e.g., 'alf/probe00/iblsorter'),
-        default is empty string.
-    ephys_collection : str or None
-        Collection name for raw electrophysiology data (e.g., 'raw_ephys_data').
-    task_collection : str or None
-        Collection name for task data (e.g., 'alf/task01').
-    raw_task_collection : str or None
-        Collection name for raw task data (e.g., 'raw_task01').
-    meta_collection : str or None
-        Collection name for raw electrophysiology metadata with probe info
-        (e.g., 'raw_ephys_data').
-    """
-
-    spike_collection: str | None = ''
-    ephys_collection: str | None = ''
-    task_collection: str | None = ''
-    raw_task_collection: str | None = ''
-    meta_collection: str | None = ''
 
 
 class DataLoader(ABC):
@@ -71,7 +43,6 @@ class DataLoader(ABC):
     """
 
     def __init__(self):
-
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
 
@@ -109,12 +80,15 @@ class DataLoader(ABC):
 
     @staticmethod
     def load_data(
-            load_function: Callable,
-            *args: Any,
-            raise_message: str | None = None,
-            raise_exception: Exception = ALFObjectNotFound,
-            raise_error: bool = False,
-            **kwargs
+        load_function: Callable,
+        *args: Any,
+        raise_message: str | None = None,
+        raise_exception: type[Exception] | tuple[type[Exception], ...] = (
+            ALFObjectNotFound,
+            ALFMultipleCollectionsFound,
+        ),
+        raise_error: bool = False,
+        **kwargs,
     ) -> Bunch[str, Any]:
         """
         Safely load data using a provided function.
@@ -144,8 +118,16 @@ class DataLoader(ABC):
                 data['exists'] = True
             return data
         except raise_exception as e:
-            raise_message = raise_message or (f'{alf_object} data was not found, '
-                                              f'some plots will not display')
+            if raise_message is None:
+                if isinstance(e, ALFMultipleCollectionsFound):
+                    raise_message = (
+                        f'{alf_object} data matches multiple collections ({e}); '
+                        f'cannot disambiguate, some plots will not display'
+                    )
+                else:
+                    raise_message = (
+                        f'{alf_object} data was not found, some plots will not display'
+                    )
             logger.warning(raise_message)
             if raise_error:
                 logger.error(raise_message)
@@ -177,9 +159,10 @@ class DataLoader(ABC):
         try:
             rf_data = self.load_passive_data('passiveRFM')
             frame_path = self.load_raw_passive_data('RFMapStim')
-            frames = np.fromfile(frame_path['raw'], dtype="uint8")
-            rf_data['frames'] = np.transpose(np.reshape(frames, [15, 15, -1],
-                                                        order="F"), [2, 1, 0])
+            frames = np.fromfile(frame_path['raw'], dtype='uint8')
+            rf_data['frames'] = np.transpose(
+                np.reshape(frames, [15, 15, -1], order='F'), [2, 1, 0]
+            )
         except Exception:
             logger.warning('passiveRFM data was not found, some plots will not display')
             rf_data = Bunch(exists=False)
@@ -194,10 +177,12 @@ class DataLoader(ABC):
                 vis_stim = Bunch(exists=False)
             else:
                 vis_stim = Bunch()
-                vis_stim['leftGabor'] = gabor['start'][
-                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)].astype(np.float32)
-                vis_stim['rightGabor'] = gabor['start'][
-                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)].astype(np.float32)
+                vis_stim['leftGabor'] = np.array(gabor['start'][
+                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)
+                ], dtype=np.float64)
+                vis_stim['rightGabor'] =  np.array(gabor['start'][
+                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)
+                ], dtype=np.float64)
                 vis_stim['exists'] = True
         except Exception:
             logger.warning('Failed to process passiveGabor data, some plots will not display')
@@ -265,10 +250,7 @@ class DataLoader(ABC):
 
     @abstractmethod
     def load_spikes_data(
-            self,
-            alf_object: str,
-            attributes: list[str],
-            **kwargs
+        self, alf_object: str, attributes: list[str], **kwargs
     ) -> Bunch[str, Any]:
         """Abstract method to load spike sorting data."""
 
@@ -287,14 +269,13 @@ class DataLoader(ABC):
         channels: Bunch
             channels data
         """
-        spikes = self.load_spikes_data('spikes',
-                                       ['depths', 'amps', 'times', 'clusters'])
+        spikes = self.load_spikes_data('spikes', ['depths', 'amps', 'times', 'clusters'])
 
-        clusters = self.load_spikes_data('clusters',
-                                         ['metrics', 'peakToTrough', 'waveforms', 'channels'])
+        clusters = self.load_spikes_data(
+            'clusters', ['metrics', 'peakToTrough', 'waveforms', 'channels']
+        )
 
-        channels = self.load_spikes_data('channels',
-                                         ['rawInd', 'localCoordinates'])
+        channels = self.load_spikes_data('channels', ['rawInd', 'localCoordinates'])
 
         if self.filter and spikes['exists']:
             # Remove low firing rate clusters
@@ -306,10 +287,7 @@ class DataLoader(ABC):
         return spikes, clusters, channels
 
     def filter_spikes_by_chns(
-            self,
-            spikes: Bunch[str, Any],
-            clusters: Bunch[str, Any],
-            channels: Bunch[str, Any]
+        self, spikes: Bunch[str, Any], clusters: Bunch[str, Any], channels: Bunch[str, Any]
     ) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
         Filter spikes to only include data relevant to channels present on selected shank.
@@ -323,8 +301,10 @@ class DataLoader(ABC):
         channels: Bunch
             Filtered channels data
         """
-        spikes_idx = np.isin(channels['rawInd'][clusters['channels'][spikes['clusters']]],
-                             self.shank_sites['spikes_ind'])
+        spikes_idx = np.isin(
+            channels['rawInd'][clusters['channels'][spikes['clusters']]],
+            self.shank_sites['spikes_ind'],
+        )
 
         for key in spikes:
             if key == 'exists':
@@ -359,9 +339,7 @@ class DataLoader(ABC):
 
     @staticmethod
     def filter_spikes_by_fr(
-            spikes: Bunch[str, Any],
-            clusters: Bunch[str, Any],
-            min_fr: float = 50 / 3600
+        spikes: Bunch[str, Any], clusters: Bunch[str, Any], min_fr: float = 50 / 3600
     ) -> tuple[Bunch[str, Any], Bunch[str, Any]]:
         """
         Remove low-firing clusters and filter spikes accordingly.
@@ -415,9 +393,13 @@ class DataLoaderOne(DataLoader):
         Spike sorting algorithm to load (e.g. 'pykilosort', 'iblsorter').
     """
 
-    def __init__(self, insertion: dict, one: ONE,
-                 session_path: Path | None = None, spike_collection: str | None = None):
-
+    def __init__(
+        self,
+        insertion: dict,
+        one: ONE,
+        session_path: Path | None = None,
+        spike_collection: str | None = None,
+    ):
         self.one: ONE = one
         self.eid: str = insertion['session']
         self.session_path: Path = session_path or one.eid2path(self.eid)
@@ -482,14 +464,16 @@ class DataLoaderOne(DataLoader):
         -------
         Bunch
         """
-        return self.load_data(self.one.load_object, self.eid, alf_object,
-                              collection=f'raw_ephys_data/{self.probe_label}', **kwargs)
+        return self.load_data(
+            self.one.load_object,
+            self.eid,
+            alf_object,
+            collection=f'raw_ephys_data/{self.probe_label}',
+            **kwargs,
+        )
 
     def load_spikes_data(
-            self,
-            alf_object: str,
-            attributes: list[str],
-            **kwargs
+        self, alf_object: str, attributes: list[str], **kwargs
     ) -> Bunch[str, Any]:
         """
         Load spike sorting data using ONE.
@@ -499,8 +483,13 @@ class DataLoaderOne(DataLoader):
         Bunch
         """
         return self.load_data(
-            self.one.load_object, self.eid, alf_object, collection=self.probe_collection,
-            attribute=attributes, **kwargs)
+            self.one.load_object,
+            self.eid,
+            alf_object,
+            collection=self.probe_collection,
+            attribute=attributes,
+            **kwargs,
+        )
 
 
 class DataLoaderLocal(DataLoader):
@@ -518,15 +507,13 @@ class DataLoaderLocal(DataLoader):
         Object containing subcollection paths for spike, ephys, task, raw_task, and metadata.
     """
 
-    def __init__(self, probe_path: Path, collections: CollectionData):
-
-        self.probe_path: Path = probe_path
-        self.spike_path: Path = probe_path.joinpath(collections.spike_collection)
-        self.ephys_path: Path = probe_path.joinpath(collections.ephys_collection)
-        self.task_path: Path = probe_path.joinpath(collections.task_collection)
-        self.raw_task_path: Path = probe_path.joinpath(collections.raw_task_collection)
-        self.meta_path: Path = probe_path.joinpath(collections.meta_collection)
-        self.probe_collection: str = collections.spike_collection
+    def __init__(self, data_paths: DatasetPaths):
+        self.spike_path: Path = data_paths.spike_sorting
+        self.ephys_path: Path = data_paths.processed_ephys
+        self.task_path: Path = data_paths.task
+        self.raw_task_path: Path = data_paths.raw_task
+        self.meta_path: Path = data_paths.raw_ephys
+        self.probe_collection: str = self.spike_path.name
 
         super().__init__()
 
@@ -546,9 +533,24 @@ class DataLoaderLocal(DataLoader):
 
         Returns
         -------
-        Bunch
+        Bunch or None
         """
         return self.load_data(alfio.load_object, self.raw_task_path, alf_object)
+
+    def get_passive_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
+        """
+        Load passive data from local path.
+
+        Only attempts to load if both task_path and raw_task_path are defined.
+
+        Returns
+        -------
+        Bunch or None
+        """
+        if self.task_path is None and self.raw_task_path is None:
+            return Bunch(exists=False), Bunch(exists=False), Bunch(exists=False)
+
+        return super().get_passive_data()
 
     def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
         """
@@ -561,10 +563,7 @@ class DataLoaderLocal(DataLoader):
         return self.load_data(alfio.load_object, self.ephys_path, alf_object, **kwargs)
 
     def load_spikes_data(
-            self,
-            alf_object: str,
-            attributes: list[str],
-            **kwargs
+        self, alf_object: str, attributes: list[str], **kwargs
     ) -> Bunch[str, Any]:
         """
         Load spike sorting data from local path.
@@ -574,7 +573,8 @@ class DataLoaderLocal(DataLoader):
         Bunch
         """
         return self.load_data(
-            alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs)
+            alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs
+        )
 
 
 class SpikeGLXLoader(ABC):
@@ -592,7 +592,6 @@ class SpikeGLXLoader(ABC):
     """
 
     def __init__(self, save_path: Path | None = None):
-
         self.meta: Bunch | None = None
         self.save_path: Path | None = save_path
         self.cached_ap_path: Path | None = save_path.joinpath(
@@ -657,10 +656,7 @@ class SpikeGLXLoader(ABC):
         times = self.get_time_snippets(sr)
 
         # Thresholds for channel quality detection
-        detection_thresholds = {
-            'similarity_threshold': (-0.5, 1),
-            'psd_hf_threshold': 0.02
-        }
+        detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
 
         data = defaultdict(Bunch)
 
@@ -682,27 +678,25 @@ class SpikeGLXLoader(ABC):
         channel_flags, _ = scipy.stats.mode(chn_labels, axis=1)
 
         data['dead_channels'] = Bunch(
-            values=chn_features_med["xcor_hf"],
+            values=chn_features_med['xcor_hf'],
             lines=[detection_thresholds['similarity_threshold'][0]],
-            points=channel_flags == 1
+            points=channel_flags == 1,
         )
 
         data['noisy_channels_coherence'] = Bunch(
-            values=chn_features_med["xcor_hf"],
+            values=chn_features_med['xcor_hf'],
             lines=[detection_thresholds['similarity_threshold'][1]],
-            points=chn_features_med["xcor_hf"] > detection_thresholds['similarity_threshold'][1]
+            points=chn_features_med['xcor_hf'] > detection_thresholds['similarity_threshold'][1],
         )
 
         data['noisy_channels_psd'] = Bunch(
-            values=chn_features_med["psd_hf"],
+            values=chn_features_med['psd_hf'],
             lines=[detection_thresholds['psd_hf_threshold']],
-            points=channel_flags == 2
+            points=channel_flags == 2,
         )
 
         data['outside_channels'] = Bunch(
-            values=chn_features_med["xcor_lf"],
-            lines=[-0.75, 0.75],
-            points=channel_flags == 3
+            values=chn_features_med['xcor_lf'], lines=[-0.75, 0.75], points=channel_flags == 3
         )
 
         data['exists'] = True
@@ -782,13 +776,11 @@ class SpikeGLXLoader(ABC):
         """
         start_sample = int(t * sr.fs)
         end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, :-sr.nsync].T
+        raw = sr[start_sample:end_sample, : -sr.nsync].T
 
         # Detect bad channels and destripe
-        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(
-            raw, sr.fs, **kwargs)
-        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry,
-                                      channel_labels=channel_labels)
+        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, sr.fs, **kwargs)
+        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels)
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
@@ -876,12 +868,8 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
     """
 
     def __init__(
-            self,
-            insertion: dict,
-            one: ONE,
-            session_path: Path | None = None,
-            force: bool = False):
-
+        self, insertion: dict, one: ONE, session_path: Path | None = None, force: bool = False
+    ):
         self.one: ONE = one
         self.eid: str = insertion['session']
         self.session_path: Path = session_path or self.one.eid2path(self.eid)
@@ -903,8 +891,11 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         """
         try:
             meta_file = self.one.load_dataset(
-                self.eid, '*.ap.meta', collection=f'raw_ephys_data/{self.probe_label}',
-                download_only=True)
+                self.eid,
+                '*.ap.meta',
+                collection=f'raw_ephys_data/{self.probe_label}',
+                download_only=True,
+            )
             return spikeglx.read_meta_data(meta_file)
         except ALFObjectNotFound:
             return None
@@ -944,9 +935,8 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         Name of subfolder containing meta and binary files.
     """
 
-    def __init__(self, probe_path: Path, meta_collection: str):
-
-        self.meta_path: Path = probe_path.joinpath(meta_collection)
+    def __init__(self, meta_path: Path):
+        self.meta_path: Path = meta_path
 
         super().__init__(self.meta_path)
 

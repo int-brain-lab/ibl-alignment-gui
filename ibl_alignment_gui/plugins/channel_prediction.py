@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -43,8 +44,9 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action = QtWidgets.QAction(model, controller.view)
         action.setCheckable(True)
         action.setChecked(model == 'Original')
-        action.triggered.connect(lambda _, m=model, func=model_func:
-                                 channel_prediction.plot_regions(_, m, func))
+        action.triggered.connect(
+            lambda _, m=model, func=model_func: channel_prediction.plot_regions(_, m, func)
+        )
         action_group.addAction(action)
         plugin_menu.addAction(action)
 
@@ -102,11 +104,11 @@ def plot_original_regions(_, items: 'ShankController', **kwargs) -> None:
 
 @shank_loop
 def plot_predicted_regions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController',
-        model: str,
-        func: Callable,
-        **kwargs
+    controller: 'AlignmentGUIController',
+    items: 'ShankController',
+    model: str,
+    func: Callable,
+    **kwargs,
 ) -> None:
     """
     Plot the model predictions on the reference histology plot.
@@ -133,8 +135,7 @@ def plot_predicted_regions(
 
 
 def compute_cosmos_predictions(
-        controller: 'AlignmentGUIController',
-        items: 'ShankController'
+    controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> Bunch[str, np.ndarray]:
     """
     Example prediction model that returns cosmos brain regions.
@@ -259,10 +260,6 @@ def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.nd
         region_label[i, :] = (np.mean(depths[[start, end]]) * 1e6, regions.acronym[end])
         region_colour[i, :] = regions.rgb[end]
 
-    data = Bunch(
-        region=region,
-        axis_label=region_label,
-        colour=region_colour
-    )
+    data = Bunch(region=region, axis_label=region_label, colour=region_colour)
 
     return data

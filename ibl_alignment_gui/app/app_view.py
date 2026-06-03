@@ -20,15 +20,13 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     ----------
     offline: bool
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
-    csv: Path or str or None
-        Path to a CSV file containing local sessions on the filesystem.
+    config: bool
+        Whether multiple configs are to be used
     """
 
-    def __init__(self, offline: bool = False, csv: bool = False):
-
+    def __init__(self, offline: bool = False, config: bool = False):
         super().__init__()
-        self.offline: bool = offline
-        self.csv: bool = csv
+        self.config = config
 
         self.resize(1600, 800)
         self.setWindowTitle('IBL alignment GUI')
@@ -37,7 +35,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         # Create custom widgets that will be added to the main window
         self.button_widgets = custom_widgets.ButtonWidget(parent=self)
         self.selection_widgets = custom_widgets.SelectionWidget(
-            offline=self.offline, config=self.csv, parent=self)
+            offline=offline, config=self.config, parent=self
+        )
         self.menu_widgets = custom_widgets.MenuWidget(self)
         self.setMenuBar(self.menu_widgets)
         self.menu_widgets.setCornerWidget(self.selection_widgets, corner=QtCore.Qt.TopRightCorner)
@@ -110,12 +109,12 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         self.tab_widgets['slice'].tab_widget.blockSignals(False)
 
     def init_tabs(
-            self,
-            shank_items: dict | Bunch,
-            selected_config: str,
-            default_config: str,
-            non_default_config: str,
-            feature_view: bool = False
+        self,
+        shank_items: dict | Bunch,
+        selected_config: str,
+        default_config: str,
+        non_default_config: str,
+        feature_view: bool = False,
     ) -> list[QtWidgets.QWidget]:
         """
         Initialize the shank and slice tab widgets with the given shank items.
@@ -145,23 +144,26 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         config = default_config if selected_config == 'both' else selected_config
 
         for i, shank in enumerate(shank_items):
-
             # Create the shank panel depending on the configuration selected
             if selected_config == 'both':
                 if feature_view:
                     fig_area = custom_widgets.DualConfigFeatureWidget(
                         shank_items[shank][default_config].view,
-                        shank_items[shank][non_default_config].view)
+                        shank_items[shank][non_default_config].view,
+                    )
                 else:
                     fig_area = custom_widgets.DualConfigWidget(
                         shank_items[shank][default_config].view,
-                        shank_items[shank][non_default_config].view)
+                        shank_items[shank][non_default_config].view,
+                    )
             elif feature_view:
                 fig_area = custom_widgets.SingleConfigFeatureWidget(
-                    shank_items[shank][selected_config].view)
+                    shank_items[shank][selected_config].view
+                )
             else:
                 fig_area = custom_widgets.SingleConfigWidget(
-                    shank_items[shank][selected_config].view)
+                    shank_items[shank][selected_config].view
+                )
 
             # Add the fit items from each shank to the fit plot
             self.fit_widget.fig_fit.addItem(shank_items[shank][config].view.fit_plot)
@@ -253,10 +255,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         self.tab_widgets['shank'].tab_widget.setCurrentIndex(idx)
 
     def connect_tabs(
-            self,
-            name: str,
-            callback: Callable,
-            layout_callback: Callable | None = None
+        self, name: str, callback: Callable, layout_callback: Callable | None = None
     ) -> None:
         """
         Connect the tab change signal to a callback.
@@ -277,14 +276,16 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     # --------------------------------------------------------------------------------------------
     # Menu widget
     # --------------------------------------------------------------------------------------------
-    def populate_menu_tab(self, tab: str, callback: Callable, options: list[str],
-                          set_checked: bool = True) -> str | None:
-        """"See :meth:`MenuWidget.populate_exclusive_tab` for details."""
+    def populate_menu_tab(
+        self, tab: str, callback: Callable, options: list[str], set_checked: bool = True
+    ) -> str | None:
+        """See :meth:`MenuWidget.populate_exclusive_tab` for details."""
         return self.menu_widgets.populate_exclusive_tab(
-            tab, callback, options, set_checked=set_checked)
+            tab, callback, options, set_checked=set_checked
+        )
 
     def add_shortcuts_to_menu(self, tab: str, options: dict) -> None:
-        """"See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""
+        """See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""
         return self.menu_widgets.populate_non_exclusive_tab(tab, options)
 
     def trigger_menu_option(self, tab: str, option: str) -> None:
@@ -341,8 +342,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         total_idx: int
             The total number of fits stores in the alignment buffer
         """
-        self.button_widgets.labels['current'].setText(f"Current Index = {current_idx}")
-        self.button_widgets.labels['total'].setText(f"Total Index = {total_idx}")
+        self.button_widgets.labels['current'].setText(f'Current Index = {current_idx}')
+        self.button_widgets.labels['total'].setText(f'Total Index = {total_idx}')
 
     def add_all_button(self) -> None:
         """See :meth:`ButtonWidget.add_all_button` for details."""
@@ -389,8 +390,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The values to add to the list
         """
         self.selection_widgets.populate_combobox(
-            values, self.selection_widgets.dropdowns[name]['list'],
-            self.selection_widgets.dropdowns[name]['combobox'])
+            values,
+            self.selection_widgets.dropdowns[name]['list'],
+            self.selection_widgets.dropdowns[name]['combobox'],
+        )
 
     def clear_selection_dropdown(self, name: str | list) -> None:
         """
@@ -437,10 +440,20 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         selected_path: Path
             The user selected path that contains data to load
         """
-        selected_path = Path(QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select Folder"))
+        selected_path = Path(QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder'))
         self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
         return selected_path
+
+    def set_selected_path(self, selected_path: Path | str) -> None:
+        """
+        Set the text line edit to show the selected folder path.
+
+        Parameters
+        ----------
+        selected_path: Path or str
+            The user selected path that contains data to load
+        """
+        self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
 
     # --------------------------------------------------------------------------------------------
     # LUT widget
@@ -540,8 +553,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             True if the user wants to upload the channels and alignments, False otherwise
         """
         upload = QtWidgets.QMessageBox.question(
-            self, '', "Upload alignment?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            self, '', 'Upload alignment?', QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
         return upload == QtWidgets.QMessageBox.Yes
 
     def upload_info(self, uploaded: bool, info: str | None = None) -> None:
@@ -558,4 +571,4 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         if uploaded:
             QtWidgets.QMessageBox.information(self, 'Status', info)
         else:
-            QtWidgets.QMessageBox.information(self, 'Status', "Channels not saved")
+            QtWidgets.QMessageBox.information(self, 'Status', 'Channels not saved')

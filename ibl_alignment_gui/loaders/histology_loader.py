@@ -30,7 +30,6 @@ class SliceLoader(ABC):
     """
 
     def __init__(self, file_path: Path, brain_atlas: AllenAtlas):
-
         self.file_path: Path = file_path
         self.brain_atlas: AllenAtlas = brain_atlas
         self.hist_paths: dict[str, Path] = {}
@@ -70,10 +69,12 @@ class SliceLoader(ABC):
         slices: dict[str, dict]
             A dictionary of dictionaries of image slices and metadata for each image type.
         """
-        slices = Bunch({
-            'CCF': self.get_slice(xyz, self.brain_atlas.image),
-            'Annotation': self.get_slice(xyz, self.brain_atlas.label, annotation=True)
-        })
+        slices = Bunch(
+            {
+                'CCF': self.get_slice(xyz, self.brain_atlas.image),
+                'Annotation': self.get_slice(xyz, self.brain_atlas.label, annotation=True),
+            }
+        )
 
         slices['Annotation']['label'] = True
 
@@ -82,15 +83,12 @@ class SliceLoader(ABC):
                 vol = self.load_volume(vol_path)
                 slices[key] = self.get_slice(xyz, vol)
             except Exception as e:
-                logger.error(f"Failed to load {key} volume at {vol_path}: {e}")
+                logger.error(f'Failed to load {key} volume at {vol_path}: {e}')
 
         return slices
 
     def get_slice(
-            self,
-            xyz: np.ndarray,
-            vol: np.ndarray,
-            annotation: bool = False
+        self, xyz: np.ndarray, vol: np.ndarray, annotation: bool = False
     ) -> dict[str, np.ndarray]:
         """
         Extract a slice from a 3D volume using given coordinates.
@@ -114,12 +112,18 @@ class SliceLoader(ABC):
         if annotation:
             hist_slice = self.brain_atlas._label2rgb(hist_slice)
         hist_slice = np.swapaxes(hist_slice, 0, 1)
-        return Bunch({
-            'slice': hist_slice,
-            'scale': np.array([(width[-1] - width[0]) / hist_slice.shape[0],
-                               (height[-1] - height[0]) / hist_slice.shape[1]]),
-            'offset': np.array([width[0], height[0]])
-        })
+        return Bunch(
+            {
+                'slice': hist_slice,
+                'scale': np.array(
+                    [
+                        (width[-1] - width[0]) / hist_slice.shape[0],
+                        (height[-1] - height[0]) / hist_slice.shape[1],
+                    ]
+                ),
+                'offset': np.array([width[0], height[0]]),
+            }
+        )
 
 
 class NrrdSliceLoader(SliceLoader):
@@ -140,7 +144,7 @@ class NrrdSliceLoader(SliceLoader):
     def get_paths(self) -> None:
         """Load histology file paths with predefined color channel suffixes."""
         col_map = {'red': 'RD', 'green': 'GR'}
-        files = list(self.file_path.glob("*.nrrd"))
+        files = list(self.file_path.glob('*.nrrd'))
 
         for color, abbrev in col_map.items():
             match = next((f for f in files if abbrev in f.name), None)
@@ -165,8 +169,7 @@ class NrrdSliceLoader(SliceLoader):
 
 
 def download_histology_data(
-        subject: str,
-        laboratory: str
+    subject: str, laboratory: str
 ) -> tuple[list[Path], Path] | tuple[None, Path]:
     """
     Download histology data from flatiron server if not already cached locally.
@@ -187,7 +190,7 @@ def download_histology_data(
     """
     # If we detect >= 2 nrrd file we assume the histology data already exists
     cache_dir = params.get_cache_dir().joinpath(laboratory, 'Subjects', subject, 'histology')
-    expected_files = list(cache_dir.glob("*.nrrd"))
+    expected_files = list(cache_dir.glob('*.nrrd'))
 
     if len(expected_files) >= 2:
         return expected_files, cache_dir
@@ -199,20 +202,18 @@ def download_histology_data(
 
     def _find_histology_folder(subj: str, lab: str):
         flatiron_path = Path('histology', lab, subj, 'downsampledStacks_25', 'sample2ARA')
-        url = f"{par.HTTP_DATA_SERVER}/{'/'.join(flatiron_path.parts)}/"
+        url = f'{par.HTTP_DATA_SERVER}/{"/".join(flatiron_path.parts)}/'
         try:
             response = requests.get(
-                url, auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD))
+                url, auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD)
+            )
             response.raise_for_status()
             return flatiron_path, response.text
         except Exception as e:
-            logger.warning(f"Failed to find path for lab={lab}, subject={subj}: {e}")
+            logger.warning(f'Failed to find path for lab={lab}, subject={subj}: {e}')
             return None
 
-    attempts = [
-        (subject, lab_hist),
-        (subject.replace("_", ""), lab_hist)
-    ]
+    attempts = [(subject, lab_hist), (subject.replace('_', ''), lab_hist)]
 
     if lab_hist == 'churchlandlab_ucla':
         attempts.append((subject, 'churchlandlab'))
@@ -224,23 +225,26 @@ def download_histology_data(
             break
 
     if not histology_folder:
-        logger.error(f"Could not find histology folder for subject={subject}, lab={laboratory}")
+        logger.error(f'Could not find histology folder for subject={subject}, lab={laboratory}')
         return None, cache_dir
 
     rel_path, html_text = histology_folder
-    base_url = f"{par.HTTP_DATA_SERVER}/{'/'.join(rel_path.parts)}"
+    base_url = f'{par.HTTP_DATA_SERVER}/{"/".join(rel_path.parts)}'
 
-    tif_files = [match + ".tif" for match in re.findall(r'href="(.*).tif"', html_text)]
+    tif_files = [match + '.tif' for match in re.findall(r'href="(.*).tif"', html_text)]
 
     cache_dir.mkdir(exist_ok=True, parents=True)
     path_to_files = []
     for file in tif_files:
         img_path = Path(cache_dir, file)
         if not img_path.exists():
-            file_url = f"{base_url}/{file}"
-            http_download_file(file_url, target_dir=cache_dir,
-                               username=par.HTTP_DATA_SERVER_LOGIN,
-                               password=par.HTTP_DATA_SERVER_PWD)
+            file_url = f'{base_url}/{file}'
+            http_download_file(
+                file_url,
+                target_dir=cache_dir,
+                username=par.HTTP_DATA_SERVER_LOGIN,
+                password=par.HTTP_DATA_SERVER_PWD,
+            )
         path_to_files.append(tif2nrrd(img_path))
 
     if len(path_to_files) > 3:
@@ -266,7 +270,7 @@ def tif2nrrd(path_to_image: str | Path) -> Path:
     path_to_nrrd = Path(path_to_image).with_suffix('.nrrd')
     if not path_to_nrrd.exists():
         reader = sitk.ImageFileReader()
-        reader.SetImageIO("TIFFImageIO")
+        reader.SetImageIO('TIFFImageIO')
         reader.SetFileName(str(path_to_image))
         img = reader.Execute()
 
@@ -274,7 +278,7 @@ def tif2nrrd(path_to_image: str | Path) -> Path:
         new_img = sitk.Flip(new_img, [True, False, False])
         new_img.SetSpacing([1, 1, 1])
         writer = sitk.ImageFileWriter()
-        writer.SetImageIO("NrrdImageIO")
+        writer.SetImageIO('NrrdImageIO')
         writer.SetFileName(str(path_to_nrrd))
         writer.Execute(new_img)
 

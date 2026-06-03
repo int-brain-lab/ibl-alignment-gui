@@ -28,6 +28,7 @@ np.seterr(divide='ignore', invalid='ignore')
 
 def skip_missing(required_keys):
     """Skip method execution if required data keys are missing or false."""
+
     def decorator(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -36,7 +37,9 @@ def skip_missing(required_keys):
                 if not val:
                     return {}
             return func(self, *args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -223,8 +226,7 @@ BNK_SIZE = 10
 
 
 def compute_spike_average(
-        spikes: Bunch[str, Any],
-        clusters: Bunch[str, Any]
+    spikes: Bunch[str, Any], clusters: Bunch[str, Any]
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute average spike amplitudes, depths, and firing rates for each cluster.
@@ -275,12 +277,12 @@ def compute_spike_average(
 
 
 def compute_bincount(
-        spike_times: np.ndarray,
-        spike_depths: np.ndarray,
-        spike_amps: np.ndarray,
-        xbin: float = TBIN,
-        ybin: float = DBIN,
-        **kwargs
+    spike_times: np.ndarray,
+    spike_depths: np.ndarray,
+    spike_amps: np.ndarray,
+    xbin: float = TBIN,
+    ybin: float = DBIN,
+    **kwargs,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute 2D binned spike count and amplitude over time and depth.
@@ -313,8 +315,9 @@ def compute_bincount(
     """
     count, times, depths = bincount2D(spike_times, spike_depths, xbin=xbin, ybin=ybin, **kwargs)
 
-    amp, times, depths = bincount2D(spike_times, spike_depths, xbin=xbin, ybin=ybin,
-                                    weights=spike_amps, **kwargs)
+    amp, times, depths = bincount2D(
+        spike_times, spike_depths, xbin=xbin, ybin=ybin, weights=spike_amps, **kwargs
+    )
 
     return count, amp, times, depths
 
@@ -340,9 +343,9 @@ def group_bincount(arr: np.ndarray, group_size: int, axis: int = 1) -> np.ndarra
         Array with grouped means and a final summed group if leftovers exist.
     """
     if arr.ndim != 2:
-        raise ValueError("Input array must be 2D.")
+        raise ValueError('Input array must be 2D.')
     if axis not in (0, 1):
-        raise ValueError("Axis must be 0 or 1.")
+        raise ValueError('Axis must be 0 or 1.')
 
     # Transpose if operating on axis 0 to reuse logic
     if axis == 0:
@@ -373,7 +376,6 @@ class PlotLoader:
     """Class for handling plot data generation."""
 
     def __init__(self):
-
         self.data: Bunch | None = None
         self.shank_sites: Bunch | None = None
         self.chn_min: float | None = None
@@ -501,8 +503,9 @@ class PlotLoader:
         self.avg_fr : np.ndarray
             Average firing rate per cluster.
         """
-        self.clust_id, self.avg_amp, self.avg_depth, self.avg_fr = (
-            compute_spike_average(self.data['spikes'], self.data['clusters']))
+        self.clust_id, self.avg_amp, self.avg_depth, self.avg_fr = compute_spike_average(
+            self.data['spikes'], self.data['clusters']
+        )
 
     @skip_missing(['spikes'])
     def compute_rasters(self) -> None:
@@ -529,9 +532,12 @@ class PlotLoader:
         self.chn_min_bc = np.min(np.r_[self.chn_min, self.spike_depths])
         self.chn_max_bc = np.max(np.r_[self.chn_max, self.spike_depths])
 
-        self.fr, self.amp, self.times, self.depths = (
-            compute_bincount(self.spike_times, self.spike_depths, self.spike_amps,
-                             ylim=[self.chn_min_bc, self.chn_max_bc]))
+        self.fr, self.amp, self.times, self.depths = compute_bincount(
+            self.spike_times,
+            self.spike_depths,
+            self.spike_amps,
+            ylim=[self.chn_min_bc, self.chn_max_bc],
+        )
 
     @skip_missing(['spikes'])
     def filter_units(self, filter_type) -> None:
@@ -555,17 +561,20 @@ class PlotLoader:
             The index of spikes that do not have NaN values for depth and amplitude
         """
         try:
-            if filter_type == "All":
+            if filter_type == 'All':
                 self.cluster_idx = np.arange(self.data['clusters'].channels.size)
                 self.spike_idx = np.arange(self.data['spikes']['clusters'].size)
             else:
                 column, condition = FILTER_MATCH[filter_type]
                 self.cluster_idx = np.where(self.data['clusters'].metrics[column] == condition)[0]
                 self.spike_idx = np.where(
-                    np.isin(self.data['spikes']['clusters'], self.cluster_idx))[0]
+                    np.isin(self.data['spikes']['clusters'], self.cluster_idx)
+                )[0]
 
-            self.kp_idx = np.where(~np.isnan(self.data['spikes']['depths'][self.spike_idx]) &
-                                   ~np.isnan(self.data['spikes']['amps'][self.spike_idx]))[0]
+            self.kp_idx = np.where(
+                ~np.isnan(self.data['spikes']['depths'][self.spike_idx])
+                & ~np.isnan(self.data['spikes']['amps'][self.spike_idx])
+            )[0]
         except Exception:
             logger.warning(f'{filter_type} metrics not found will return all units instead')
             self.filter_units('All')
@@ -609,7 +618,7 @@ class PlotLoader:
         colormap = cm.get_cmap('BuPu')(colour_bin)[..., :3]
 
         # Initialize colours and sizes
-        spikes_colours = np.array(["#000000"] * amps.size)
+        spikes_colours = np.array(['#000000'] * amps.size)
         spikes_size = np.zeros(amps.size)
 
         # Assign colour and sizes according to bin index
@@ -619,7 +628,7 @@ class PlotLoader:
 
         # For saturated amplitudes, set to dark purple and larger size
         saturated = bin_idx >= a_bin
-        spikes_colours[saturated] = "#400080"
+        spikes_colours[saturated] = '#400080'
         spikes_size[saturated] = (a_bin - 1) / (a_bin / 4)
 
         xrange = np.array([np.min(times), np.max(times)])
@@ -637,7 +646,7 @@ class PlotLoader:
             xaxis='Time (s)',
             title='Amplitude (uV)',
             cmap='BuPu',
-            cluster=False
+            cluster=False,
         )
 
         return {'Amplitude': scatter}
@@ -665,12 +674,16 @@ class PlotLoader:
             pen='k',
             size=np.array(8),
             symbol=np.array('o'),
-            xrange=np.array([0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
-                             1.1 * np.nanmax(self.avg_amp[self.cluster_idx])]),
+            xrange=np.array(
+                [
+                    0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
+                    1.1 * np.nanmax(self.avg_amp[self.cluster_idx]),
+                ]
+            ),
             xaxis='Amplitude (uV)',
             title='Firing Rate (Sp/s)',
             cmap='hot',
-            cluster=True
+            cluster=True,
         )
 
         return {'Cluster Amp vs Depth vs FR': scatter}
@@ -698,12 +711,16 @@ class PlotLoader:
             pen='k',
             size=np.array(8),
             symbol=np.array('o'),
-            xrange=np.array([0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
-                             1.1 * np.nanmax(self.avg_amp[self.cluster_idx])]),
+            xrange=np.array(
+                [
+                    0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
+                    1.1 * np.nanmax(self.avg_amp[self.cluster_idx]),
+                ]
+            ),
             xaxis='Amplitude (uV)',
             title='Peak to Trough duration (ms)',
             cmap='RdYlGn',
-            cluster=True
+            cluster=True,
         )
 
         return {'Cluster Amp vs Depth vs Duration': scatter}
@@ -731,12 +748,16 @@ class PlotLoader:
             pen='k',
             size=np.array(8),
             symbol=np.array('o'),
-            xrange=np.array([0.9 * np.nanmin(self.avg_fr[self.cluster_idx]),
-                             1.1 * np.nanmax(self.avg_fr[self.cluster_idx])]),
+            xrange=np.array(
+                [
+                    0.9 * np.nanmin(self.avg_fr[self.cluster_idx]),
+                    1.1 * np.nanmax(self.avg_fr[self.cluster_idx]),
+                ]
+            ),
             xaxis='Firing Rate (Sp/s)',
             title='Amplitude (uV)',
             cmap='magma',
-            cluster=True
+            cluster=True,
         )
 
         return {'Cluster FR vs Depth vs Amp': scatter}
@@ -767,7 +788,7 @@ class PlotLoader:
             xrange=np.array([self.times[0], self.times[-1]]),
             xaxis='Time (s)',
             cmap='binary',
-            title='Firing Rate'
+            title='Firing Rate',
         )
 
         return {'Firing Rate': img}
@@ -802,7 +823,7 @@ class PlotLoader:
             xrange=np.array([self.chn_min, self.chn_max]),
             cmap='viridis',
             title='Correlation',
-            xaxis='Distance from probe tip (um)'
+            xaxis='Distance from probe tip (um)',
         )
         return {'Correlation': img}
 
@@ -853,8 +874,9 @@ class PlotLoader:
           to align with the full channel map.
         """
         # Identify channels at the same depth
-        img = average_chns_at_same_depths(self.shank_sites,
-                                          self.data[f"rms_{band}"]["rms"]) * 1e6  # convert to µV
+        img = (
+            average_chns_at_same_depths(self.shank_sites, self.data[f'rms_{band}']['rms']) * 1e6
+        )  # convert to µV
 
         # Median subtract across depths (remove horizontal bands)
         depth_medians = np.median(img, axis=1, keepdims=True)
@@ -865,12 +887,12 @@ class PlotLoader:
         img_full = pad_data_to_full_chn_map(self.shank_sites, img)
 
         # Scaling for plotting
-        timestamps = self.data[f"rms_{band}"]["timestamps"]
+        timestamps = self.data[f'rms_{band}']['timestamps']
         xscale = (timestamps[-1] - timestamps[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
         levels = np.quantile(img, [0.1, 0.9])
 
-        cmap = "plasma" if band == "AP" else "inferno"
+        cmap = 'plasma' if band == 'AP' else 'inferno'
 
         img = ImageData(
             img=img_full,
@@ -880,11 +902,11 @@ class PlotLoader:
             offset=np.array([0, self.chn_min]),
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
-            xaxis=self.data[f"rms_{band}"]["xaxis"],
-            title=f"{band} RMS (uV)",
+            xaxis=self.data[f'rms_{band}']['xaxis'],
+            title=f'{band} RMS (uV)',
         )
 
-        return {f"rms {band}": img}
+        return {f'rms {band}': img}
 
     @skip_missing(['psd_LF'])
     def image_lfp_spectrum(self) -> dict[str, Any]:
@@ -904,8 +926,10 @@ class PlotLoader:
         """
         # Find frequency range
         freq_range = [0, 300]
-        freq_idx = np.where((self.data['psd_LF']['freqs'] >= freq_range[0]) &
-                            (self.data['psd_LF']['freqs'] < freq_range[1]))[0]
+        freq_idx = np.where(
+            (self.data['psd_LF']['freqs'] >= freq_range[0])
+            & (self.data['psd_LF']['freqs'] < freq_range[1])
+        )[0]
 
         # Extract PSD data for the selected frequency range and selected channels
         lfp_power = self.data['psd_LF']['power'][freq_idx, :]
@@ -931,7 +955,7 @@ class PlotLoader:
             cmap='viridis',
             xrange=np.array([freq_range[0], freq_range[-1]]),
             xaxis='Frequency (Hz)',
-            title='PSD (dB)'
+            title='PSD (dB)',
         )
 
         return {'LF spectrum': img}
@@ -961,24 +985,30 @@ class PlotLoader:
             stims = {stim_type: self.data['pass_stim'][stim_type] for stim_type in stim_types}
         else:
             stim_types = ['valveOn', 'toneOn', 'noiseOn', 'leftGabor', 'rightGabor']
-            stims = {stim_type: self.data['pass_stim'][stim_type]
-                     for stim_type in stim_types[0:3]}
-            stims.update({stim_type: self.data['gabor'][stim_type]
-                          for stim_type in stim_types[3:]})
+            stims = {stim_type: self.data['pass_stim'][stim_type] for stim_type in stim_types[0:3]}
+            stims.update(
+                {stim_type: self.data['gabor'][stim_type] for stim_type in stim_types[3:]}
+            )
 
         # Compute normalised event aligned psths
         base_stim = 1
         pre_stim = 0.4
         post_stim = 1
         stim_events = passive.get_stim_aligned_activity(
-            stims, self.spike_times, self.spike_depths, pre_stim=pre_stim, post_stim=post_stim,
-            base_stim=base_stim, y_lim=[self.chn_min_bc, self.chn_max_bc])
+            stims,
+            self.spike_times,
+            self.spike_depths,
+            pre_stim=pre_stim,
+            post_stim=post_stim,
+            base_stim=base_stim,
+            y_lim=[self.chn_min_bc, self.chn_max_bc],
+        )
 
         # Loop over each stimulus type and create ImageData objects
         passive_imgs = dict()
         for stim_type, aligned_img in stim_events.items():
             xscale = (post_stim + pre_stim) / aligned_img.shape[1]
-            yscale = ((self.chn_max - self.chn_min) / aligned_img.shape[0])
+            yscale = (self.chn_max - self.chn_min) / aligned_img.shape[0]
             levels = np.array([-10, 10])
 
             img = ImageData(
@@ -990,7 +1020,7 @@ class PlotLoader:
                 cmap='bwr',
                 xrange=np.array([-1 * pre_stim, post_stim]),
                 xaxis='Time from Stim Onset (s)',
-                title='Firing rate (z score)'
+                title='Firing rate (z score)',
             )
 
             passive_imgs.update({stim_type: img})
@@ -1055,7 +1085,7 @@ class PlotLoader:
                 cmap='bone',
                 xrange=x_range,
                 xaxis='Time (ms)',
-                title=f'Power (uV) T={int(t)} s'
+                title=f'Power (uV) T={int(t)} s',
             )
             raw_imgs[f'Raw {band} snippet {i}'] = img
 
@@ -1088,7 +1118,7 @@ class PlotLoader:
             xrange=np.array([0, np.max(mean_fr)]),
             levels=np.array([0, np.max(mean_fr)]),
             default_levels=np.array([0, np.max(mean_fr)]),
-            xaxis='Firing Rate (Sp/s)'
+            xaxis='Firing Rate (Sp/s)',
         )
 
         return {'Firing Rate': line}
@@ -1117,7 +1147,7 @@ class PlotLoader:
             xrange=np.array([0, np.max(mean_amp)]),
             levels=np.array([0, np.max(mean_amp)]),
             default_levels=np.array([0, np.max(mean_amp)]),
-            xaxis='Amplitude (uV)'
+            xaxis='Amplitude (uV)',
         )
 
         return {'Amplitude': line}
@@ -1147,7 +1177,7 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='k',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Dead Channels': line}
@@ -1179,7 +1209,7 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='r',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Noisy Channels Coherence': line}
@@ -1211,7 +1241,7 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='r',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Noisy Channels PSD': line}
@@ -1241,7 +1271,7 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='y',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Outside Channels': line}
@@ -1291,8 +1321,9 @@ class PlotLoader:
         rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
         levels = np.quantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
-        probe_img, probe_scale, probe_offset = (
-            arrange_channels_into_banks(self.shank_sites, rms_avg, bnk_width=BNK_SIZE))
+        probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
+            self.shank_sites, rms_avg, bnk_width=BNK_SIZE
+        )
 
         cmap = 'plasma' if band == 'AP' else 'inferno'
 
@@ -1305,7 +1336,7 @@ class PlotLoader:
             cmap=cmap,
             xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
             title=band + ' RMS (uV)',
-            data=rms_avg
+            data=rms_avg,
         )
 
         return {f'rms {band}': probe}
@@ -1325,12 +1356,15 @@ class PlotLoader:
 
         data_probe = dict()
         for freq in freq_bands:
-            freq_idx = np.where((self.data['psd_LF']['freqs'] >= freq[0])
-                                & (self.data['psd_LF']['freqs'] < freq[1]))[0]
+            freq_idx = np.where(
+                (self.data['psd_LF']['freqs'] >= freq[0])
+                & (self.data['psd_LF']['freqs'] < freq[1])
+            )[0]
             lfp_power = np.mean(self.data['psd_LF']['power'][freq_idx], axis=0)
             lfp_power = 10 * np.log10(lfp_power)
-            probe_img, probe_scale, probe_offset = (
-                arrange_channels_into_banks(self.shank_sites, lfp_power, bnk_width=BNK_SIZE))
+            probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
+                self.shank_sites, lfp_power, bnk_width=BNK_SIZE
+            )
             levels = np.quantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
@@ -1342,7 +1376,7 @@ class PlotLoader:
                 cmap='viridis',
                 xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
                 title=f'{freq[0]}-{freq[1]} Hz (dB)',
-                data=lfp_power
+                data=lfp_power,
             )
             data_probe.update({f'{freq[0]} - {freq[1]} Hz': probe})
 
@@ -1364,15 +1398,20 @@ class PlotLoader:
          probe plots.
         """
         # Extract stimulus times and positions
-        rf_map_times, rf_map_pos, rf_stim_frames = (
-            passive.get_on_off_times_and_positions(self.data['rf_map']))
+        rf_map_times, rf_map_pos, rf_stim_frames = passive.get_on_off_times_and_positions(
+            self.data['rf_map']
+        )
 
         # Compute receptive field map over depth
-        rf_map, _ = \
-            passive.get_rf_map_over_depth(rf_map_times, rf_map_pos, rf_stim_frames,
-                                          self.spike_times,
-                                          self.spike_depths,
-                                          d_bin=160, y_lim=[self.chn_min_bc, self.chn_max_bc])
+        rf_map, _ = passive.get_rf_map_over_depth(
+            rf_map_times,
+            rf_map_pos,
+            rf_stim_frames,
+            self.spike_times,
+            self.spike_depths,
+            d_bin=160,
+            y_lim=[self.chn_min_bc, self.chn_max_bc],
+        )
 
         # Apply SVD decomposition to obtain ON and OFF maps
         rfs_svd = passive.get_svd_map(rf_map)
@@ -1381,7 +1420,7 @@ class PlotLoader:
         img['off'] = np.vstack(rfs_svd['off'])
 
         # Scaling
-        yscale = ((self.chn_max - self.chn_min) / img['on'].shape[0])
+        yscale = (self.chn_max - self.chn_min) / img['on'].shape[0]
         xscale = 1
         depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
         levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
@@ -1390,19 +1429,18 @@ class PlotLoader:
         sub_type = ['on', 'off']
         for sub in sub_type:
             sub_data = {
-                f'RF Map - {sub}':
-                    ProbeData(
-                        img=img[sub].T,
-                        scale=np.array([xscale, yscale]),
-                        levels=levels,
-                        default_levels=np.copy(levels),
-                        offset=np.array([0, self.chn_min]),
-                        cmap='viridis',
-                        xrange=np.array([0, 15]),
-                        title='rfmap (dB)',
-                        boundaries=depths,
-                        data=None,
-                    )
+                f'RF Map - {sub}': ProbeData(
+                    img=img[sub].T,
+                    scale=np.array([xscale, yscale]),
+                    levels=levels,
+                    default_levels=np.copy(levels),
+                    offset=np.array([0, self.chn_min]),
+                    cmap='viridis',
+                    xrange=np.array([0, 15]),
+                    title='rfmap (dB)',
+                    boundaries=depths,
+                    data=None,
+                )
             }
             data_img.update(sub_data)
 
@@ -1424,7 +1462,8 @@ class PlotLoader:
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
         chn_coords['localCoordinates'] = np.c_[
-            feature_data['lateral_um'].values, feature_data['axial_um'].values]
+            feature_data['lateral_um'].values, feature_data['axial_um'].values
+        ]
         chn_coords['rawInd'] = np.arange(chn_coords['localCoordinates'].shape[0])
         chn_geom = ChannelGeometry(chn_coords)
         chn_geom.split_sites_per_shank()

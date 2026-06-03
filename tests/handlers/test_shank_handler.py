@@ -9,8 +9,8 @@ from iblutil.util import Bunch
 
 class TestShankHandler(unittest.TestCase):
     """Test the ShankHandler class."""
-    def setUp(self):
 
+    def setUp(self):
         # Mock alignment loader
         self.mock_align = MagicMock()
         self.mock_align.load_previous_alignments.return_value = None
@@ -85,7 +85,7 @@ class TestShankHandler(unittest.TestCase):
         self.shank_handler.align_handle = self.mock_align_handle
 
     def test_set_init_alignment(self):
-        """ Test the set_init_alignment method."""
+        """Test the set_init_alignment method."""
         self.shank_handler.set_init_alignment()
         self.mock_align_handle.set_init_feature_track.assert_called_with(
             self.mock_align.feature_prev, self.mock_align.track_prev
@@ -93,23 +93,25 @@ class TestShankHandler(unittest.TestCase):
         self.mock_align_handle.set_init_feature_track.assert_called_once()
 
     def test_feature_prev(self):
-        """ Test the feature_prev property."""
-        np.testing.assert_array_equal(self.shank_handler.feature_prev, self.mock_align.feature_prev)
+        """Test the feature_prev property."""
+        np.testing.assert_array_equal(
+            self.shank_handler.feature_prev, self.mock_align.feature_prev
+        )
 
     def test_offset_hist_data(self):
-        """ Test the offset_hist_data method."""
+        """Test the offset_hist_data method."""
         self.shank_handler.offset_hist_data(10)
         self.mock_align_handle.offset_hist_data.assert_called_with(10)
         self.mock_align_handle.offset_hist_data.assert_called_once()
 
     def test_scale_hist_data(self):
-        """ Test the scale_hist_data method."""
+        """Test the scale_hist_data method."""
         self.shank_handler.scale_hist_data(10)
         self.mock_align_handle.scale_hist_data.assert_called_with(10)
         self.mock_align_handle.scale_hist_data.assert_called_once()
 
     def test_get_scaled_histology(self):
-        """ Test the get_scaled_histology method."""
+        """Test the get_scaled_histology method."""
         self.shank_handler.get_scaled_histology()
         self.mock_align_handle.get_scaled_histology.assert_called_once()
         self.assertEqual(self.shank_handler.hist_data, 'hist')
@@ -117,27 +119,34 @@ class TestShankHandler(unittest.TestCase):
         self.assertEqual(self.shank_handler.scale_data, 'scale')
 
     def test_feature2track_lin(self):
-        """ Test the feature2track_lin method."""
+        """Test the feature2track_lin method."""
         result = self.shank_handler.feature2track_lin(np.array([10]), np.array([1]), np.array([2]))
         self.mock_align_handle.ephysalign.feature2track_lin.assert_called_with(
-            np.array([10]), np.array([1]), np.array([2]))
+            np.array([10]), np.array([1]), np.array([2])
+        )
         np.testing.assert_array_equal(result, np.array([100, 200]))
 
     def test_reset_features_and_tracks(self):
-        """ Test the reset_features_and_tracks method."""
+        """Test the reset_features_and_tracks method."""
         self.shank_handler.reset_features_and_tracks()
         self.mock_align_handle.reset_features_and_tracks.assert_called_once()
 
     def test_get_align_handle_properties(self):
-        """ Test the property methods accessing align_handle."""
+        """Test the property methods accessing align_handle."""
         np.testing.assert_array_equal(self.shank_handler.track, self.mock_align_handle.track)
         np.testing.assert_array_equal(self.shank_handler.feature, self.mock_align_handle.feature)
-        np.testing.assert_array_equal(self.shank_handler.xyz_channels, self.mock_align_handle.xyz_channels)
-        np.testing.assert_array_equal(self.shank_handler.xyz_track, self.mock_align_handle.xyz_track)
-        np.testing.assert_array_equal(self.shank_handler.track_lines, self.mock_align_handle.track_lines)
+        np.testing.assert_array_equal(
+            self.shank_handler.xyz_channels, self.mock_align_handle.xyz_channels
+        )
+        np.testing.assert_array_equal(
+            self.shank_handler.xyz_track, self.mock_align_handle.xyz_track
+        )
+        np.testing.assert_array_equal(
+            self.shank_handler.track_lines, self.mock_align_handle.track_lines
+        )
 
     def test_get_plot_loader_properties(self):
-        """ Test the property methods accessing loaders['plots']."""
+        """Test the property methods accessing loaders['plots']."""
         self.assertEqual(self.shank_handler.chn_min, self.mock_plots.chn_min)
         self.assertEqual(self.shank_handler.chn_max, self.mock_plots.chn_max)
         self.assertEqual(self.shank_handler.slice_plots, self.mock_plots.slice_plots)
@@ -147,14 +156,16 @@ class TestShankHandler(unittest.TestCase):
         self.assertEqual(self.shank_handler.probe_plots, self.mock_plots.probe_plots)
 
     def test_xyz_clusters(self):
-        """ Test the xyz_clusters method."""
+        """Test the xyz_clusters method."""
         self.shank_handler.raw_data = {'clusters': {'channels': np.array([1, 0]), 'exists': True}}
-        np.testing.assert_array_equal(self.shank_handler.xyz_clusters, np.array([[1, 1, 1], [0, 0, 0]]))
+        np.testing.assert_array_equal(
+            self.shank_handler.xyz_clusters, np.array([[1, 1, 1], [0, 0, 0]])
+        )
 
     @patch('ibl_alignment_gui.handlers.shank_handler.AlignmentHandler')
     def test_load_data(self, mock_align_handle):
-        """ Test the load_data method."""
-        with self.subTest("Data loaded for the first time"):
+        """Test the load_data method."""
+        with self.subTest('Data loaded for the first time'):
             self.shank_handler.data_loaded = False
             self.shank_handler.load_data()
             self.assertTrue(self.shank_handler.data_loaded)
@@ -163,7 +174,7 @@ class TestShankHandler(unittest.TestCase):
             mock_align_handle.assert_called_once()
             np.testing.assert_array_equal(self.shank_handler.cluster_chns, np.array([1, 0]))
 
-        with self.subTest("Data already loaded"):
+        with self.subTest('Data already loaded'):
             self.shank_handler.data_loaded = True
             self.mock_geom.get_geometry.reset_mock()
             self.shank_handler.load_data()
@@ -181,14 +192,16 @@ class TestShankHandler(unittest.TestCase):
             mock_align_handle.assert_not_called()
 
         with self.subTest('No raw data'):
-            self.mock_data.get_data.return_value = {'clusters': {'exists': False},}
+            self.mock_data.get_data.return_value = {
+                'clusters': {'exists': False},
+            }
             self.shank_handler.raw_data = {'clusters': {'exists': False}}
             self.shank_handler.data_loaded = False
             self.shank_handler.load_data()
             np.testing.assert_array_equal(self.shank_handler.cluster_chns, np.array([0, 1]))
 
     def test_filter_units(self):
-        """ Test the filter_units method."""
+        """Test the filter_units method."""
         self.mock_plots.reset_mock()
         self.shank_handler.filter_units('ibl_good')
         self.mock_plots.filter_units.assert_called_with('ibl_good')
@@ -197,7 +210,7 @@ class TestShankHandler(unittest.TestCase):
 
     @patch('ibl_alignment_gui.handlers.shank_handler.AlignmentHandler')
     def test_upload_data(self, mock_align_handle):
-        """ Test the upload_data method."""
+        """Test the upload_data method."""
         self.shank_handler.load_data()
         result = self.shank_handler.upload_data()
         self.assertEqual(result, 'uploaded')

@@ -1,4 +1,3 @@
-
 import copy
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -101,7 +100,6 @@ class EphysFeatureView(PopupWindow):
     """
 
     def __init__(self, title: str, controller: 'AlignmentGUIController', step: int = 10):
-
         # Initialise plot variables
         self.plots_hist: list = list()
         self.plots_feat: list = list()
@@ -167,8 +165,9 @@ class EphysFeatureView(PopupWindow):
         scale_layout.addWidget(self.align_button, 0, 0, 1, 1)
         scale_layout.addWidget(self.normalise_button, 1, 0, 1, 1)
         scale_layout.addWidget(self.pid_label, 2, 0, 1, 1)
-        scale_layout.addItem(QtWidgets.QSpacerItem(10, 20, QtWidgets.QSizePolicy.Expanding),
-                             0, 1, 1, 3)
+        scale_layout.addItem(
+            QtWidgets.QSpacerItem(10, 20, QtWidgets.QSizePolicy.Expanding), 0, 1, 1, 3
+        )
         scale_layout.addWidget(self.slider, 0, 2, 3, 10)
 
         # Add widgets to main layout
@@ -217,7 +216,8 @@ class EphysFeatureView(PopupWindow):
     def clear_plots(self) -> None:
         """Clear all plots."""
         for fig_hist, fig_feat, fig_cbar in zip(
-                self.plots_hist, self.plots_feat, self.plots_cbar, strict=False):
+            self.plots_hist, self.plots_feat, self.plots_cbar, strict=False
+        ):
             fig_hist.clear()
             fig_feat.clear()
             fig_cbar.clear()
@@ -247,8 +247,17 @@ class EphysFeatureView(PopupWindow):
         color_bar.set_levels(levels)
         image = pg.ImageItem()
         image.setImage(data['img'])
-        transform = [data['scale'][0], 0., 0., 0., data['scale'][1], 0., data['offset'][0],
-                     data['offset'][1] - offset, 1.]
+        transform = [
+            data['scale'][0],
+            0.0,
+            0.0,
+            0.0,
+            data['scale'][1],
+            0.0,
+            data['offset'][0],
+            data['offset'][1] - offset,
+            1.0,
+        ]
         image.setTransform(QtGui.QTransform(*transform))
         image.setLookupTable(color_bar.get_colour_map())
         image.setLevels((levels[0], levels[1]))
@@ -291,17 +300,20 @@ class EphysFeatureView(PopupWindow):
         axis.setPen('k')
 
         # Plot each histology region
-        for reg, col, reg_id in zip(data['regions'], data['colors'], data['region_id'],
-                                    strict=False):
-
+        for reg, col, reg_id in zip(
+            data['regions'], data['colors'], data['region_id'], strict=False
+        ):
             colour = QtGui.QColor(*col)
             if reg_id == selected_region:
                 colour.setAlpha(255)
             else:
                 colour.setAlpha(60)
-            region = pg.LinearRegionItem(values=(reg[0] - offset, reg[1] - offset),
-                                         orientation=pg.LinearRegionItem.Horizontal,
-                                         brush=colour, movable=False)
+            region = pg.LinearRegionItem(
+                values=(reg[0] - offset, reg[1] - offset),
+                orientation=pg.LinearRegionItem.Horizontal,
+                brush=colour,
+                movable=False,
+            )
             # Add a white line at the boundary between regions
             bound = pg.InfiniteLine(pos=reg[0] - offset, angle=0, pen='w')
             fig.addItem(region)
@@ -363,7 +375,6 @@ class EphysFeatures:
     """
 
     def __init__(self, title: str, controller: 'AlignmentGUIController'):
-
         self.controller = controller
         self.title = title
         # Initialise pagination variables
@@ -408,7 +419,8 @@ class EphysFeatures:
 
         for i, fig_area in enumerate(self.view.fig_areas):
             fig_area.scene().sigMouseClicked.connect(
-                lambda event, idx=i: self.on_area_clicked(event, idx))
+                lambda event, idx=i: self.on_area_clicked(event, idx)
+            )
 
         self.view.align_button.clicked.connect(self.on_align_plots)
         self.view.slider.reset.connect(self.on_reset_levels)
@@ -423,17 +435,35 @@ class EphysFeatures:
 
         # Populate region combobox
         acronyms = self.ba.regions.id2acronym(self.region_ids)
-        SelectionWidget.populate_combobox(acronyms, self.view.region_list,
-                                          self.view.region_combobox)
+        SelectionWidget.populate_combobox(
+            acronyms, self.view.region_list, self.view.region_combobox
+        )
 
         # Populate plot combobox
-        ignore_cols = ['pid', 'axial_um', 'lateral_um', 'x', 'y', 'z', 'acronym', 'atlas_id',
-                       'x_target', 'y_target', 'z_target', 'outside', 'Allen_id', 'Cosmos_id',
-                       'Beryl_id', 'alpha_mean', 'alpha_std']
+        ignore_cols = [
+            'pid',
+            'axial_um',
+            'lateral_um',
+            'x',
+            'y',
+            'z',
+            'acronym',
+            'atlas_id',
+            'x_target',
+            'y_target',
+            'z_target',
+            'outside',
+            'Allen_id',
+            'Cosmos_id',
+            'Beryl_id',
+            'alpha_mean',
+            'alpha_std',
+        ]
         self.features = [k for k in self.data if k not in ignore_cols]
         self.features.sort()
-        SelectionWidget.populate_combobox(self.features, self.view.plot_list,
-                                          self.view.plot_combobox)
+        SelectionWidget.populate_combobox(
+            self.features, self.view.plot_list, self.view.plot_combobox
+        )
 
         # Populate colormap combobox
         SelectionWidget.populate_combobox(CMAPS, self.view.cmap_list, self.view.cmap_combobox)
@@ -476,8 +506,9 @@ class EphysFeatures:
         # Download file
         base_path = Path('aggregates/atlas/features/ea_active/2025_W43/agg_full/')
         fname = 'df_all_cols_merged.pqt'
-        aws.s3_download_file(base_path.joinpath(fname), table_path.joinpath(fname), s3=s3,
-                             bucket_name=bucket_name)
+        aws.s3_download_file(
+            base_path.joinpath(fname), table_path.joinpath(fname), s3=s3, bucket_name=bucket_name
+        )
 
         data = pd.read_parquet(table_path.joinpath('df_all_cols_merged.pqt')).reset_index()
         return data
@@ -499,7 +530,8 @@ class EphysFeatures:
         all_regions = np.array([])
         for shank in controller.all_shanks:
             regions = controller.model.shanks[shank][
-                controller.model.default_config].align_handle.ephysalign.region_id
+                controller.model.default_config
+            ].align_handle.ephysalign.region_id
             all_regions = np.r_[all_regions, np.array(regions.ravel())]
 
         return np.unique(all_regions)
@@ -522,7 +554,8 @@ class EphysFeatures:
         missing_feature_pids = [p for p in pids if p not in self.feature_data[self.plot_name]]
         if len(missing_feature_pids) > 0:
             self.feature_data[self.plot_name].update(
-                self.prepare_feature_data(missing_feature_pids))
+                self.prepare_feature_data(missing_feature_pids)
+            )
 
         missing_region_pids = [p for p in pids if p not in self.region_data]
         if len(missing_region_pids) > 0:
@@ -549,7 +582,6 @@ class EphysFeatures:
         feature_data = Bunch()
 
         for pid in pids:
-
             df = self.data[self.data['pid'] == pid]
             data = df[self.plot_name].values
             chn_coords = Bunch()
@@ -593,19 +625,18 @@ class EphysFeatures:
         region_data = Bunch()
 
         for pid in pids:
-
             df = self.data[self.data['pid'] == pid]
             mlapdv = np.c_[df['x'].values, df['y'].values, df['z'].values]
 
-            region, region_label, region_colour, region_id = \
-                EphysAlignment.get_histology_regions(mlapdv, df['axial_um'].values,
-                                                     brain_atlas=self.ba)
+            region, region_label, region_colour, region_id = EphysAlignment.get_histology_regions(
+                mlapdv, df['axial_um'].values, brain_atlas=self.ba
+            )
 
             data_dict = {
                 'regions': region,
                 'labels': region_label,
                 'colors': region_colour,
-                'region_id': region_id
+                'region_id': region_id,
             }
 
             region_data[pid] = data_dict
@@ -656,8 +687,7 @@ class EphysFeatures:
         if self.page_idx == self.page_num:
             pid_idx = np.arange(self.page_idx * self.step, self.max_idx)
         else:
-            pid_idx = np.arange(self.page_idx * self.step, (self.page_idx * self.step) +
-                                self.step)
+            pid_idx = np.arange(self.page_idx * self.step, (self.page_idx * self.step) + self.step)
 
         return self.pids[pid_idx]
 
@@ -874,7 +904,7 @@ class EphysFeatures:
             self.view.plot_region(i, data, offset, self.chosen_region)
 
         if i < self.step - 1:
-            for fig in self.view.plots_hist[i + 1:]:
+            for fig in self.view.plots_hist[i + 1 :]:
                 axis = fig.getAxis('left')
                 axis.setTicks([])
                 axis.setPen(None)
@@ -895,7 +925,7 @@ class EphysFeatures:
             self.view.plot_probe(i, data, offset, levels=levels)
 
         if i < self.step - 1:
-            for fig in self.view.plots_feat[i + 1:]:
+            for fig in self.view.plots_feat[i + 1 :]:
                 set_axis(fig, 'bottom', pen=None)
 
     def plot_single_feature(self) -> None:

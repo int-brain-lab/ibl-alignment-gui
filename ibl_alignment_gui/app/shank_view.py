@@ -47,11 +47,10 @@ class ShankView:
                     padding: 6px;
                     font-weight: bold;
                 }
-                """
+                """,
     }
 
     def __init__(self, name: str, index: int, config: str):
-
         self.name: str = name
         self.index: int = index
         self.config: str = config
@@ -101,8 +100,9 @@ class ShankView:
 
         # Plot items for line plot
         self.fig_line: pg.PlotItem | None = None
-        self.line_items: list[pg.PlotCurveItem | pg.ScatterPlotItem
-                              | pg.InfiniteLine] | None = None
+        self.line_items: list[pg.PlotCurveItem | pg.ScatterPlotItem | pg.InfiniteLine] | None = (
+            None
+        )
 
         # Plot items for the probe plot
         self.fig_probe: pg.PlotItem | None = None
@@ -164,10 +164,10 @@ class ShankView:
     # --------------------------------------------------------------------------------------------
     @staticmethod
     def _create_plot_item(
-            mouse_enabled: tuple[bool, bool] = (False, False),
-            max_width: int | None = None,
-            max_height: int | None = None,
-            pen: str = 'k'
+        mouse_enabled: tuple[bool, bool] = (False, False),
+        max_width: int | None = None,
+        max_height: int | None = None,
+        pen: str = 'k',
     ) -> pg.PlotItem:
         """
         Create and configure a pg.PlotItem used for a plot panel.
@@ -202,8 +202,8 @@ class ShankView:
 
     @staticmethod
     def _create_plot_cb_item(
-            max_width: int | None = None,
-            max_height: int | None = None,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> pg.PlotItem:
         """
         Create and configure a pg.PlotItem used for a colorbar panel.
@@ -263,37 +263,46 @@ class ShankView:
         # 2D image / scatter plots
         self.fig_img = self._create_plot_item(mouse_enabled=(True, True))
         self.probe_tip_lines.append(
-            self.fig_img.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
+            self.fig_img.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50)
+        )
         self.probe_top_lines.append(
-            self.fig_img.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
+            self.fig_img.addLine(y=self.probe_top, pen=self.kpen_dot, z=50)
+        )
         self.fig_data_ax = set_axis(self.fig_img, 'left', label='Distance from probe tip (um)')
         self.fig_img_cb = self._create_plot_cb_item(max_height=70)
 
         # 1D line plot
         self.fig_line = self._create_plot_item(mouse_enabled=(False, True))
         self.probe_tip_lines.append(
-            self.fig_line.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
+            self.fig_line.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50)
+        )
         self.probe_top_lines.append(
-            self.fig_line.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
+            self.fig_line.addLine(y=self.probe_top, pen=self.kpen_dot, z=50)
+        )
         self.fig_line.setYLink(self.fig_img)
 
         # 2D probe plot
         self.fig_probe = self._create_plot_item(mouse_enabled=(False, True), max_width=50, pen='w')
         self.probe_tip_lines.append(
-            self.fig_probe.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
+            self.fig_probe.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50)
+        )
         self.probe_top_lines.append(
-            self.fig_probe.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
+            self.fig_probe.addLine(y=self.probe_top, pen=self.kpen_dot, z=50)
+        )
         self.fig_probe_cb = self._create_plot_cb_item(max_height=70)
         self.fig_probe.setYLink(self.fig_img)
 
         # 2D feature plot
         self.fig_feature = self._create_plot_item(mouse_enabled=(False, True), pen='w')
         self.probe_tip_lines.append(
-            self.fig_feature.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
+            self.fig_feature.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50)
+        )
         self.probe_top_lines.append(
-            self.fig_feature.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
-        self.fig_feature_ax = set_axis(self.fig_feature, 'left',
-                                       label='Distance from probe tip (um)')
+            self.fig_feature.addLine(y=self.probe_top, pen=self.kpen_dot, z=50)
+        )
+        self.fig_feature_ax = set_axis(
+            self.fig_feature, 'left', label='Distance from probe tip (um)'
+        )
         self.fig_feature_label = self._create_plot_cb_item(max_height=70)
         set_axis(self.fig_feature_label, 'left', pen='w', label=' ')
 
@@ -307,8 +316,7 @@ class ShankView:
         self.ax_hist.setStyle(tickTextOffset=-60)
 
         # Scale factor plot
-        self.fig_scale = self._create_plot_item(mouse_enabled=(False, True), max_width=50,
-                                                pen='w')
+        self.fig_scale = self._create_plot_item(mouse_enabled=(False, True), max_width=50, pen='w')
         self.fig_scale.setYLink(self.fig_hist)
         self.fig_scale_cb = self._create_plot_cb_item(max_height=70)
         set_axis(self.fig_scale_cb, 'left', show=False)
@@ -412,7 +420,8 @@ class ShankView:
                 values=region,
                 orientation=pg.LinearRegionItem.Horizontal,
                 brush=QtGui.QColor(*colour),
-                movable=False)
+                movable=False,
+            )
             fig.addItem(item)
             fig.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen='w'))
             # Keep track of each histology LinearRegionItem for hover interaction
@@ -428,7 +437,19 @@ class ShankView:
         self.set_yaxis_range(fig)
 
     def plot_histology_cumulative(self, fig: pg.PlotItem, data: Bunch, ax: str = 'right') -> None:
+        """
+        Plot cumulative histology probabilities on the given figure.
 
+        Parameters
+        ----------
+        fig : pg.PlotItem
+            The figure on which to plot the histology regions.
+        data : Bunch
+            A Bunch object containing the histology data.
+        ax : str, default='left'
+            Orientation of the axis on which to add labels. 'left' for the main histology
+            figure (fig_hist), and 'right' for the reference figure (fig_hist_ref).
+        """
         self.clear_histology(fig)
         axis = fig.getAxis(ax)
         axis.setTicks([])
@@ -439,9 +460,9 @@ class ShankView:
 
         for i, colour in enumerate(data.colours):
             item = pg.FillBetweenItem(
-                pg.PlotCurveItem( values[:, i + 1], data.depths),
+                pg.PlotCurveItem(values[:, i + 1], data.depths),
                 pg.PlotCurveItem(values[:, i], data.depths),
-                brush=pg.mkBrush(colour)
+                brush=pg.mkBrush(colour),
             )
             fig.addItem(item)
 
@@ -482,7 +503,8 @@ class ShankView:
                 values=region,
                 orientation=pg.LinearRegionItem.Horizontal,
                 brush=colours[ir],
-                movable=False)
+                movable=False,
+            )
             self.fig_scale.addItem(item)
             self.fig_scale.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen=colours[ir]))
             self.scale_regions.append(item)
@@ -501,9 +523,7 @@ class ShankView:
         self.traj_line = self.remove_items(self.fig_slice, self.traj_line)
 
     def plot_slice(
-            self,
-            data: Bunch | None,
-            data_traj: Bunch
+        self, data: Bunch | None, data_traj: Bunch
     ) -> tuple[pg.ImageItem, ColorBar | None]:
         """
         Plot a slice image showing a coronal histology slice.
@@ -579,9 +599,9 @@ class ShankView:
         """
         self.clear_channels(fig_slice)
 
-        self.slice_chns = pg.ScatterPlotItem(x=data['xyz_channels'][:, 0],
-                                             y=data['xyz_channels'][:, 2],
-                                             pen=colour, brush=colour)
+        self.slice_chns = pg.ScatterPlotItem(
+            x=data['xyz_channels'][:, 0], y=data['xyz_channels'][:, 2], pen=colour, brush=colour
+        )
         fig_slice.addItem(self.slice_chns)
 
         self.slice_lines = []
@@ -596,9 +616,7 @@ class ShankView:
         self.img_cbar = self.remove_items(self.fig_img_cb, self.img_cbar)
 
     def plot_scatter(
-            self,
-            data: ScatterData | None,
-            levels: list | np.ndarray | None = None
+        self, data: ScatterData | None, levels: list | np.ndarray | None = None
     ) -> ColorBar | None:
         """
         Plot a 2D scatter plot of electrophysiology data.
@@ -626,8 +644,11 @@ class ShankView:
         self.img_cbar = ColorBar(data.cmap, plot_item=self.fig_img_cb)
         self.img_cbar.set_levels(levels, label=data.title)
 
-        brush = data.colours if isinstance(data.colours[0], str) \
+        brush = (
+            data.colours
+            if isinstance(data.colours[0], str)
             else self.img_cbar.get_brush(data.colours, levels=list(levels))
+        )
 
         # Create scatter plot and add to figure
         self.img_item = pg.ScatterPlotItem(
@@ -636,7 +657,8 @@ class ShankView:
             symbol=data.symbol.tolist(),
             size=data.size.tolist(),
             brush=brush,
-            pen=data.pen)
+            pen=data.pen,
+        )
         self.fig_img.addItem(self.img_item)
 
         set_axis(self.fig_img, 'bottom', pen='k', label=data.xaxis)
@@ -687,7 +709,8 @@ class ShankView:
                 x=data.x[data.mask],
                 y=data.y[data.mask],
                 symbol=data.mask_style,
-                pen=data.mask_colour)
+                pen=data.mask_colour,
+            )
             self.fig_line.addItem(scat)
             self.line_items.append(scat)
 
@@ -704,9 +727,7 @@ class ShankView:
         self.probe_bounds = self.remove_items(self.fig_probe, self.probe_bounds)
 
     def plot_probe(
-            self,
-            data: ProbeData | None,
-            levels: list | np.ndarray | None = None
+        self, data: ProbeData | None, levels: list | np.ndarray | None = None
     ) -> ColorBar | None:
         """
         Plot a 2D probe plot of electrophysiology data.
@@ -761,9 +782,7 @@ class ShankView:
         return self.plot_cbar
 
     def plot_image(
-            self,
-            data: ImageData | None,
-            levels: list | np.ndarray | None = None
+        self, data: ImageData | None, levels: list | np.ndarray | None = None
     ) -> ColorBar | None:
         """
         Plot a 2D image plot of electrophysiology data.
@@ -858,10 +877,7 @@ class ShankView:
     # Plot utils
     # --------------------------------------------------------------------------------------------
     def plot_empty(
-            self,
-            fig: pg.PlotItem,
-            fig_cb: pg.PlotItem | None = None,
-            img: bool = False
+        self, fig: pg.PlotItem, fig_cb: pg.PlotItem | None = None, img: bool = False
     ) -> None:
         """
         Create an empty placeholder plot when no data is available.
@@ -894,8 +910,11 @@ class ShankView:
         fig: pg.PlotItem
             The figure whose y-axis range will be updated
         """
-        fig.setYRange(min=self.yrange[0] - self.ylim_extra, max=self.yrange[1] + self.ylim_extra,
-                      padding=self.yaxis_pad)
+        fig.setYRange(
+            min=self.yrange[0] - self.ylim_extra,
+            max=self.yrange[1] + self.ylim_extra,
+            padding=self.yaxis_pad,
+        )
 
     def set_xaxis_range(self, fig: pg.PlotItem, xrange: np.ndarray | list | None = None) -> None:
         """
@@ -928,7 +947,7 @@ class ShankView:
         QtGui.QTransform
             The constructed transformation matrix.
         """
-        return QtGui.QTransform(scale[0], 0., 0., 0., scale[1], 0., offset[0], offset[1], 1.)
+        return QtGui.QTransform(scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, offset[0], offset[1], 1.0)
 
     def reset_slice_axis(self) -> None:
         """Reset the axis range of the slice image."""
@@ -1086,8 +1105,7 @@ class ShankView:
         return line_feature, line_track
 
     def match_feature_line(
-            self,
-            feature_line: pg.InfiniteLine
+        self, feature_line: pg.InfiniteLine
     ) -> tuple[int | None, list | np.ndarray | None]:
         """
         Find the index of the feature reference line matching the given line.
@@ -1135,9 +1153,7 @@ class ShankView:
         return line_idx
 
     def create_reference_line_and_point(
-            self,
-            pos,
-            fix_colour=False
+        self, pos, fix_colour=False
     ) -> tuple[pg.InfiniteLine, list[pg.InfiniteLine], pg.PlotDataItem]:
         """
         Create a new reference line.
@@ -1180,16 +1196,19 @@ class ShankView:
         self.lines_features.append(line_features)
 
         # Scatter point to be added to fit figure
-        point = pg.PlotDataItem(x=[line_track.pos().y()], y=[line_features[0].pos().y()],
-                                symbolBrush=brush, symbol='o', symbolSize=10)
+        point = pg.PlotDataItem(
+            x=[line_track.pos().y()],
+            y=[line_features[0].pos().y()],
+            symbolBrush=brush,
+            symbol='o',
+            symbolSize=10,
+        )
         self.points.append(point)
 
         return line_track, line_features, point
 
     @staticmethod
-    def create_line_style(
-            colour: QtGui.QColor | None = None
-    ) -> tuple[QtGui.QPen, QtGui.QBrush]:
+    def create_line_style(colour: QtGui.QColor | None = None) -> tuple[QtGui.QPen, QtGui.QBrush]:
         """
         Generate a random line style (color and dash style) for reference lines.
 
@@ -1247,10 +1266,7 @@ class ShankView:
         _ = self.points.pop(line_idx)
 
     def update_feature_reference_line_and_point(
-            self,
-            feature_line: pg.InfiniteLine,
-            line_idx: int,
-            fig_idx: list | np.ndarray
+        self, feature_line: pg.InfiniteLine, line_idx: int, fig_idx: list | np.ndarray
     ) -> None:
         """
         Update the feature lines to match the coordinate of the moved feature line.
@@ -1269,13 +1285,13 @@ class ShankView:
         self.lines_features[line_idx][fig_idx[0]].setPos(feature_line.value())
         self.lines_features[line_idx][fig_idx[1]].setPos(feature_line.value())
         self.lines_features[line_idx][fig_idx[2]].setPos(feature_line.value())
-        self.points[line_idx].setData(x=[self.lines_features[line_idx][0].pos().y()],
-                                      y=[self.lines_tracks[line_idx].pos().y()])
+        self.points[line_idx].setData(
+            x=[self.lines_features[line_idx][0].pos().y()],
+            y=[self.lines_tracks[line_idx].pos().y()],
+        )
 
     def update_track_reference_line_and_point(
-            self,
-            track_line: pg.InfiniteLine,
-            line_idx: int
+        self, track_line: pg.InfiniteLine, line_idx: int
     ) -> None:
         """
         Update the scatter point location to match the coordinate of the moved track line.
@@ -1288,8 +1304,10 @@ class ShankView:
             The index of the reference line in the tracking arrays.
         """
         self.lines_tracks[line_idx].setPos(track_line.value())
-        self.points[line_idx].setData(x=[self.lines_features[line_idx][0].pos().y()],
-                                      y=[self.lines_tracks[line_idx].pos().y()])
+        self.points[line_idx].setData(
+            x=[self.lines_features[line_idx][0].pos().y()],
+            y=[self.lines_tracks[line_idx].pos().y()],
+        )
 
     def align_reference_lines_and_points(self) -> None:
         """
@@ -1298,8 +1316,9 @@ class ShankView:
         The position is updated based on the new positions of their corresponding
         feature reference lines.
         """
-        for line_feature, line_track, point in (
-                zip(self.lines_features, self.lines_tracks, self.points, strict=False)):
+        for line_feature, line_track, point in zip(
+            self.lines_features, self.lines_tracks, self.points, strict=False
+        ):
             line_track.setPos(line_feature[0].getYPos())
             point.setData(x=[line_feature[0].pos().y()], y=[line_feature[0].pos().y()])
 

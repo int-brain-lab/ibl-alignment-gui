@@ -233,7 +233,7 @@ def _extract_recorded_features(items):
     df = items.model.raw_data["features"]["df"].copy()
     df = df.sort_values("axial_um", ascending=True).reset_index(drop=True)
 
-    recorded_full = df[FEATURE_LIST].to_numpy(dtype=np.float32)
+    recorded_full = df[FEATURE_LIST].to_numpy(dtype=np.float32).copy()
     recorded_full[~np.isfinite(recorded_full)] = 0.0
 
     return recorded_full, df

@@ -5,7 +5,8 @@ import pandas as pd
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
 
-MODEL_NAME = 'Inference'
+MODEL_VINTAGE = "2026_W12_Cosmos_careless-clover-dingo"
+MODEL_NAME = "Inference"
 
 def ensure_model(controller):
     plugin = controller.plugins['Channel Prediction']
@@ -17,16 +18,12 @@ def ensure_model(controller):
 def load_inference_model(controller):
     one = controller.model.one
 
-    # Find the latest available model and download
-    available_models = ephysatlas.data.list_available_models(one=one)
-    model_name = available_models[-1]
-    model_path = one.cache_dir.joinpath('ephys_atlas_features', model_name)
-    model_path.mkdir(parents=True, exist_ok=True)
-    _ = ephysatlas.data.download_model(one=one, model_name=model_name, local_path=model_path)
-    # Load in the model
+    local_path = one.cache_dir.joinpath('ephys_atlas_features')
+    model_path = ephysatlas.regionclassifier.download_model(local_path, MODEL_VINTAGE, one=one)
+
     _, model_info = ephysatlas.regionclassifier.load_model(model_path)
 
-    return Bunch(info=model_info, path=model_path.joinpath('folds'))
+    return Bunch(info=model_info, path=model_path)
 
 def predict(controller, items):
 
@@ -35,7 +32,7 @@ def predict(controller, items):
 
     df = items.model.raw_data['features']['df']
     model = ensure_model(controller)
-    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'])
+    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'].joinpath('folds'))
 
     cosmos_ids = np.array(model['info']['CLASSES'])[np.argmax(np.mean(predicted_probas, axis=0), axis=1)]
     depths = df['axial_um'].values
@@ -50,7 +47,7 @@ def predict_cumulative(controller, items):
 
     df = items.model.raw_data['features']['df']
     model = ensure_model(controller)
-    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'])
+    predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(df, path_model=model['path'].joinpath('folds'))
 
     cprobas = np.mean(predicted_probas, axis=0).cumsum(axis=1)
     region_ids = np.array(model['info']['CLASSES']).astype(int)

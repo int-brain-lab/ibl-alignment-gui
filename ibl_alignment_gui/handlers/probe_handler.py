@@ -444,7 +444,7 @@ class ProbeHandlerONE(ProbeHandler):
             An array of subject names
         """
         self.sess_ins = self.one.alyx.rest(
-            'insertions', 'list', dataset_type='spikes.times', expires=timedelta(days=1)
+            'insertions', 'list', dataset_types='spikes.times', expires=timedelta(days=1)
         )
         self.subj_ins = [sess['session_info']['subject'] for sess in self.sess_ins]
         self.subjects = np.unique(self.subj_ins)

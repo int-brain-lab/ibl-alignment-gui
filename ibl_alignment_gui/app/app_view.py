@@ -455,6 +455,19 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """
         self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
 
+    def get_selected_yaml(self) -> Path | None:
+        """
+        Open a file dialog to select a session yaml file.
+
+        Returns
+        -------
+        Path or None
+            The selected yaml file path, or None if the dialog was cancelled.
+        """
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Select session YAML', filter='YAML (*.yaml *.yml)')
+        return Path(selected) if selected else None
+
     # --------------------------------------------------------------------------------------------
     # LUT widget
     # --------------------------------------------------------------------------------------------

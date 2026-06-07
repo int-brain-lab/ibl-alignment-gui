@@ -20,6 +20,7 @@ from ibl_alignment_gui.loaders.alignment_uploader import (
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderLocal,
     FeatureLoaderOne,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
@@ -30,6 +31,8 @@ from ibl_alignment_gui.loaders.geometry_loader import (
 )
 from ibl_alignment_gui.loaders.histology_loader import (
     NrrdSliceLoader,
+    SliceLoader,
+    TiffSliceLoader,
     download_histology_data,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
@@ -846,9 +849,9 @@ class ProbeHandlerLocal(ProbeHandler):
         self.selected_shank = f'shank_{self.shank_labels[idx]}'
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
-        """Load in the histology slice data."""
-        return NrrdSliceLoader(self.data_paths.histology, self.brain_atlas)
+    def download_histology(self) -> SliceLoader:
+        """Load in the histology slice data, auto-detecting TIFF vs NRRD."""
+        return _build_slice_loader(self.data_paths.histology, self.brain_atlas)
 
     def initialise_shanks(self) -> None:
         """Initialise each shank with the loaders."""
@@ -867,50 +870,91 @@ class ProbeHandlerLocal(ProbeHandler):
             self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
 
 
+def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader:
+    """
+    Pick the right SliceLoader by inspecting the histology directory.
+
+    Used by the offline ProbeHandlers (:class:`ProbeHandlerLocal` and
+    :class:`ProbeHandlerLocalYaml`). If the directory contains any ``.tif`` / ``.tiff`` files
+    (e.g. brainreg outputs), return a :class:`TiffSliceLoader`. Otherwise default to the existing
+    :class:`NrrdSliceLoader` so all current NRRD workflows keep working.
+
+    Parameters
+    ----------
+    hist_path : Path
+        Directory containing the histology volumes.
+    brain_atlas : AllenAtlas
+        Brain atlas for alignment.
+
+    Returns
+    -------
+    SliceLoader
+        A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
+    """
+    if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
+        return TiffSliceLoader(hist_path, brain_atlas)
+    return NrrdSliceLoader(hist_path, brain_atlas)
+
+
 class ProbeHandlerLocalYaml(ProbeHandler):
     """
-    Local file system implementation of ProbeHandler that uses a yaml file.
+    Local file system ProbeHandler driven by a session yaml file.
 
-    The yaml file contains information about where to read the relevant data from.
+    The yaml (see :func:`ibl_alignment_gui.utils.parse_yaml.load_alignment_yaml`) specifies, per
+    probe/config, where each dataset lives (spike sorting, raw/processed ephys, picks, histology,
+    output, and optional per-channel features). The resolved ``DatasetPaths`` for each probe/config
+    are wired directly into the local loaders (``DataLoaderLocal``, ``GeometryLoaderLocal`` etc.).
+
+    Parameters
+    ----------
+    yaml_file : str or Path
+        Path to the session yaml configuration file.
+    brain_atlas : AllenAtlas or None
+        An AllenAtlas instance (created if None).
     """
 
     def __init__(self, yaml_file: str | Path, brain_atlas: AllenAtlas | None = None):
         super().__init__(brain_atlas)
-        configs, probes, self.data_paths = load_alignment_yaml(yaml_file)
+        self.configs, self.probes, self.data_paths = load_alignment_yaml(yaml_file)
 
-        if len(configs) > 1:
-            self.configs = configs
-            self.default_config = self.configs[0]
+        # The base sets a single 'default' config; mirror it to the yaml config name and, when the
+        # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.
+        self.default_config = self.configs[0]
+        if len(self.configs) > 1:
             self.non_default_config = self.configs[1]
             self.possible_configs = self.configs + ['both']
-            self.selected_config = self.configs[0]
-
-        self.probes = probes
+        else:
+            self.possible_configs = [self.default_config]
+        self.selected_config = self.default_config
 
     def get_shanks(self, _) -> list[str]:
         """
-        Initialise the shanks based on the yaml file.
+        Determine the shanks from the yaml and initialise the loaders.
 
-        If only one probe label is given we load in the geometry to see if it is a
-        multi-shank recording. Otherwise, we assume the yaml has specified all shanks
-        and these are treated individually.
+        If a single probe is specified we load its geometry to detect whether it is a multi-shank
+        recording. Otherwise each probe entry in the yaml is treated as an individual shank.
+
+        Parameters
+        ----------
+        _ : Any
+            Ignored — the yaml path was supplied at construction time. The signature matches the
+            other ProbeHandlers so the controller can call it uniformly.
         """
-        # If we have only one probe label we load in the geometry to see if it is a
-        # multi-shank recording
         if len(self.probes) == 1:
-            # Load in the geometry and find the number of shanks
-            data_path = self.data_paths[self.default_config][self.probes[0]]
-            self.geom = GeometryLoaderLocal(data_path)
-            self.geom.get_geometry()
-
-            self.n_shanks = self.geom.channels.n_shanks
+            dp = self.data_paths[self.default_config][self.probes[0]]
+            geom = GeometryLoaderLocal(dp)
+            geom.get_geometry()
+            # Shank count comes from the ALF channels object when present, else from the SpikeGLX
+            # meta (e.g. external datasets with no spike sorting), mirroring the fallback used in
+            # GeometryLoader.get_sites_for_shank.
+            sites = geom.channels if geom.channels is not None else geom.electrodes
+            self.n_shanks = sites.n_shanks
             if self.n_shanks == 1:
-                self.shank_labels = self.probes
+                self.shank_labels = list(self.probes)
             else:
-                self.shank_labels = [f'shank_{iShank + 1}' for iShank in range(self.n_shanks)]
-        # Otherwise we assume the yaml has specified all shanks and these are treated individually
+                self.shank_labels = [f'shank_{ishank + 1}' for ishank in range(self.n_shanks)]
         else:
-            self.shank_labels = self.probes
+            self.shank_labels = list(self.probes)
             self.n_shanks = 1
 
         self.initialise_shanks()
@@ -923,34 +967,47 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
         Parameters
         ----------
-        idx: int
-            The index of the selected shank
+        idx : int
+            The index of the selected shank.
         """
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
-        """Load in the histology slice data."""
-        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
-        return NrrdSliceLoader(histology_path, self.brain_atlas)
+    def download_histology(self) -> SliceLoader:
+        """Load in the histology slice data, auto-detecting TIFF (e.g. brainreg) vs NRRD."""
+        dp = self.data_paths[self.selected_config][self.probes[0]]
+        return _build_slice_loader(dp.histology, self.brain_atlas)
 
     def initialise_shanks(self) -> None:
-        """Initialise each shank and config with the selected loaders."""
+        """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
         self.shanks = defaultdict(Bunch)
+
+        # A single probe entry may still be multi-shank; in that case all shanks share that one
+        # probe's dataset paths and are told apart by their shank index (the geometry is split per
+        # shank inside ShankHandler.load_data via get_sites_for_shank).
+        single_probe = len(self.probes) == 1
 
         for ish, shank in enumerate(self.shank_labels):
             ishank = ish if self.n_shanks > 1 else 0
+            probe = self.probes[0] if single_probe else shank
 
             for config in self.configs:
-                data_paths = self.data_paths[config][shank]
+                dp = self.data_paths[config][probe]
 
                 loaders = Bunch()
-                loaders['data'] = DataLoaderLocal(data_paths)
-                loaders['geom'] = GeometryLoaderLocal(data_paths)
-                loaders['align'] = AlignmentLoaderLocal(data_paths.picks, ishank, self.n_shanks)
-                loaders['upload'] = AlignmentUploaderLocal(
-                    data_paths.output, ishank, loaders['geom'], self.brain_atlas
+                loaders['geom'] = GeometryLoaderLocal(dp)
+                loaders['data'] = DataLoaderLocal(dp)
+                loaders['align'] = AlignmentLoaderLocal(
+                    dp.picks or dp.spike_sorting, ishank, self.n_shanks
                 )
-                loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
+                loaders['upload'] = AlignmentUploaderLocal(
+                    dp.output, ishank, self.n_shanks, self.brain_atlas
+                )
+                loaders['ephys'] = SpikeGLXLoaderLocal(dp.raw_ephys)
+                # Per-session features (if the yaml specifies them) load via the existing
+                # shank_handler.load_data -> loaders['features'] path, so the session is
+                # self-contained and switching yaml switches the features too.
+                if dp.features is not None:
+                    loaders['features'] = FeatureLoaderLocal(dp.features)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank][config] = ShankHandler(loaders, ishank)

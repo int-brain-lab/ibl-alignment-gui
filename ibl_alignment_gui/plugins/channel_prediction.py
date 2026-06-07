@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -5,12 +6,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 from qtpy import QtWidgets
 
+from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
 from iblatlas.atlas import AllenAtlas
 
-import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+# NB: ``spatial_encoder`` (torch) and ``inference`` (ephysatlas) are imported lazily inside the
+# compute functions below so this plugin can be set up in offline mode without those heavy/optional
+# dependencies installed.
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
@@ -22,6 +27,11 @@ PLUGIN_NAME = 'Channel Prediction'
 def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME] = Bunch()
     controller.plugins[PLUGIN_NAME]['activated'] = True
+    # Source configuration for the inference model + local features, set via the dialogs below and
+    # consumed by ephys_atlas.inference.ensure_model / _get_features_df.
+    controller.plugins[PLUGIN_NAME]['local_model_dir'] = None
+    controller.plugins[PLUGIN_NAME]['features_path'] = None
+    controller.plugins[PLUGIN_NAME]['model_name'] = None
 
     channel_prediction = ChannelPrediction(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
@@ -32,13 +42,16 @@ def setup(controller: 'AlignmentGUIController') -> None:
     action_group = QtWidgets.QActionGroup(plugin_menu)
     action_group.setExclusive(True)
 
+    # Cosmos + Inference run offline (local model/features). Spatial Encoder needs torch + S3, so
+    # it is only offered in online mode.
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
-        'Spatial Encoder': compute_spatial_encoder_predictions,
-        'Inference Model': compute_inference_predictions,
-        'Inference Cumulative': compute_cumulative_predictions,
     }
+    if not controller.offline:
+        predictions_models['Spatial Encoder'] = compute_spatial_encoder_predictions
+    predictions_models['Inference Model'] = compute_inference_predictions
+    predictions_models['Inference Cumulative'] = compute_cumulative_predictions
 
     for model, model_func in predictions_models.items():
         action = QtWidgets.QAction(model, controller.view)
@@ -50,7 +63,112 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action_group.addAction(action)
         plugin_menu.addAction(action)
 
+    # Dialogs to point the inference model + features at local paths or an S3 model name.
+    plugin_menu.addSeparator()
+    for label, handler in (
+        ('Set local features file…', _set_local_features),
+        ('Set local model dir…', _set_local_model_dir),
+        ('Set S3 model name…', _set_s3_model_name),
+    ):
+        action = QtWidgets.QAction(label, controller.view)
+        action.triggered.connect(lambda _=False, h=handler: h(controller))
+        plugin_menu.addAction(action)
+
     controller.plugins[PLUGIN_NAME]['data_button_pressed'] = lambda: callback(action_group)
+    # Kept so the 'Set …' dialogs can re-trigger the currently-selected prediction after they
+    # change the model/features source (see _refresh_current_prediction).
+    controller.plugins[PLUGIN_NAME]['action_group'] = action_group
+
+
+def _refresh_current_prediction(controller: 'AlignmentGUIController') -> None:
+    """
+    Re-run the currently-selected prediction so the visible plot reflects a new source.
+
+    Called after a ``Set …`` dialog changes the model/features source and clears the prediction
+    cache. Re-firing the checked action recomputes + redraws the active plot (for the inference
+    models) or simply replots the current view (Original/Cosmos).
+    """
+    group = controller.plugins[PLUGIN_NAME].get('action_group')
+    action = group.checkedAction() if group is not None else None
+    if action is not None:
+        action.trigger()
+
+
+def _invalidate_predictions(controller: 'AlignmentGUIController') -> None:
+    """Drop cached inference predictions on every shank so the next click recomputes."""
+    for shank_dict in controller.model.shanks.values():
+        for shank_handler in shank_dict.values():
+            preds = getattr(shank_handler, 'predictions', None)
+            if preds:
+                for key in ('Inference Model', 'Inference Cumulative'):
+                    preds.pop(key, None)
+
+
+def _set_local_features(controller: 'AlignmentGUIController') -> None:
+    """Prompt for a per-channel features parquet and use it for inference."""
+    parent = controller.view
+    chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
+        parent, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)')
+    if not chosen:
+        return
+
+    path = Path(chosen)
+    feats = FeatureLoaderLocal(path).load_features()
+    if not feats.get('exists', False):
+        QtWidgets.QMessageBox.warning(parent, PLUGIN_NAME, f'No features found in:\n{path}')
+        return
+
+    controller.plugins[PLUGIN_NAME]['features_path'] = path
+    # Inject into any already-loaded shanks so inference (and re-runs) use the new file; if data
+    # is not loaded yet, ephys_atlas.inference._get_features_df will load it lazily from this path.
+    for shank_dict in controller.model.shanks.values():
+        for shank_handler in shank_dict.values():
+            if getattr(shank_handler, 'raw_data', None) is not None:
+                shank_handler.raw_data['features'] = feats
+    _invalidate_predictions(controller)
+    logger.info('Local features file set to %s', path)
+    _refresh_current_prediction(controller)
+
+
+def _set_local_model_dir(controller: 'AlignmentGUIController') -> None:
+    """Prompt for a local model directory (containing folds/FOLD00/)."""
+    parent = controller.view
+    chosen = QtWidgets.QFileDialog.getExistingDirectory(
+        parent, 'Select model directory (containing folds/FOLD00/)')
+    if not chosen:
+        return
+
+    model_dir = Path(chosen)
+    # Accept either <dir>/folds/FOLD00 or <dir>/FOLD00 (the dir already being the folds directory).
+    has_folds = model_dir.joinpath('folds', 'FOLD00').is_dir() or model_dir.joinpath('FOLD00').is_dir()
+    if not has_folds:
+        QtWidgets.QMessageBox.warning(
+            parent, PLUGIN_NAME, f'No "folds/FOLD00" (or "FOLD00") found under:\n{model_dir}')
+        return
+
+    controller.plugins[PLUGIN_NAME]['local_model_dir'] = model_dir
+    controller.plugins[PLUGIN_NAME]['model_name'] = None  # local model takes precedence over S3
+    _invalidate_predictions(controller)
+    logger.info('Local model dir set to %s', model_dir)
+    _refresh_current_prediction(controller)
+
+
+def _set_s3_model_name(controller: 'AlignmentGUIController') -> None:
+    """Prompt for an S3 model name to download (e.g. xgboost_channels/2026_W12_Cosmos_...)."""
+    parent = controller.view
+    current = controller.plugins[PLUGIN_NAME].get('model_name') or ''
+    name, ok = QtWidgets.QInputDialog.getText(
+        parent, PLUGIN_NAME,
+        'S3 model name (e.g. xgboost_channels/2026_W12_Cosmos_careless-clover-dingo):',
+        text=current)
+    if not ok:
+        return
+
+    controller.plugins[PLUGIN_NAME]['model_name'] = name or None
+    controller.plugins[PLUGIN_NAME]['local_model_dir'] = None  # S3 takes precedence over local dir
+    _invalidate_predictions(controller)
+    logger.info('S3 model name set to %s', name or '<unset>')
+    _refresh_current_prediction(controller)
 
 
 def callback(group) -> None:
@@ -171,6 +289,8 @@ def compute_spatial_encoder_predictions(
     Bunch
         The predicted brain regions along the probe.
     """
+    # Lazy import: pulls in torch + the spatial encoder model; online-only.
+    import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
 
     result = spatial.predict(controller, items)
     if result is None:
@@ -192,6 +312,8 @@ def compute_inference_predictions(
     Bunch
         The predicted brain regions along the probe.
     """
+    # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
+    import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
 
     result = inference.predict(controller, items)
     if result is None:
@@ -213,6 +335,8 @@ def compute_cumulative_predictions(
     Bunch
         A bunch containing the probability of predicted brain regions along the probe.
     """
+    # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
+    import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
 
     result = inference.predict_cumulative(controller, items)
     if result is None:

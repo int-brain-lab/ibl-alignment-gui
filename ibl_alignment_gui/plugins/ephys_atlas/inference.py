@@ -16,6 +16,7 @@ import yaml
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
+from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,19 @@ def load_inference_model(controller, model_dir=None, model_name=None):
         # noqa: PLC0415 below - lazy import keeps offline startup ephysatlas-free.
         import ephysatlas.regionclassifier  # noqa: PLC0415
 
-        one = controller.model.one
+        # Online backends (ProbeHandlerONE/CSV) expose a ready ONE on the model. Offline/YAML mode
+        # does not, so fall back to a standalone ONE() — works when ONE/Alyx is configured and the
+        # network is reachable; otherwise give an actionable message instead of an AttributeError.
+        one = getattr(controller.model, 'one', None)
+        if one is None:
+            try:
+                one = ONE()
+            except Exception as exc:
+                raise RuntimeError(
+                    'S3 model download needs a configured ONE/Alyx connection, which is '
+                    'unavailable in this offline/YAML session. Set a local model directory via '
+                    'Channel Prediction → "Set local model dir…" instead.'
+                ) from exc
         # Fall back to the default packaged model vintage when no S3 name is configured, so the
         # S3 download works out of the box (override via "Set S3 model name…").
         model_name = model_name or MODEL_VINTAGE

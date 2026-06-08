@@ -32,6 +32,10 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['local_model_dir'] = None
     controller.plugins[PLUGIN_NAME]['features_path'] = None
     controller.plugins[PLUGIN_NAME]['model_name'] = None
+    # Spatial Encoder (automatic alignment) sources: a local encoder model dir and the
+    # reference-bank root, consumed by ephys_atlas.spatial_encoder.load_alignment_engine.
+    controller.plugins[PLUGIN_NAME]['local_encoder_dir'] = None
+    controller.plugins[PLUGIN_NAME]['local_encoder_data'] = None
 
     channel_prediction = ChannelPrediction(controller)
     controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
@@ -42,16 +46,16 @@ def setup(controller: 'AlignmentGUIController') -> None:
     action_group = QtWidgets.QActionGroup(plugin_menu)
     action_group.setExclusive(True)
 
-    # Cosmos + Inference run offline (local model/features). Spatial Encoder needs torch + S3, so
-    # it is only offered in online mode.
+    # All models are offline-capable from local assets: the inference (xgboost) model via a local
+    # model dir, and the Spatial Encoder (automatic alignment) via a local encoder dir + bank dir
+    # (set through the dialogs below). They fall back to S3/ONE only when no local source is set.
     predictions_models = {
         'Original': None,
         'Cosmos': compute_cosmos_predictions,
+        'Spatial Encoder': compute_spatial_encoder_predictions,
+        'Inference Model': compute_inference_predictions,
+        'Inference Cumulative': compute_cumulative_predictions,
     }
-    if not controller.offline:
-        predictions_models['Spatial Encoder'] = compute_spatial_encoder_predictions
-    predictions_models['Inference Model'] = compute_inference_predictions
-    predictions_models['Inference Cumulative'] = compute_cumulative_predictions
 
     for model, model_func in predictions_models.items():
         action = QtWidgets.QAction(model, controller.view)
@@ -63,12 +67,15 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action_group.addAction(action)
         plugin_menu.addAction(action)
 
-    # Dialogs to point the inference model + features at local paths or an S3 model name.
+    # Dialogs to point the inference model + features at local paths or an S3 model name, and the
+    # Spatial Encoder (automatic alignment) at a local encoder dir + reference-bank dir.
     plugin_menu.addSeparator()
     for label, handler in (
         ('Set local features file…', _set_local_features),
         ('Set local model dir…', _set_local_model_dir),
         ('Set S3 model name…', _set_s3_model_name),
+        ('Set local Spatial Encoder dir…', _set_local_encoder_dir),
+        ('Set Spatial Encoder bank dir…', _set_local_encoder_data),
     ):
         action = QtWidgets.QAction(label, controller.view)
         action.triggered.connect(lambda _=False, h=handler: h(controller))
@@ -168,6 +175,45 @@ def _set_s3_model_name(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['local_model_dir'] = None  # S3 takes precedence over local dir
     _invalidate_predictions(controller)
     logger.info('S3 model name set to %s', name or '<unset>')
+    _refresh_current_prediction(controller)
+
+
+def _invalidate_engine(controller: 'AlignmentGUIController') -> None:
+    """Drop the cached Spatial Encoder engine so the next click rebuilds it."""
+    controller.plugins[PLUGIN_NAME].pop('Spatial encoder', None)
+
+
+def _set_local_encoder_dir(controller: 'AlignmentGUIController') -> None:
+    """Prompt for a local Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy)."""
+    parent = controller.view
+    chosen = QtWidgets.QFileDialog.getExistingDirectory(
+        parent, 'Select Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy)')
+    if not chosen:
+        return
+
+    enc_dir = Path(chosen)
+    if not any(enc_dir.glob('SE_model_*.pt')):
+        QtWidgets.QMessageBox.warning(
+            parent, PLUGIN_NAME, f'No "SE_model_*.pt" found under:\n{enc_dir}')
+        return
+
+    controller.plugins[PLUGIN_NAME]['local_encoder_dir'] = enc_dir
+    _invalidate_engine(controller)
+    logger.info('Local Spatial Encoder dir set to %s', enc_dir)
+    _refresh_current_prediction(controller)
+
+
+def _set_local_encoder_data(controller: 'AlignmentGUIController') -> None:
+    """Prompt for the Spatial Encoder reference-bank root."""
+    parent = controller.view
+    chosen = QtWidgets.QFileDialog.getExistingDirectory(
+        parent, 'Select Spatial Encoder bank root (contains <project>/<vintage>/agg_full/)')
+    if not chosen:
+        return
+
+    controller.plugins[PLUGIN_NAME]['local_encoder_data'] = Path(chosen)
+    _invalidate_engine(controller)
+    logger.info('Spatial Encoder bank dir set to %s', Path(chosen))
     _refresh_current_prediction(controller)
 
 

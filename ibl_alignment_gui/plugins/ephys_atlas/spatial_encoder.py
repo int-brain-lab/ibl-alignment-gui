@@ -69,27 +69,42 @@ def _as_device() -> torch.device:
 
 
 def _load_optional_conf_model(*, model_path: Path, device: torch.device, f_ctx: int, f_e: int):
+    # Accept the canonical name or the local encoder dir's `Confidence_model_<VINTAGE>.pt`.
     conf_path = model_path / 'probe_conf_model.pt'
+    if not conf_path.exists():
+        alt = sorted(model_path.glob('Confidence_model_*.pt'))
+        if alt:
+            conf_path = alt[0]
     if not conf_path.exists():
         print(
             f'[Alignment engine] No confidence model found at {conf_path}; continuing without it.'
         )
         return None
 
-    ckpt = torch.load(conf_path, map_location=device)
-    conf_cfg = ProbeConfidenceTrainConfig(**ckpt.get('cfg', {}))
-    conf_model = ProbeSequenceConfidenceTransformer(
-        f_ctx=f_ctx,
-        f_e=f_e,
-        d_model=conf_cfg.d_model,
-        nhead=conf_cfg.nhead,
-        depth=conf_cfg.depth,
-        mlp_ratio=conf_cfg.mlp_ratio,
-        drop=conf_cfg.drop,
-    ).to(device)
-    conf_model.load_state_dict(ckpt['conf_model_state'])
-    conf_model.eval()
-    return conf_model
+    # The confidence model is optional and checkpoint layouts vary (`conf_model_state` vs
+    # `model_state`, with or without a saved `cfg`). Any incompatibility degrades to "no conf
+    # model" rather than failing the whole engine build.
+    try:
+        ckpt = torch.load(conf_path, map_location=device)
+        conf_cfg = ProbeConfidenceTrainConfig(**ckpt.get('cfg', {}))
+        conf_model = ProbeSequenceConfidenceTransformer(
+            f_ctx=f_ctx,
+            f_e=f_e,
+            d_model=conf_cfg.d_model,
+            nhead=conf_cfg.nhead,
+            depth=conf_cfg.depth,
+            mlp_ratio=conf_cfg.mlp_ratio,
+            drop=conf_cfg.drop,
+        ).to(device)
+        conf_model.load_state_dict(ckpt.get('conf_model_state', ckpt.get('model_state')))
+        conf_model.eval()
+        return conf_model
+    except Exception as exc:
+        print(
+            f'[Alignment engine] Confidence model at {conf_path} is incompatible ({exc}); '
+            'continuing without it.'
+        )
+        return None
 
 
 def _build_context_manager(
@@ -136,24 +151,69 @@ def _unpack_loader_outputs(loaders):
     return train_loader, e_mean, e_std, ctx_mean, ctx_std, split_info
 
 
+def _resolve_encoder_sources(controller, model_name):
+    """
+    Resolve ``(model_path, ctx_local_path, bank_path, one)`` for the Spatial Encoder.
+
+    Uses the Channel Prediction plugin's ``local_encoder_dir`` / ``local_encoder_data`` when set
+    (fully offline). Otherwise downloads the encoder from S3 via ONE — a standalone ``ONE()`` is
+    created when the data backend exposes none (offline/yaml mode).
+    """
+    plugin = controller.plugins.get('Channel Prediction', {})
+    local_encoder_dir = plugin.get('local_encoder_dir')
+    local_encoder_data = plugin.get('local_encoder_data')
+
+    # Online backends (ProbeHandlerONE/CSV) expose a ready ONE; offline/yaml mode does not.
+    one = getattr(controller.model, 'one', None)
+
+    if local_encoder_dir is not None:
+        # Local encoder: the dir holding SE_model_*.pt, *_vol_pca.npy and the confidence model.
+        model_path = Path(local_encoder_dir)
+        ctx_local_path = model_path
+        print(f'[Alignment engine] Using local encoder dir {model_path}')
+    else:
+        # S3 encoder: download into the ONE cache. Needs a ONE; fall back to a standalone ONE().
+        if one is None:
+            from one.api import ONE  # noqa: PLC0415
+
+            try:
+                one = ONE()
+            except Exception as exc:
+                raise RuntimeError(
+                    'Spatial Encoder needs a local encoder dir (Channel Prediction → "Set local '
+                    'Spatial Encoder dir…") or a configured ONE/Alyx connection for S3 download.'
+                ) from exc
+        local_path = Path(one.cache_dir).joinpath('ephys_atlas_features')
+        ctx_local_path = local_path
+        model_path = local_path / model_name
+        model_path.mkdir(parents=True, exist_ok=True)
+        try:
+            from ephysatlas.regionclassifier import download_model
+
+            model_path = download_model(model_path, f'encoding_models/{MODEL_VINTAGE}', one=one)
+        except Exception as e:
+            print(f'[Alignment engine] download_model skipped/failed: {e}')
+
+    # Reference-bank root for LoadInsertionData: local dir when set, else the ONE cache.
+    if local_encoder_data is not None:
+        bank_path = Path(local_encoder_data)
+    elif one is not None:
+        bank_path = Path(one.cache_dir).joinpath('ephys_atlas_features')
+    else:
+        raise RuntimeError(
+            'No Spatial Encoder reference bank available: set one via Channel Prediction → '
+            '"Set Spatial Encoder bank dir…" (offline) or run online.')
+
+    return model_path, ctx_local_path, bank_path, one
+
+
 def load_alignment_engine(controller) -> AlignmentEngine:
     print('Data loading and model initialization (one-time)')
     t0 = time.time()
     device = _as_device()
 
     model_name = f'{MODEL_VINTAGE}_SE_model'
-
-    one = controller.model.one
-    local_path = Path(one.cache_dir).joinpath('ephys_atlas_features')
-    model_path = local_path / model_name
-    model_path.mkdir(parents=True, exist_ok=True)
-
-    try:
-        from ephysatlas.regionclassifier import download_model
-
-        model_path = download_model(model_path, f'encoding_models/{MODEL_VINTAGE}', one=one)
-    except Exception as e:
-        print(f'[Alignment engine] download_model skipped/failed: {e}')
+    model_path, ctx_local_path, bank_path, one = _resolve_encoder_sources(controller, model_name)
 
     optimization_features = np.arange(len(FEATURE_LIST), dtype=int)
 
@@ -161,13 +221,14 @@ def load_alignment_engine(controller) -> AlignmentEngine:
     ctx_manager = _build_context_manager(
         cfg,
         model_name=model_name,
-        local_path=local_path,
+        local_path=ctx_local_path,
         model_path=model_path,
     )
 
     pid_str, ephys, probe_positions, _ = LoadInsertionData(
         VINTAGE=MODEL_VINTAGE,
-        path_data=local_path,
+        path_data=bank_path,
+        one=one,
     )
 
     M_MAX = 8
@@ -230,7 +291,7 @@ def load_alignment_engine(controller) -> AlignmentEngine:
         RADIUS_UM=RADIUS_UM,
         optimization_features=optimization_features,
         model_name=model_name,
-        local_path=local_path,
+        local_path=ctx_local_path,
         conf_model=conf_model,
     )
 

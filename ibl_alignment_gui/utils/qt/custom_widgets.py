@@ -1153,6 +1153,10 @@ class LutWidget(pg.GraphicsLayoutWidget):
             self.lut_layout.removeItem(self.slice_lut)
             self.lut_status = False
 
+    def reset_lut_levels(self) -> None:
+        """Clear stored LUT levels so the next set_lut call computes fresh levels."""
+        self.lut_levels = None
+
     def set_lut_levels(self, levels: list | tuple | None = None) -> None:
         """
         Apply the specified intensity levels to all linked images and update the LUT.

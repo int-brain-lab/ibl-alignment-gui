@@ -459,7 +459,7 @@ class AlignmentGUIController:
             if not self.show_channels:
                 self.toggle_channels()
             # If plot key changes reset the lut levels
-            self.view.set_levels(None)
+            self.view.reset_levels()
 
         self.slice_figs = Bunch()
         if self.model.selected_config == 'both':

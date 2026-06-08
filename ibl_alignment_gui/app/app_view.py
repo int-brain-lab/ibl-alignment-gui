@@ -462,6 +462,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """See :meth:`LutWidget.set_lut_levels` for details."""
         self.lut_widget.set_lut_levels(levels)
 
+    def reset_levels(self) -> None:
+        """See :meth:`LutWidget.reset_lut_levels` for details."""
+        self.lut_widget.reset_lut_levels()
+
     def set_lut(self, images: list, cbar: custom_widgets.ColorBar) -> None:
         """
         Add the LUT item if not already added and set the LUT for the given images and colorbar.

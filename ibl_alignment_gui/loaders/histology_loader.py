@@ -3,6 +3,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import requests
@@ -15,6 +16,40 @@ from one import params
 from one.webclient import http_download_file
 
 logger = logging.getLogger(__name__)
+
+
+class LazySliceDict(dict):
+    """
+    Dict of histology slice Bunches that loads channels from disk on first access.
+
+    Eager entries (CCF, Annotation) are populated immediately. Lazy entries
+    (histology channels) are stored as ``None`` placeholders until a key is
+    accessed, at which point the registered callback loads and caches the slice.
+    """
+
+    def __init__(
+        self,
+        eager_data: dict,
+        lazy_callbacks: dict[str, Callable[[], Bunch]],
+    ):
+        super().__init__(eager_data)
+        self._callbacks: dict[str, Callable] = {}
+        for key, cb in lazy_callbacks.items():
+            self._callbacks[key] = cb
+            super().__setitem__(key, None)  # placeholder so key appears in .keys()
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        if value is None and key in self._callbacks:
+            value = self._callbacks[key]()
+            super().__setitem__(key, value)  # cache for subsequent accesses
+        return value
+
+    def get(self, key, default=None):
+        # CPython's dict.get() bypasses __getitem__, so override to trigger lazy load.
+        if key in self:
+            return self[key]
+        return default
 
 
 class SliceLoader(ABC):
@@ -57,75 +92,69 @@ class SliceLoader(ABC):
             Loaded 3D image volume.
         """
 
-    def get_slices(self, xyz: np.ndarray) -> dict[str, dict]:
+    def get_slices(self, xyz: np.ndarray) -> LazySliceDict:
         """
-        Generate slice images for CCF, annotation, and loaded histology.
+        Generate slice images for CCF, annotation, and histology channels.
+
+        CCF and Annotation are computed immediately (atlas arrays are already in
+        memory).  Histology channel volumes are loaded from disk only when their
+        key is first accessed in the returned dict.
 
         Parameters
         ----------
         xyz : np.ndarray
-            n x 3 array of xyz coordinates.
+            n x 3 array of xyz coordinates along the probe track.
 
         Returns
         -------
-        slices: dict[str, dict]
-            A dictionary of dictionaries of image slices and metadata for each image type.
-        """
-        slices = Bunch(
-            {
-                'CCF': self.get_slice(xyz, self.brain_atlas.image),
-                'Annotation': self.get_slice(xyz, self.brain_atlas.label, annotation=True),
-            }
-        )
-
-        slices['Annotation']['label'] = True
-
-        for key, vol_path in self.hist_paths.items():
-            try:
-                vol = self.load_volume(vol_path)
-                slices[key] = self.get_slice(xyz, vol)
-            except Exception as e:
-                logger.error(f'Failed to load {key} volume at {vol_path}: {e}')
-
-        return slices
-
-    def get_slice(
-        self, xyz: np.ndarray, vol: np.ndarray, annotation: bool = False
-    ) -> dict[str, np.ndarray]:
-        """
-        Extract a slice from a 3D volume using given coordinates.
-
-        Parameters
-        ----------
-        xyz : np.ndarray
-            Nx3 array of XYZ coordinates.
-        vol : np.ndarray
-            3D volume from which to extract a slice.
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            A dictionary containing the 2D slice, scale, and offset.
+        LazySliceDict
+            Keys: 'CCF', 'Annotation', and one key per entry in hist_paths.
+            Each value is a Bunch with 'slice' (2D array), 'scale', and 'offset'.
         """
         index = self.brain_atlas.bc.xyz2i(xyz)[:, self.brain_atlas.xyz2dims]
         width = [self.brain_atlas.bc.i2x(0), self.brain_atlas.bc.i2x(self.brain_atlas.bc.nx - 1)]
         height = [self.brain_atlas.bc.i2z(index[0, 2]), self.brain_atlas.bc.i2z(index[-1, 2])]
+        scale = np.array([
+            (width[1] - width[0]) / self.brain_atlas.bc.nx,
+            (height[1] - height[0]) / len(xyz),
+        ])
+        offset = np.array([width[0], height[0]])
+
+        ann = self._make_slice_bunch(self.brain_atlas.label, index, scale, offset, annotation=True)
+        ann['label'] = True
+
+        eager = {
+            'CCF': self._make_slice_bunch(self.brain_atlas.image, index, scale, offset),
+            'Annotation': ann,
+        }
+
+        def _make_callback(vol_path):
+            def _load():
+                try:
+                    vol = self.load_volume(vol_path)
+                    return self._make_slice_bunch(vol, index, scale, offset)
+                except Exception as e:
+                    logger.error(f'Failed to load {vol_path}: {e}')
+                    return None
+            return _load
+
+        lazy = {key: _make_callback(path) for key, path in self.hist_paths.items()}
+        return LazySliceDict(eager, lazy)
+
+    def _make_slice_bunch(
+        self,
+        vol: np.ndarray,
+        index: np.ndarray,
+        scale: np.ndarray,
+        offset: np.ndarray,
+        annotation: bool = False,
+    ) -> Bunch:
+        """Extract a 2D wavy slice from *vol* and package it with shared metadata."""
         hist_slice = vol[index[:, 0], :, index[:, 2]]
         if annotation:
             hist_slice = self.brain_atlas._label2rgb(hist_slice)
         hist_slice = np.swapaxes(hist_slice, 0, 1)
-        return Bunch(
-            {
-                'slice': hist_slice,
-                'scale': np.array(
-                    [
-                        (width[-1] - width[0]) / hist_slice.shape[0],
-                        (height[-1] - height[0]) / hist_slice.shape[1],
-                    ]
-                ),
-                'offset': np.array([width[0], height[0]]),
-            }
-        )
+        return Bunch({'slice': hist_slice, 'scale': scale, 'offset': offset})
 
 
 class NrrdSliceLoader(SliceLoader):

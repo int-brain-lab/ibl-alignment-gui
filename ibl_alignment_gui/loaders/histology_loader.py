@@ -1,13 +1,15 @@
 import logging
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import requests
 import SimpleITK as sitk  # noqa: N813
 
-from iblatlas.atlas import AllenAtlas
+from iblatlas.atlas import AllenAtlas, BrainAtlas
+from ibl_alignment_gui.loaders.anatomical_atlas import BrainAtlasAnatomical, _BLESSED_DIRECTION
 from iblutil.util import Bunch
 from one import params
 from one.webclient import http_download_file
@@ -29,9 +31,9 @@ class SliceLoader(ABC):
         Reference brain atlas.
     """
 
-    def __init__(self, file_path: Path, brain_atlas: AllenAtlas):
+    def __init__(self, file_path: Path, brain_atlas: BrainAtlas):
         self.file_path: Path = file_path
-        self.brain_atlas: AllenAtlas = brain_atlas
+        self.brain_atlas: BrainAtlas = brain_atlas
         self.hist_paths: dict[str, Path] = {}
         self.get_paths()
 
@@ -106,7 +108,7 @@ class SliceLoader(ABC):
             A dictionary containing the 2D slice, scale, and offset.
         """
         index = self.brain_atlas.bc.xyz2i(xyz)[:, self.brain_atlas.xyz2dims]
-        width = [self.brain_atlas.bc.i2x(0), self.brain_atlas.bc.i2x(456)]
+        width = [self.brain_atlas.bc.i2x(0), self.brain_atlas.bc.i2x(self.brain_atlas.bc.nx - 1)]
         height = [self.brain_atlas.bc.i2z(index[0, 2]), self.brain_atlas.bc.i2z(index[-1, 2])]
         hist_slice = vol[index[:, 0], :, index[:, 2]]
         if annotation:
@@ -166,6 +168,135 @@ class NrrdSliceLoader(SliceLoader):
             Loaded image volume.
         """
         return AllenAtlas._read_volume(vol_path)
+
+
+@dataclass(frozen=True)
+class ImageSpacePaths:
+    """
+    Paths to the NRRD files produced by the histology registration pipeline,
+    all living in a single folder.
+
+    atlas_image_path : Path
+        CCF template warped into anatomical space (``ccf_in_*.nrrd``).
+    atlas_labels_path : Path
+        CCF labels warped into anatomical space (``labels_in_*.nrrd``).
+    pipeline_image_path : Path
+        Pipeline reference image used by the registration (``histology_registration_pipeline.nrrd``).
+    histology_image_path : Path
+        Main registered histology channel (``histology_registration.nrrd``).
+    other_channel_paths : list[Path]
+        Any additional fluorescence channels matching ``Ex_*_Em_*.nrrd``.
+    """
+
+    atlas_image_path: Path
+    atlas_labels_path: Path
+    pipeline_image_path: Path
+    histology_image_path: Path
+    other_channel_paths: list[Path] = field(default_factory=list)
+
+    @classmethod
+    def from_folder(cls, input_path: Path) -> 'ImageSpacePaths':
+        """
+        Discover all required files in *input_path* and return an ImageSpacePaths.
+
+        Raises StopIteration if any required file is missing.
+        """
+        def _glob_first(pattern: str) -> Path:
+            return next(input_path.glob(pattern))
+
+        other_channel_paths: list[Path] = []
+        pattern = re.compile(r'^Ex_\d+_Em_\d+\.nrrd$')
+        for p in input_path.iterdir():
+            if pattern.match(p.name):
+                other_channel_paths.append(p)
+
+        return cls(
+            atlas_image_path=_glob_first('ccf_in_*.nrrd'),
+            atlas_labels_path=_glob_first('labels_in_*.nrrd'),
+            pipeline_image_path=_glob_first('histology_registration_pipeline.nrrd'),
+            histology_image_path=_glob_first('histology_registration.nrrd'),
+            other_channel_paths=other_channel_paths,
+        )
+
+
+class AnatomicalSliceLoader(SliceLoader):
+    """
+    SliceLoader for histology registered in original anatomical (non-CCF) space.
+
+    Expects a folder produced by the histology registration pipeline containing:
+    ``ccf_in_*.nrrd``, ``labels_in_*.nrrd``,
+    ``histology_registration_pipeline.nrrd``, ``histology_registration.nrrd``,
+    and optionally ``Ex_*_Em_*.nrrd`` channel files.
+
+    The BrainAtlasAnatomical built from these files works in the physical space
+    of the anatomical images (mm, RAS).  Coordinates passed to ``get_slices``
+    must therefore be in that same anatomical physical space, not in Allen CCF
+    space.
+
+    Parameters
+    ----------
+    file_path : Path
+        Folder containing the registration pipeline NRRD outputs.
+    brain_atlas : BrainAtlas
+        Unused; accepted to satisfy the SliceLoader interface and the
+        ``make_slice_loader`` factory signature.
+    """
+
+    def __init__(self, file_path: Path, brain_atlas: BrainAtlas):
+        super().__init__(file_path, brain_atlas)
+        self.brain_atlas = self._build_anatomical_atlas()
+
+    def get_paths(self) -> None:
+        self.image_space_paths = ImageSpacePaths.from_folder(self.file_path)
+        self.hist_paths: dict[str, Path] = {
+            'Histology registration': self.image_space_paths.histology_image_path,
+        }
+        for p in self.image_space_paths.other_channel_paths:
+            self.hist_paths[p.stem] = p
+
+    def load_volume(self, vol_path: Path) -> np.ndarray:
+        """Read a channel NRRD, reorient to IRP, and return as a numpy array."""
+        img = sitk.ReadImage(str(vol_path))
+        img = sitk.DICOMOrient(img, _BLESSED_DIRECTION)
+        return sitk.GetArrayFromImage(img)
+
+    def _build_anatomical_atlas(self) -> BrainAtlasAnatomical:
+        paths = self.image_space_paths
+        return BrainAtlasAnatomical(
+            intensity_img=sitk.ReadImage(str(paths.atlas_image_path)),
+            label_img=sitk.ReadImage(str(paths.atlas_labels_path)),
+            pipeline_img=sitk.ReadImage(str(paths.pipeline_image_path)),
+        )
+
+
+def make_slice_loader(
+    file_path: Path, brain_atlas: BrainAtlas, space: str = 'ccf'
+) -> SliceLoader:
+    """
+    Return the appropriate SliceLoader for the given folder.
+
+    Parameters
+    ----------
+    file_path : Path
+        Folder containing histology files.
+    brain_atlas : BrainAtlas
+        Brain atlas passed to the loader (used directly by NrrdSliceLoader;
+        ignored by AnatomicalSliceLoader which builds its own atlas from the
+        folder files).
+    space : {'ccf', 'anatomical'}
+        Which loader to use.  'ccf' returns a NrrdSliceLoader operating in
+        Allen CCF space; 'anatomical' returns an AnatomicalSliceLoader
+        operating in the original image space.  Matches the ``histology.space``
+        field in the alignment YAML.
+
+    Returns
+    -------
+    SliceLoader
+        NrrdSliceLoader for 'ccf', AnatomicalSliceLoader for 'anatomical'.
+    """
+    if space == 'anatomical':
+        return AnatomicalSliceLoader(file_path, brain_atlas)
+    return NrrdSliceLoader(file_path, brain_atlas)
 
 
 def download_histology_data(

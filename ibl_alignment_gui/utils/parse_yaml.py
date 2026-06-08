@@ -1,5 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -29,6 +30,10 @@ class DatasetPaths(BaseModel):
         Path to probe trajectory pick files directory
     histology : Path | None
         Path to histology volume directory
+    histology_space : str
+        Coordinate space for histology loading: 'ccf' (default) uses the Allen
+        CCF atlas via NrrdSliceLoader; 'anatomical' uses the original image
+        space via AnatomicalSliceLoader.
     output : Path | None
         Path to alignment output directory
     """
@@ -40,6 +45,7 @@ class DatasetPaths(BaseModel):
     raw_task: Path | None = None
     picks: Path | None = None
     histology: Path | None = None
+    histology_space: str = 'ccf'
     output: Path | None = None
 
 
@@ -91,6 +97,22 @@ class Configuration(BaseModel):
     path: Path | None = None  # Config-level root
 
 
+class HistologyConfig(BaseModel):
+    """
+    Top-level histology settings applied to all probes in the session.
+
+    Attributes
+    ----------
+    space : {'ccf', 'anatomical'}
+        Which coordinate space to use for histology slice loading.
+        'ccf' (default) loads via NrrdSliceLoader using the Allen CCF atlas.
+        'anatomical' loads via AnatomicalSliceLoader using the original image
+        space produced by the histology registration pipeline.
+    """
+
+    space: Literal['ccf', 'anatomical'] = 'ccf'
+
+
 class AlignmentYAML(BaseModel):
     """
     Root-level YAML configuration structure.
@@ -101,12 +123,15 @@ class AlignmentYAML(BaseModel):
         Default dataset configurations applied to all probes
     configurations : dict[str, Configuration]
         Dictionary mapping configuration names to their configurations
+    histology : HistologyConfig | None
+        Session-level histology settings (space selection)
     path : Path | None
         Global root path for resolving all relative paths
     """
 
     defaults: dict[str, Datasets] | None = None
     configurations: dict[str, Configuration]
+    histology: HistologyConfig | None = None
     path: Path | None = None  # Global root
 
 
@@ -219,6 +244,7 @@ def load_alignment_yaml(
 
     alignment = AlignmentYAML(**data)
     global_path = alignment.path
+    histology_space = alignment.histology.space if alignment.histology else 'ccf'
 
     data_paths = defaultdict(dict)
     configs = []
@@ -262,6 +288,8 @@ def load_alignment_yaml(
                     path_value, probe_path, config_path, global_path, default_value
                 )
                 setattr(resolved_paths, dataset_name, resolved_path)
+
+            resolved_paths.histology_space = histology_space
 
             if resolved_paths.processed_ephys is None:
                 resolved_paths.processed_ephys = resolved_paths.raw_ephys

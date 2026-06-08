@@ -29,8 +29,9 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     GeometryLoaderOne,
 )
 from ibl_alignment_gui.loaders.histology_loader import (
-    NrrdSliceLoader,
+    SliceLoader,
     download_histology_data,
+    make_slice_loader,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
@@ -546,10 +547,10 @@ class ProbeHandlerONE(ProbeHandler):
         self.lab = self.shank_labels[idx]['session_info']['lab']
         self.pid = self.shank_labels[idx]['id']
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Download and load in the histology slice data."""
         _, hist_path = download_histology_data(self.subj, self.lab)
-        return NrrdSliceLoader(hist_path, self.brain_atlas)
+        return make_slice_loader(hist_path, self.brain_atlas, 'ccf')
 
     def initialise_shanks(self):
         """Initialise each shank with the loaders."""
@@ -672,10 +673,10 @@ class ProbeHandlerCSV(ProbeHandler):
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Download and load in the histology slice data."""
         _, hist_path = download_histology_data(self.subj, self.lab)
-        return NrrdSliceLoader(hist_path, self.brain_atlas)
+        return make_slice_loader(hist_path, self.brain_atlas, 'ccf')
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with the selected loaders."""
@@ -822,9 +823,11 @@ class ProbeHandlerLocal(ProbeHandler):
         self.selected_shank = f'shank_{self.shank_labels[idx]}'
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
-        return NrrdSliceLoader(self.data_paths.histology, self.brain_atlas)
+        return make_slice_loader(
+            self.data_paths.histology, self.brain_atlas, self.data_paths.histology_space
+        )
 
     def initialise_shanks(self) -> None:
         """Initialise each shank with the loaders."""
@@ -905,10 +908,10 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
-        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
-        return NrrdSliceLoader(histology_path, self.brain_atlas)
+        data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
+        return make_slice_loader(data_paths.histology, self.brain_atlas, data_paths.histology_space)
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with the selected loaders."""

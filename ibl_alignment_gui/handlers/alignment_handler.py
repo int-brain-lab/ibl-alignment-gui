@@ -1,6 +1,6 @@
 import numpy as np
 
-from iblatlas.atlas import AllenAtlas
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from ibllib.pipes.ephys_alignment import EphysAlignment
 from iblutil.util import Bunch
 
@@ -142,9 +142,9 @@ class AlignmentHandler:
         probe at a specific alignment step
     """
 
-    def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: AllenAtlas):
+    def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: BrainAtlas):
         self.buffer: CircularIndexTracker = CircularIndexTracker(10)
-        self.brain_atlas: AllenAtlas = brain_atlas
+        self.brain_atlas: BrainAtlas = brain_atlas
         self.ephysalign: EphysAlignment = EphysAlignment(
             xyz_picks, chn_depths, brain_atlas=self.brain_atlas
         )

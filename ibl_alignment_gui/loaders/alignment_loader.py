@@ -240,7 +240,7 @@ class AlignmentLoaderLocal(AlignmentLoader):
             The xyz picks as a (N, 3) array in m, or None if not found.
         """
         xyz_name = (
-            '*xyz_picks.json'
+            '*xyz_picks_image_space.json'
             if self.n_shanks == 1
             else f'*xyz_picks_shank{self.shank_idx + 1}.json'
         )
@@ -251,7 +251,6 @@ class AlignmentLoaderLocal(AlignmentLoader):
             return
 
         user_picks = self._load_json_file(xyz_file[0])
-
         return np.array(user_picks['xyz_picks']) / 1e6
 
     def load_alignments(self) -> dict[str, Any] | None:

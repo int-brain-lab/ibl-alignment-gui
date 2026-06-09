@@ -8,7 +8,7 @@ import numpy as np
 
 import ibllib.qc.critical_reasons as critical_note
 from iblatlas import atlas
-from iblatlas.atlas import AllenAtlas
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from ibllib.pipes import histology
 from ibllib.qc.alignment_qc import AlignmentQC
 from iblutil.util import Bunch
@@ -28,7 +28,7 @@ class AlignmentUploader(ABC):
         An AllenAtlas instance
     """
 
-    def __init__(self, brain_atlas: atlas.AllenAtlas) -> None:
+    def __init__(self, brain_atlas: BrainAtlas) -> None:
         self.brain_atlas = brain_atlas
 
     @abstractmethod
@@ -313,8 +313,8 @@ class AlignmentUploaderLocal(AlignmentUploader):
         Index of the shank (0-based).
     n_shanks : int
         Total number of shanks.
-    brain_atlas: AllenAtlas
-        An AllenAtlas instance
+    brain_atlas: BrainAtlas
+        A BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical)
     user: str or None
         Username for tagging alignments.
     """
@@ -324,7 +324,7 @@ class AlignmentUploaderLocal(AlignmentUploader):
         data_path: Path,
         shank_idx: int,
         n_shanks: int,
-        brain_atlas: AllenAtlas,
+        brain_atlas: BrainAtlas,
         user: str | None = None,
     ):
         self.data_path: Path = data_path

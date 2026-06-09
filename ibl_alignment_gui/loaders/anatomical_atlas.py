@@ -169,6 +169,7 @@ class BrainAtlasAnatomical(BrainAtlas):
         )
         nxyz = np.array(intensity_img_sra_arr.shape)[dims2xyz]
         self.bc = BrainCoordinates(nxyz=nxyz, xyz0=sitk_origin_ras_m, dxyz=dxyz)
+        self.res_um = dxyz * 1e6
         # Store the SimpleITK intensity image, and the pipeline image for use
         # with CCF transforms
         self.intensity_sitk_image = intensity_img_blessed

@@ -273,7 +273,8 @@ class AnatomicalSliceLoader(SliceLoader):
 
     def __init__(self, file_path: Path, brain_atlas: BrainAtlas):
         super().__init__(file_path, brain_atlas)
-        self.brain_atlas = self._build_anatomical_atlas()
+        if not isinstance(self.brain_atlas, BrainAtlasAnatomical):
+            self.brain_atlas = self._build_anatomical_atlas()
 
     def get_paths(self) -> None:
         self.image_space_paths = ImageSpacePaths.from_folder(self.file_path)
@@ -290,12 +291,29 @@ class AnatomicalSliceLoader(SliceLoader):
         return sitk.GetArrayFromImage(img)
 
     def _build_anatomical_atlas(self) -> BrainAtlasAnatomical:
-        paths = self.image_space_paths
-        return BrainAtlasAnatomical(
-            intensity_img=sitk.ReadImage(str(paths.atlas_image_path)),
-            label_img=sitk.ReadImage(str(paths.atlas_labels_path)),
-            pipeline_img=sitk.ReadImage(str(paths.pipeline_image_path)),
-        )
+        return build_anatomical_atlas(self.file_path)
+
+
+def build_anatomical_atlas(histology_path: Path) -> BrainAtlasAnatomical:
+    """
+    Build a BrainAtlasAnatomical from the registration pipeline NRRD files in *histology_path*.
+
+    Parameters
+    ----------
+    histology_path : Path
+        Folder containing ``ccf_in_*.nrrd``, ``labels_in_*.nrrd``, and
+        ``histology_registration_pipeline.nrrd``.
+
+    Returns
+    -------
+    BrainAtlasAnatomical
+    """
+    paths = ImageSpacePaths.from_folder(histology_path)
+    return BrainAtlasAnatomical(
+        intensity_img=sitk.ReadImage(str(paths.atlas_image_path)),
+        label_img=sitk.ReadImage(str(paths.atlas_labels_path)),
+        pipeline_img=sitk.ReadImage(str(paths.pipeline_image_path)),
+    )
 
 
 def make_slice_loader(

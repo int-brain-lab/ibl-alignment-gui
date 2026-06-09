@@ -30,12 +30,13 @@ from ibl_alignment_gui.loaders.geometry_loader import (
 )
 from ibl_alignment_gui.loaders.histology_loader import (
     SliceLoader,
+    build_anatomical_atlas,
     download_histology_data,
     make_slice_loader,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
-from iblatlas.atlas import AllenAtlas
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
 from one.api import ONE
@@ -54,12 +55,12 @@ class ProbeHandler(ABC):
 
     Parameters
     ----------
-    brain_atlas: AllenAtlas
-        An AllenAtlas instance.
+    brain_atlas: BrainAtlas
+        A BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical).
     """
 
-    def __init__(self, brain_atlas: AllenAtlas):
-        self.brain_atlas: AllenAtlas = brain_atlas or AllenAtlas()
+    def __init__(self, brain_atlas: BrainAtlas | None = None):
+        self.brain_atlas: BrainAtlas = brain_atlas or AllenAtlas()
         self.shanks: dict[str, Bunch] = defaultdict(Bunch)
 
         # Configuration state
@@ -428,7 +429,7 @@ class ProbeHandlerONE(ProbeHandler):
     def __init__(
         self,
         one: ONE = None,
-        brain_atlas: AllenAtlas | None = None,
+        brain_atlas: BrainAtlas | None = None,
         spike_collection: str | None = None,
     ):
         self.one = one or ONE()
@@ -585,7 +586,7 @@ class ProbeHandlerCSV(ProbeHandler):
     """
 
     def __init__(
-        self, csv_file: str | Path, one: ONE = None, brain_atlas: AllenAtlas | None = None
+        self, csv_file: str | Path, one: ONE = None, brain_atlas: BrainAtlas | None = None
     ):
         super().__init__(brain_atlas)
 
@@ -771,7 +772,7 @@ class ProbeHandlerLocal(ProbeHandler):
     For this ProbeHandler, all ephys and alignment data must be stored in a single folder on disk.
     """
 
-    def __init__(self, brain_atlas: AllenAtlas | None = None):
+    def __init__(self, brain_atlas: BrainAtlas | None = None):
         super().__init__(brain_atlas)
 
     def get_shanks(self, folder_path: Path) -> list[str]:
@@ -853,9 +854,13 @@ class ProbeHandlerLocalYaml(ProbeHandler):
     The yaml file contains information about where to read the relevant data from.
     """
 
-    def __init__(self, yaml_file: str | Path, brain_atlas: AllenAtlas | None = None):
-        super().__init__(brain_atlas)
+    def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
         configs, probes, self.data_paths = load_alignment_yaml(yaml_file)
+
+        if brain_atlas is None:
+            brain_atlas = self._make_atlas()
+
+        super().__init__(brain_atlas)
 
         if len(configs) > 1:
             self.configs = configs
@@ -907,6 +912,13 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         """
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
+
+    def _make_atlas(self) -> BrainAtlas:
+        """Return the appropriate atlas based on the histology space in the YAML config."""
+        first_paths = next(iter(next(iter(self.data_paths.values())).values()))
+        if first_paths.histology_space == 'anatomical' and first_paths.histology:
+            return build_anatomical_atlas(first_paths.histology)
+        return AllenAtlas()
 
     def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""

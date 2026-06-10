@@ -1,3 +1,4 @@
+import importlib.util
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -25,8 +26,15 @@ PLUGIN_NAME = 'Channel Prediction'
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
+
     controller.plugins[PLUGIN_NAME] = Bunch()
     controller.plugins[PLUGIN_NAME]['activated'] = True
+    channel_prediction = ChannelPrediction(controller)
+    controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
+
+    if importlib.util.find_spec('ephysatlas') is None:
+        return
+
     # Source configuration for the inference model + local features, set via the dialogs below and
     # consumed by ephys_atlas.inference.ensure_model / _get_features_df.
     controller.plugins[PLUGIN_NAME]['local_model_dir'] = None
@@ -37,39 +45,11 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['local_encoder_dir'] = None
     controller.plugins[PLUGIN_NAME]['local_encoder_data'] = None
 
-    channel_prediction = ChannelPrediction(controller)
-    controller.plugins[PLUGIN_NAME]['loader'] = channel_prediction
-
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
-    action_group = QtWidgets.QActionGroup(plugin_menu)
-    action_group.setExclusive(True)
-
-    # All models are offline-capable from local assets: the inference (xgboost) model via a local
-    # model dir, and the Spatial Encoder (automatic alignment) via a local encoder dir + bank dir
-    # (set through the dialogs below). They fall back to S3/ONE only when no local source is set.
-    predictions_models = {
-        'Original': None,
-        'Cosmos': compute_cosmos_predictions,
-        'Spatial Encoder': compute_spatial_encoder_predictions,
-        'Inference Model': compute_inference_predictions,
-        'Inference Cumulative': compute_cumulative_predictions,
-    }
-
-    for model, model_func in predictions_models.items():
-        action = QtWidgets.QAction(model, controller.view)
-        action.setCheckable(True)
-        action.setChecked(model == 'Original')
-        action.triggered.connect(
-            lambda _, m=model, func=model_func: channel_prediction.plot_regions(_, m, func)
-        )
-        action_group.addAction(action)
-        plugin_menu.addAction(action)
-
     # Dialogs to point the inference model + features at local paths or an S3 model name, and the
     # Spatial Encoder (automatic alignment) at a local encoder dir + reference-bank dir.
-    plugin_menu.addSeparator()
     for label, handler in (
         ('Set local features file…', _set_local_features),
         ('Set local model dir…', _set_local_model_dir),
@@ -81,10 +61,20 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)
 
-    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = lambda: callback(action_group)
-    # Kept so the 'Set …' dialogs can re-trigger the currently-selected prediction after they
-    # change the model/features source (see _refresh_current_prediction).
-    controller.plugins[PLUGIN_NAME]['action_group'] = action_group
+    def _add_model_options(controller=controller):
+        # All models are offline-capable from local assets: the inference (xgboost) model via a
+        # local model dir, and the Spatial Encoder via a local encoder dir + bank dir (set through
+        # the dialogs above). They fall back to S3/ONE only when no local source is set.
+        model_keys = []
+        if importlib.util.find_spec('torch') is not None:
+            model_keys.append('Spatial Encoder')
+        model_keys.append('Inference Model')
+        model_keys.append('Inference Cumulative')
+        controller.view.populate_menu_tab(
+            'region', controller.plot_region_ref_panels, model_keys, set_checked=False
+        )
+
+    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = _add_model_options
 
 
 def _refresh_current_prediction(controller: 'AlignmentGUIController') -> None:
@@ -92,13 +82,11 @@ def _refresh_current_prediction(controller: 'AlignmentGUIController') -> None:
     Re-run the currently-selected prediction so the visible plot reflects a new source.
 
     Called after a ``Set …`` dialog changes the model/features source and clears the prediction
-    cache. Re-firing the checked action recomputes + redraws the active plot (for the inference
-    models) or simply replots the current view (Original/Cosmos).
+    cache. Re-firing the checked region option recomputes + redraws the active plot.
     """
-    group = controller.plugins[PLUGIN_NAME].get('action_group')
-    action = group.checkedAction() if group is not None else None
-    if action is not None:
-        action.trigger()
+    region_init = getattr(controller, 'region_init', None)
+    if region_init:
+        controller.view.trigger_menu_option('region', region_init)
 
 
 def _invalidate_predictions(controller: 'AlignmentGUIController') -> None:
@@ -217,89 +205,79 @@ def _set_local_encoder_data(controller: 'AlignmentGUIController') -> None:
     _refresh_current_prediction(controller)
 
 
-def callback(group) -> None:
-    """Reset action group to 'Original' selection."""
-    group.setEnabled(False)
-    for action in group.actions():
-        if action.text() == 'Original':
-            action.setChecked(True)
-        else:
-            action.setChecked(False)
-    group.setEnabled(True)
-
-
 class ChannelPrediction:
-    """
-    Class to handle channel prediction plotting in the alignment GUI.
-
-    Parameters
-    ----------
-    controller: AlignmentGUIController
-        The main application controller.
-    """
-
     def __init__(self, controller: 'AlignmentGUIController') -> None:
         self.controller = controller
         self.ba: AllenAtlas = self.controller.model.brain_atlas
 
-    def plot_regions(self, _, model: str, func: Callable) -> None:
-        """
-        Plot the brain regions based on the selected model.
+    def plot_regions(self, model: str, data_only: bool = True) -> None:
+        self.controller.region_init = model
+        func_map = {
+            'Beryl': compute_beryl_predictions,
+            'Cosmos': compute_cosmos_predictions,
+            'Spatial Encoder': compute_spatial_encoder_predictions,
+            'Inference Model': compute_inference_predictions,
+            'Inference Cumulative': compute_cumulative_predictions,
+        }
+        func = func_map.get(model)
+        if func is None:
+            return
+        _plot_region_panels(self.controller, model, func)
 
-        Parameters
-        ----------
-        model: str
-            The name of the model to use for predictions.
-        func: Callable
-            The function to compute the predictions.
-        """
-        # Plot the regions based on the action
-        if model == 'Original':
-            plot_original_regions(self.controller)
-        else:
-            plot_predicted_regions(self.controller, model, func)
 
 
 @shank_loop
-def plot_original_regions(_, items: 'ShankController', **kwargs) -> None:
-    """Plot the original histology regions on the reference histology plot."""
-    items.view.plot_histology(items.view.fig_hist_ref, items.model.hist_data_ref, ax='right')
-
-
-@shank_loop
-def plot_predicted_regions(
+def _plot_region_panels(
     controller: 'AlignmentGUIController',
     items: 'ShankController',
     model: str,
     func: Callable,
     **kwargs,
 ) -> None:
-    """
-    Plot the model predictions on the reference histology plot.
-
-    Parameters
-    ----------
-    model: str
-        The name of the model.
-    func: Callable
-        The function to compute the predictions.
-    """
     if not getattr(items.model, 'predictions', None):
         items.model.predictions = Bunch()
 
-    results = items.model.predictions.get(model, None)
-    if results is None:
+    if items.model.predictions.get(model) is None:
         items.model.predictions[model] = func(controller, items)
 
-    if items.model.predictions[model] is not None:
-        if 'probability' in items.model.predictions[model]:
-            items.view.plot_histology_cumulative(
-                items.view.fig_hist_ref, items.model.predictions[model]
-            )
+    pred = items.model.predictions[model]
+    if pred is not None:
+        if 'probability' in pred:
+            items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
         else:
-            items.view.plot_histology(
-                items.view.fig_hist_ref, items.model.predictions[model], ax='right'
-            )
+            items.view.plot_histology(items.view.fig_hist_ref, pred, ax='right')
+
+
+def compute_mapping_predictions(
+    controller: 'AlignmentGUIController', items: 'ShankController', mapping: str = 'Beryl'
+) -> Bunch[str, np.ndarray]:
+    """
+    Example prediction model that returns brain regions based on a specified atlas mapping.
+
+    Parameters
+    ----------
+    controller: 'AlignmentGUIController'
+        The main application controller.
+    items: 'ShankController'
+        The shank controller containing the model and view for the current shank.
+    mapping: str
+        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos').
+
+    Returns
+    -------
+    Bunch
+        A bunch containing the predicted brain regions.
+    """
+
+    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
+    xyz_samples = items.model.align_handle.xyz_samples
+    # depths of these coordinates along the track
+    depth_samples = items.model.align_handle.ephysalign.sampling_trk
+
+    region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping=mapping)
+    regions = controller.model.brain_atlas.regions.get(region_ids)
+
+    return get_region_boundaries(regions, depth_samples)
 
 
 def compute_cosmos_predictions(
@@ -313,15 +291,21 @@ def compute_cosmos_predictions(
     Bunch
         A bunch containing the predicted brain regions.
     """
-    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
-    xyz_samples = items.model.align_handle.xyz_samples
-    # depths of these coordinates along the track
-    depth_samples = items.model.align_handle.ephysalign.sampling_trk
+    return compute_mapping_predictions(controller, items, mapping='Cosmos')
 
-    region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping='Cosmos')
-    regions = controller.model.brain_atlas.regions.get(region_ids)
 
-    return get_region_boundaries(regions, depth_samples)
+def compute_beryl_predictions(
+    controller: 'AlignmentGUIController', items: 'ShankController'
+) -> Bunch[str, np.ndarray]:
+    """
+    Example prediction model that returns beryl brain regions.
+
+    Returns
+    -------
+    Bunch
+        A bunch containing the predicted brain regions.
+    """
+    return compute_mapping_predictions(controller, items, mapping='Beryl')
 
 
 def compute_spatial_encoder_predictions(

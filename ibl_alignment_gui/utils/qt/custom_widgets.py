@@ -1217,7 +1217,7 @@ class MenuWidget(QtWidgets.QMenuBar):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'feature', 'slice', 'filter']:
+        for group in ['image', 'line', 'probe', 'feature', 'slice', 'region', 'filter']:
             self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)

@@ -129,6 +129,7 @@ class AlignmentGUIController:
         self.feature_init: str | None = None
         self.slice_init: str | None = None
         self.filter_init: str | None = None
+        self.region_init: str | None = None
 
         # The ephys view mode
         self.show_feature = False
@@ -294,6 +295,10 @@ class AlignmentGUIController:
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
         )
+        region_keys = ['Allen', 'Beryl', 'Cosmos']
+        self.region_init = self.view.populate_menu_tab(
+            'region', self.plot_region_ref_panels, region_keys
+        )
 
     # --------------------------------------------------------------------------------------------
     # Plugins
@@ -387,6 +392,14 @@ class AlignmentGUIController:
     def plot_histology_ref_panels(self, items: ShankController, **kwargs) -> None:
         """Plot histology reference panel per shank and config."""
         items.plot_histology_ref()
+
+    def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
+        """Handle Region Plots menu selection — delegates non-Original keys to the plugin."""
+        self.region_init = plot_key
+        if plot_key == 'Allen':
+            self.plot_histology_ref_panels()
+            return
+        self.plugins['Channel Prediction']['loader'].plot_regions(plot_key, data_only=data_only)
 
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """
@@ -1022,7 +1035,7 @@ class AlignmentGUIController:
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
         self.get_scaled_histology()
-        self.plot_histology_ref_panels()
+        self.view.trigger_menu_option('region', self.region_init)
         self.plot_histology_panels()
         self.plot_scale_factor_panels()
         self.show_labels = False

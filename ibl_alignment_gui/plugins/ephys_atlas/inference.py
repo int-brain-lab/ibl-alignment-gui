@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Default model downloaded from S3 when neither a local model dir nor an explicit S3 model name
 # is configured (preserves the out-of-the-box S3 download from prediction_models_051526).
-MODEL_VINTAGE = '2026_W12_Cosmos_careless-clover-dingo'
+MODEL_VINTAGE = 'xgboost_channels/2026_W12_Cosmos_careless-clover-dingo'
 MODEL_NAME = 'Inference'  # key under which the loaded model is cached on the plugin
 MAX_FOLDS = 10  # upper bound when discovering FOLD0X directories
 

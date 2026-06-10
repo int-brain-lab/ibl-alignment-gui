@@ -228,7 +228,6 @@ def load_alignment_engine(controller) -> AlignmentEngine:
     pid_str, ephys, probe_positions, _ = LoadInsertionData(
         VINTAGE=MODEL_VINTAGE,
         path_data=bank_path,
-        one=one,
     )
 
     M_MAX = 8

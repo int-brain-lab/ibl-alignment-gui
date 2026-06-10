@@ -264,11 +264,10 @@ def _get_current_pid(controller, items) -> str:
     return 'unknown_pid'
 
 
-def _depths_for_extended_trace(
-    *, df: pd.DataFrame, sampling_trk: np.ndarray, j_start: int, j_end: int, trace_len: int
+def _depths_for_extended_trace_fixed(
+        *, df, sampling_trk, j_start, j_end, trace_len
 ):
-    """Preserve old GUI depth convention: channel depths plus extra depths."""
-    depth_samples = df['axial_um'].to_numpy(dtype=float) / 1e6
+    depth_probe = df["axial_um"].to_numpy(dtype=float) / 1e6
     trk = np.asarray(sampling_trk, dtype=float)
 
     if trk.shape[0] != trace_len:
@@ -277,9 +276,21 @@ def _depths_for_extended_trace(
     j_start = int(np.clip(j_start, 0, trace_len - 1))
     j_end = int(np.clip(j_end, j_start, trace_len - 1))
 
-    depths_top = (trk[:j_start] - trk[j_start] + depth_samples[-1])[::-1]
-    depths_bottom = (trk[j_end + 1 :] - trk[j_end])[::-1]
-    return depths_bottom, depth_samples, depths_top
+    # Extension before aligned probe: should be above the probe, i.e. before depth_probe[0]
+    depths_before = depth_probe[0] - (trk[j_start] - trk[:j_start])
+
+    # Extension after aligned probe: should continue after depth_probe[-1]
+    depths_after = depth_probe[-1] + (trk[j_end + 1:] - trk[j_end])
+
+    depth_samples = np.concatenate(
+        [
+            depths_before,
+            depth_probe,
+            depths_after,
+        ]
+    )
+
+    return depth_samples
 
 
 def gui_region_ids_from_xyz(xyz_m, brain_atlas):
@@ -942,11 +953,21 @@ def predict(controller, items):
     )
 
     region_ids = np.concatenate(
-        [region_ids_before, region_ids_probe, region_ids_after],
+        [
+            region_ids_before,
+            region_ids_probe,
+            region_ids_after,
+        ],
         axis=0,
     )
 
-    depth_samples = sampling_trk.copy()
+    depth_samples = _depths_for_extended_trace_fixed(
+        df=df,
+        sampling_trk=sampling_trk,
+        j_start=j_start,
+        j_end=j_end,
+        trace_len=out["xyz_samples_ext"].shape[0],
+    )
 
     if len(region_ids) != len(depth_samples):
         print(

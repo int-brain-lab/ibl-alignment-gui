@@ -145,9 +145,15 @@ class AlignmentGUIController:
         # Setup plugins
         Plugins(self)
 
+        # In offline mode, offer a File menu to switch to a different session yaml at runtime.
+        if self.offline:
+            file_menu = self.view.menu_widgets.addMenu('File')
+            open_action = file_menu.addAction('Open session YAML…')
+            open_action.triggered.connect(self.on_open_session_yaml)
+
+        # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
-            self.on_folder_selected(self.yaml)
-            self.data_button_pressed()
+            self._load_current_session()
 
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
@@ -156,6 +162,7 @@ class AlignmentGUIController:
             self.view.connect_selection_dropdown('subject', self.on_subject_selected)
             self.view.connect_selection_dropdown('session', self.on_session_selected)
         elif self.yaml is None:
+            # In yaml mode the session loads automatically, so the folder button is not wired.
             self.view.connect_selection_button('folder', self.on_folder_selected)
 
         self.view.connect_selection_dropdown('shank', self.on_shank_selected)
@@ -909,6 +916,40 @@ class AlignmentGUIController:
         self.view.populate_selection_dropdown('shank', shank_options)
         self.on_shank_selected(0)
         self.view.activate_selection_button()
+
+    def _load_current_session(self) -> None:
+        """
+        Load the yaml session currently held in ``self.model`` and (re)build the GUI.
+
+        Mirrors :meth:`on_folder_selected` without the file dialog. Safe to call again to switch
+        sessions: ``data_button_pressed`` rebuilds shanks/plots/menubar from scratch (the shank
+        tabs are cleared in ``setup`` and the menu tabs self-clear on repopulate).
+        """
+        # loaded=None so the early on_shank_selected skips add_points_to_display() until
+        # shank_items are (re)built in data_button_pressed.
+        self.loaded = None
+        self.view.clear_selection_dropdown(['align', 'shank'])
+        shank_options = self.model.get_shanks(self.yaml)
+        self.view.populate_selection_dropdown('shank', shank_options)
+        self.on_shank_selected(0)
+        self.view.activate_selection_button()
+        self.data_button_pressed()
+
+    def on_open_session_yaml(self) -> None:
+        """Open a different session yaml (File menu) and reload the whole GUI."""
+        yaml_path = self.view.get_selected_yaml()
+        if yaml_path is None or not yaml_path.is_file():
+            return
+        self.yaml = str(yaml_path)
+        # Reuse the existing brain atlas so we do not re-download it for the new session.
+        self.model = ProbeHandlerLocalYaml(self.yaml, brain_atlas=self.model.brain_atlas)
+        # The session is self-contained via the yaml; drop any dialog features override so the new
+        # session's yaml features take precedence. The model (Channel Prediction) is session
+        # independent and is intentionally left untouched.
+        plugin = self.plugins.get('Channel Prediction')
+        if plugin is not None:
+            plugin['features_path'] = None
+        self._load_current_session()
 
     def on_view_changed(self):
         """Triggered when the view is changed between feature and ephys plots."""

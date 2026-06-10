@@ -31,6 +31,9 @@ class DatasetPaths(BaseModel):
         Path to histology volume directory
     output : Path | None
         Path to alignment output directory
+    features : Path | None
+        Path to a per-channel ephys-features parquet file (used by the local channel-prediction
+        plugin so the features travel with the session config).
     """
 
     spike_sorting: Path | None = None
@@ -41,6 +44,7 @@ class DatasetPaths(BaseModel):
     picks: Path | None = None
     histology: Path | None = None
     output: Path | None = None
+    features: Path | None = None
 
 
 class Datasets(BaseModel):
@@ -255,6 +259,7 @@ def load_alignment_yaml(
                 'picks',
                 'histology',
                 'output',
+                'features',
             ]:
                 path_value = get_path(dataset_name)
                 default_value = get_default_path(dataset_name)

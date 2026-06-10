@@ -33,7 +33,9 @@ class Plugins:
         setup_cluster_features(controller)
         if not controller.offline:
             setup_ephys_features(controller)
-            setup_channel_prediction(controller)
+        # Channel prediction is offline-capable: local model + features inference works without
+        # ONE. Its S3/torch-only options are gated inside setup_channel_prediction.
+        setup_channel_prediction(controller)
         setup_control_range(controller)
         setup_3d_features(controller)
         # setup_additional_plots(controller)

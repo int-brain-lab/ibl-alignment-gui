@@ -1048,3 +1048,44 @@ class FeatureLoaderOne(FeatureLoader):
         ).reset_index()
 
         return data[data['pid'] == self.pid]
+
+
+class FeatureLoaderLocal(FeatureLoader):
+    """
+    Feature loader using the local file system.
+
+    Mirrors :class:`FeatureLoaderOne` but reads a single per-channel feature parquet from disk
+    instead of downloading the ephys-atlas feature table via ONE. Used in offline/yaml mode where
+    the features file is supplied directly (e.g. by the local channel-prediction plugin dialog or
+    the launcher script).
+
+    Parameters
+    ----------
+    features_path : Path
+        Path to a per-channel features parquet file (one row per channel).
+    """
+
+    def __init__(self, features_path: Path):
+
+        self.features_path: Path = Path(features_path)
+
+    def load_features(self) -> Bunch[str, Any]:
+        """
+        Load the per-channel features parquet from disk.
+
+        Returns
+        -------
+        feature_data: Bunch
+            A Bunch with ``df`` (the features DataFrame) and ``exists=True`` if the file was
+            found and non-empty, otherwise ``Bunch(exists=False)``.
+        """
+        # The local file is already per-probe and flat (unlike the S3 multi-index table), so we
+        # neither filter by pid nor reset the index here. ``infer_regions`` selects the columns it
+        # needs via the model's FEATURES list, so the full DataFrame is passed through as-is.
+        if not self.features_path.is_file():
+            logger.warning('Local features file not found: %s', self.features_path)
+            return Bunch(exists=False)
+
+        data = pd.read_parquet(self.features_path)
+
+        return Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)

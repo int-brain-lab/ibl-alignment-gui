@@ -166,6 +166,23 @@ class ProbeHandler(ABC):
         for config in self.configs:
             self.get_selected_shank()[config].loaders['align'].get_starting_alignment(idx)
 
+    def get_stored_alignment_idx(self) -> int:
+        """
+        Return the index of the stored (resolved) alignment for the selected shank.
+
+        Delegates to the default configuration's alignment loader.
+
+        Returns
+        -------
+        int
+            Index of the stored alignment in the alignment keys list, or 0 if not found.
+        """
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_stored_alignment_idx()
+        )
+
     def set_init_alignment(self) -> None:
         """Initialise the alignment for the selected shank and each configuration."""
         for config in self.configs:
@@ -770,19 +787,20 @@ class ProbeHandlerCSV(ProbeHandler):
             if dense_align.alignment_keys != ['original']:
                 # Alyx alignment exists: overwrite local
                 quarter_align.alignments = dense_align.alignments
+                quarter_align.stored_alignment_key = dense_align.stored_alignment_key
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(0)
+                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
 
             elif quarter_align.alignment_keys != ['original']:
                 # Local alignment exists: add to online
                 dense_align.add_extra_alignments(quarter_align.alignments)
                 dense_align.get_previous_alignments()
-                dense_align.get_starting_alignment(0)
+                dense_align.get_starting_alignment(dense_align.get_stored_alignment_idx())
 
                 # Ensure consistency by syncing quarter with updated dense
                 quarter_align.alignments = dense_align.alignments
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(0)
+                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
 
     def get_insertion(self, shank: pd.Series) -> dict:
         """Get the alyx probe insertion for the shank."""

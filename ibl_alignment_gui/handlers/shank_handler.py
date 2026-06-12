@@ -27,7 +27,7 @@ class ShankHandler:
         self.shank_idx: int = shank_idx
         self.loaders: Bunch = loaders
         self.loaders['align'].load_previous_alignments()
-        self.loaders['align'].get_starting_alignment(0)
+        self.loaders['align'].get_starting_alignment(self.loaders['align'].get_stored_alignment_idx())
         self.align_exists: bool = True
         self.data_loaded: bool = False
         self.align_handle = None

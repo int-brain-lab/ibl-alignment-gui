@@ -423,6 +423,27 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """
         self.selection_widgets.buttons[name]['button'].clicked.connect(callback)
 
+    def connect_selection_menu(self, name: str, actions: dict[str, Callable]) -> None:
+        """Attach a popup menu of actions to an offline selection tool button.
+
+        Turns the tool button into an instant-popup menu so a single button can offer several
+        sources (e.g. open a data folder or a session yaml).
+
+        Parameters
+        ----------
+        name : str
+            The name of the tool button (e.g. 'folder').
+        actions : dict of str to Callable
+            Mapping of menu-item label to the callback triggered when it is selected.
+        """
+        button = self.selection_widgets.buttons[name]['button']
+        menu = QtWidgets.QMenu(button)
+        for label, callback in actions.items():
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _=False, cb=callback: cb())
+        button.setMenu(menu)
+        button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
     def activate_selection_button(self) -> None:
         """Change the stylesheet of the data button to show it is activated."""
         self.selection_widgets.activate_data_button()
@@ -431,16 +452,19 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """Change the stylesheet of the data button to show it is deactivated."""
         self.selection_widgets.deactivate_data_button()
 
-    def get_selected_path(self) -> Path:
+    def get_selected_path(self) -> Path | None:
         """
         Get the user selected path and set the text line edit to show the selected folder path.
 
         Returns
         -------
-        selected_path: Path
-            The user selected path that contains data to load
+        Path or None
+            The user selected path that contains data to load, or None if the dialog was cancelled.
         """
-        selected_path = Path(QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder'))
+        selected = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder')
+        if not selected:
+            return None
+        selected_path = Path(selected)
         self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
         return selected_path
 

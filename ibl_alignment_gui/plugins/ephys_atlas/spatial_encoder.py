@@ -1,31 +1,26 @@
-from iblatlas.atlas import AllenAtlas
+"""
+Spatial-encoder inference and automatic alignment for the channel-prediction plugin.
+
+Builds the neighbour-inpainting "alignment engine" — either from a local encoder directory or
+downloaded from S3 — and uses it to predict per-channel features along a probe, warp the recorded
+features onto the predicted trace (dynamic time warping with a rigid fallback) and read out Cosmos
+regions. The heavy ``torch``/``ephysatlas`` imports load at module import, so the plugin imports
+this module lazily, only when the spatial encoder is actually used.
+"""
+
+from __future__ import annotations
+
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-from torch.utils.data import DataLoader
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import pandas as pd
 import torch
-import ephysatlas.data
-
-MODEL_VINTAGE = '2026_W12'
-MODEL_NAME = 'Spatial encoder'
-
-# -----------------------------------------------------------------------------
-# Ephys Atlas repository imports
-# -----------------------------------------------------------------------------
-from ephysatlas.spatial_encoder.utils import (
-    AtlasPCAConfig,
-    ContextAtlasManager,
-    LoadInsertionData,
-    build_channels_plus_emptyvoxels_with_neighbors,
-    FEATURE_LIST,
-    region_ids_from_xyz,
-    GridDS,
-    NeighborCollate,
-)
+from qtpy import QtWidgets
+from torch.utils.data import DataLoader
 
 from ephysatlas.spatial_encoder.model import (
     NeighborInpaintingModel,
@@ -33,8 +28,448 @@ from ephysatlas.spatial_encoder.model import (
     ProbeSequenceConfidenceTransformer,
     predict_probe_confidence_classes,
 )
+from ephysatlas.spatial_encoder.utils import (
+    AtlasPCAConfig,
+    ContextAtlasManager,
+    FEATURE_LIST,
+    GridDS,
+    LoadInsertionData,
+    NeighborCollate,
+    build_channels_plus_emptyvoxels_with_neighbors,
+    region_ids_from_xyz,
+)
+from iblatlas.atlas import AllenAtlas
+from one.api import ONE
+
+from ibl_alignment_gui.utils.utils import shank_loop
+
+if TYPE_CHECKING:
+    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.shank_controller import ShankController
+
+logger = logging.getLogger(__name__)
+
+MODEL_VINTAGE = '2026_W12'
+MODEL_NAME = 'Encoding'  # key under which the alignment engine is cached on the plugin
+PREDICTION_KEY = 'Spatial Encoder'  # per-shank cache key for the spatial-encoder prediction
+
+S3_MODEL_NAMES = [
+    f'encoding_models/{MODEL_VINTAGE}',
+    '2024_W43_SE_model',
+]
+
+# -----------------------------------------------------------------------------
+# GUI interaction
+# -----------------------------------------------------------------------------
+class _SpatialModelDialog(QtWidgets.QDialog):
+    """Spatial-model selection dialog: optional S3 dropdown plus local encoder/feature folder rows.
+
+    The two "Browse…" rows pick a local encoder dir (validated for ``SE_model_*.pt``) and a
+    feature data dir, pre-filled from the currently-configured local paths. When ``options`` is
+    given (online mode) a dropdown of named S3 models is shown above the rows; the local folders
+    take precedence over the dropdown, and choosing a dropdown model clears both so the encoder
+    downloads from S3. Offline mode (no ``options``) shows only the two folder rows.
+    """
+
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget,
+        title: str,
+        options: list[str] | None = None,
+        current: str | None = None,
+        current_dir: Path | None = None,
+        current_data: Path | None = None,
+    ) -> None:
+        """Build the dialog.
+
+        Parameters
+        ----------
+        parent : QtWidgets.QWidget
+            Parent widget for the dialog.
+        title : str
+            Window title.
+        options : list of str or None
+            Named S3 models to offer in a dropdown (online mode). When None or empty no dropdown is
+            shown and only the local-folder rows are available (offline mode).
+        current : str or None
+            Model name to pre-select in the dropdown, if present in ``options``.
+        current_dir : Path or None
+            Local encoder model directory to pre-fill in the first row.
+        current_data : Path or None
+            Local feature data directory to pre-fill in the second row.
+        """
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.enc_dir: Path | None = Path(current_dir) if current_dir else None
+        self.enc_data: Path | None = Path(current_data) if current_data else None
+        self.enc_model: str | None = None
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Dropdown of named S3 models (online mode only).
+        self._combo: QtWidgets.QComboBox | None = None
+        if options:
+            layout.addWidget(QtWidgets.QLabel('Select model:'))
+            self._combo = QtWidgets.QComboBox()
+            self._combo.addItems(options)
+            if current in options:
+                self._combo.setCurrentIndex(options.index(current))
+            layout.addWidget(self._combo)
+
+        # Row 1 — local encoder model dir (takes precedence over the dropdown when set).
+        self._dir_edit = QtWidgets.QLineEdit()
+        self._dir_edit.setReadOnly(True)
+        self._dir_edit.setPlaceholderText('directory containing SE_model_*.pt')
+        if self.enc_dir is not None:
+            self._dir_edit.setText(str(self.enc_dir))
+        browse1 = QtWidgets.QPushButton('Browse…')
+        browse1.clicked.connect(self._browse_model)
+        row1 = QtWidgets.QHBoxLayout()
+        row1.addWidget(QtWidgets.QLabel('Model:'))
+        row1.addWidget(self._dir_edit)
+        row1.addWidget(browse1)
+        layout.addLayout(row1)
+
+        # Row 2 — local feature dir.
+        self._data_edit = QtWidgets.QLineEdit()
+        self._data_edit.setReadOnly(True)
+        self._data_edit.setPlaceholderText('directory containing feature data raw_ephys_features*.pqt')
+        if self.enc_data is not None:
+            self._data_edit.setText(str(self.enc_data))
+        browse2 = QtWidgets.QPushButton('Browse…')
+        browse2.clicked.connect(self._browse_data)
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel('Features:'))
+        row2.addWidget(self._data_edit)
+        row2.addWidget(browse2)
+        layout.addLayout(row2)
+
+        # Choosing a dropdown model clears the local folders so the S3 model is used instead.
+        # 'activated' fires only on user interaction, so the init-time setCurrentIndex above and
+        # any pre-filled local folders are left untouched.
+        if self._combo is not None:
+            self._combo.activated.connect(self._clear_local)
+
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._on_accept)
+        bb.rejected.connect(self.reject)
+        layout.addWidget(bb)
+
+    def _browse_model(self) -> None:
+        """Pick the encoder model dir, requiring at least one SE_model_*.pt inside."""
+        chosen_path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, 'Select Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy)')
+        if not chosen_path:
+            return
+        chosen_path = Path(chosen_path)
+        if not validate_encoder_folder(chosen_path):
+            QtWidgets.QMessageBox.warning(
+                self, 'Channel Prediction', f'No "SE_model_*.pt" found under:\n{chosen_path}')
+            return
+        self.enc_dir = chosen_path
+        self.enc_model = chosen_path.name
+        self._dir_edit.setText(str(chosen_path))
+
+    def _browse_data(self) -> None:
+        """Pick the features table dir, requiring the vintage feature tables inside."""
+        chosen_path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, 'Select Spatial Encoder features')
+        if not chosen_path:
+            return
+        chosen_path = Path(chosen_path)
+        if not validate_feature_folder(chosen_path):
+            QtWidgets.QMessageBox.warning(
+                self, 'Channel Prediction',
+                f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) found under:\n{chosen_path}')
+            return
+        self.enc_data = chosen_path
+        self._data_edit.setText(str(chosen_path))
+
+    def _clear_local(self, *_) -> None:
+        """Drop chosen/pre-filled local folders so the dropdown model is used instead."""
+        self.enc_dir = None
+        self.enc_data = None
+        self.enc_model = None
+        self._dir_edit.clear()
+        self._data_edit.clear()
+
+    def _on_accept(self) -> None:
+        """Validate the selection on OK; warn and keep the dialog open if it is invalid.
+
+        Closes (accepts) only when the choice is loadable: a complete pair of valid local folders,
+        or — online — the dropdown model. An invalid folder, a half-filled local pair, or offline
+        with nothing chosen shows a warning and leaves the dialog open to retry.
+        """
+        error = _selection_error(self.enc_dir, self.enc_data, self._combo is not None)
+        if error is not None:
+            QtWidgets.QMessageBox.warning(self, 'Channel Prediction', error)
+            return
+        self.accept()
+
+    def selected_model(self) -> str | None:
+        """Return the dropdown model name, or None in offline (no-dropdown) mode."""
+        return self._combo.currentText() if self._combo is not None else None
 
 
+def load_model_dialog(controller: AlignmentGUIController) -> bool:
+    """Run the spatial-model load GUI and (re)build the alignment engine as needed.
+
+    Shows the local encoder + feature folder rows in both modes, with a dropdown of named S3
+    models added when a ONE connection is available. A chosen pair of local folders takes
+    precedence and loads from disk; otherwise the selected dropdown model is downloaded via S3.
+    Offline with incomplete local folders warns and aborts. The engine is rebuilt only when the
+    source changed (see :func:`_needs_reload_from_paths` / :func:`_needs_reload_from_name`).
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+
+    Returns
+    -------
+    bool
+        True if the engine was (re)loaded, False if the user cancelled or nothing changed.
+    """
+    plugin = controller.plugins['Channel Prediction']
+
+    current_model = plugin.get(MODEL_NAME, None)
+
+    if current_model is None:
+        current_model = dict(
+            model=None,
+            model_name=None,
+            local_encoder_dir=None,
+            local_encoder_data=None,
+        )
+        plugin[MODEL_NAME] = current_model
+
+    current_dir = current_model['local_encoder_dir']
+    current_data = current_model['local_encoder_data']
+
+    has_one, one = has_one_connection(controller)
+
+    if not has_one:
+        # Offline prediction reads features from a locally-loaded parquet; without one there is
+        # nothing to predict on, so steer the user to load it before choosing a model.
+        if plugin.get('features_path') is None:
+            QtWidgets.QMessageBox.warning(
+                controller.view, 'Channel Prediction',
+                'Load a features file first via "Load features file…" before loading a model.')
+            return False
+        dialog = _SpatialModelDialog(
+            controller.view, 'Load Spatial Model',
+            current_dir=current_dir, current_data=current_data)
+    else:
+        dialog = _SpatialModelDialog(
+            controller.view, 'Load Spatial Model', options=S3_MODEL_NAMES, current=MODEL_VINTAGE,
+            current_dir=current_dir, current_data=current_data)
+
+    if dialog.exec() != QtWidgets.QDialog.Accepted:
+        return False
+
+    # The dialog only accepts a loadable selection: either both local folders, or (online) the
+    # dropdown model. Rebuild the engine only when that source actually changed.
+    if dialog.enc_dir is not None and dialog.enc_data is not None:
+        # Local source: load the encoder + features from disk.
+        if not _needs_reload_from_paths(current_model, dialog.enc_dir, dialog.enc_data):
+            return True
+        load_alignment_engine(
+            controller, model_path=dialog.enc_dir, data_path=dialog.enc_data, one=one)
+        invalidate_predictions(controller)
+        return True
+
+    # S3 source: download the selected dropdown model.
+    model_name = dialog.selected_model()
+    if not _needs_reload_from_name(current_model, model_name):
+        return True
+    load_alignment_engine(controller, model_name=model_name, one=one)
+    invalidate_predictions(controller)
+    return True
+
+# -----------------------------------------------------------------------------
+# Validation utils
+# -----------------------------------------------------------------------------
+def validate_encoder_folder(enc_dir: Path) -> bool:
+    """Check the encoder model directory has the expected weights.
+
+    Parameters
+    ----------
+    enc_dir : Path
+        The local encoder model directory to validate.
+
+    Returns
+    -------
+    bool
+        True if ``enc_dir`` contains at least one ``SE_model_*.pt`` file, else False.
+    """
+    return any(enc_dir.glob('SE_model_*.pt'))
+
+
+def validate_feature_folder(feature_dir: Path) -> bool:
+    """Check the feature data directory holds a per-channel feature table.
+
+    Parameters
+    ----------
+    feature_dir : Path
+        The local feature data directory to validate.
+
+    Returns
+    -------
+    bool
+        True if ``feature_dir`` contains a ``raw_ephys_features*.pqt`` file, else False.
+    """
+    return any(feature_dir.glob('raw_ephys_features*.pqt'))
+
+
+def _selection_error(
+    enc_dir: Path | None, enc_data: Path | None, has_dropdown: bool
+) -> str | None:
+    """Return a warning for an invalid/incomplete spatial-model selection, else None.
+
+    A selection is loadable when it is either a complete pair of valid local folders or — when a
+    dropdown is available (online) — nothing local (the dropdown model is then used).
+
+    Parameters
+    ----------
+    enc_dir : Path or None
+        Chosen local encoder model directory, or None.
+    enc_data : Path or None
+        Chosen local feature data directory, or None.
+    has_dropdown : bool
+        Whether the dialog offers the S3 model dropdown (i.e. a ONE connection is available).
+
+    Returns
+    -------
+    str or None
+        A user-facing warning message when the selection cannot be loaded, else None.
+    """
+    if enc_dir is not None and not validate_encoder_folder(enc_dir):
+        return f'No "SE_model_*.pt" found under:\n{enc_dir}'
+    if enc_data is not None and not validate_feature_folder(enc_data):
+        return f'No feature tables (raw_ephys_features*.pqt) found under:\n{enc_data}'
+    # Local folders are all-or-nothing; offline (no dropdown) requires the full pair.
+    if (enc_dir is not None) != (enc_data is not None):
+        return 'Select both a model dir and a feature dir, or pick a model from the dropdown.'
+    if enc_dir is None and not has_dropdown:
+        return 'Offline mode needs both a local model dir and a feature dir.'
+    return None
+
+
+def _needs_reload_from_paths(
+    current_model: dict,
+    new_dir: Path,
+    new_data: Path,
+) -> bool:
+    """Return whether the alignment engine must be (re)built for chosen local paths.
+
+    Parameters
+    ----------
+    current_model : dict
+        The cached Channel Prediction model state (``model``, ``local_encoder_dir``,
+        ``local_encoder_data``, ``model_name``).
+    new_dir : Path
+        The newly-chosen local encoder directory.
+    new_data : Path
+        The newly-chosen local feature directory.
+
+    Returns
+    -------
+    bool
+        True when no engine is built yet or either the encoder or feature path changed.
+    """
+    if current_model['model'] is None:
+        return True
+    return (
+        new_dir != current_model['local_encoder_dir']
+        or new_data != current_model['local_encoder_data']
+    )
+
+
+def _needs_reload_from_name(current_model: dict, new_name: str) -> bool:
+    """Return whether the alignment engine must be (re)built for a chosen S3 model name.
+
+    Parameters
+    ----------
+    current_model : dict
+        The cached Channel Prediction model state (see :func:`_needs_reload_from_paths`).
+    new_name : str
+        The newly-selected S3 model name.
+
+    Returns
+    -------
+    bool
+        True when no engine is built yet or the S3 model name changed.
+    """
+    if current_model['model'] is None:
+        return True
+    return new_name != current_model['model_name']
+
+
+def _get_date_from_vintage(model_name: str) -> str:
+    """ Get the date from the model vintage string
+
+    which is expected to be in the format '<vintage>_SE_Model'. or xxxx/<vintage>
+
+    """
+    if len(model_name.split('/')) > 0:
+        return model_name.split('/')[1]
+
+    return model_name[:9]
+
+
+def has_one_connection(
+    controller: AlignmentGUIController,
+    base_url: str = 'https://alyx.internationalbrainlab.org',
+) -> tuple[bool, ONE | None]:
+    """Return whether a ONE/Alyx connection to ``base_url`` is available.
+
+    Reuses the data backend's ONE when it already targets ``base_url``; otherwise tries to open a
+    standalone connection.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    base_url : str
+        Alyx database URL the connection must target.
+
+    Returns
+    -------
+    tuple of (bool, ONE or None)
+        ``(True, one)`` when a connection is available, otherwise ``(False, None)``.
+    """
+    one = getattr(controller.model, 'one', None)
+    if one is None or one.alyx.base_url != base_url:
+        try:
+            one = ONE(base_url=base_url, silent=True)
+        except Exception:
+            return False, None
+    return True, one
+
+
+@shank_loop
+def invalidate_predictions(
+    controller: AlignmentGUIController, items: ShankController, **kwargs
+) -> None:
+    """Drop the cached spatial-encoder prediction on a shank so the next click recomputes.
+
+    Decorated with :func:`shank_loop`, so a single call iterates over every shank/config; the
+    ``shank`` and ``config`` keywords injected by the decorator are absorbed via ``**kwargs``.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    items : ShankController
+        The shank whose cached prediction is cleared.
+    """
+    preds = getattr(items.model, 'predictions', None)
+    if preds:
+        preds.pop(PREDICTION_KEY, None)
+
+# -----------------------------------------------------------------------------
+# Loading utils
+# -----------------------------------------------------------------------------
 @dataclass
 class AlignmentEngine:
     device: torch.device
@@ -49,8 +484,8 @@ class AlignmentEngine:
     M_MAX: int
     RADIUS_UM: float
     optimization_features: np.ndarray
-    model_name: str
-    local_path: Path
+    model_name: str | None
+    local_path: Path | None
     conf_model: Optional[torch.nn.Module] = None
 
 
@@ -70,7 +505,7 @@ def _as_device() -> torch.device:
 
 def _load_optional_conf_model(*, model_path: Path, device: torch.device, f_ctx: int, f_e: int):
     # Accept the canonical name or the local encoder dir's `Confidence_model_<VINTAGE>.pt`.
-    conf_path = model_path / 'probe_conf_model.pt'
+    conf_path = model_path.joinpath('probe_conf_model.pt')
     if not conf_path.exists():
         alt = sorted(model_path.glob('Confidence_model_*.pt'))
         if alt:
@@ -151,69 +586,124 @@ def _unpack_loader_outputs(loaders):
     return train_loader, e_mean, e_std, ctx_mean, ctx_std, split_info
 
 
-def _resolve_encoder_sources(controller, model_name):
+def _get_encoder_path_from_s3(one: ONE, model_name: str) -> Path | None:
+    """Download the named encoder model from S3 and return its local directory.
+
+    Parameters
+    ----------
+    one : ONE
+        ONE connection used for the download.
+    model_name : str
+        Name of the encoder model directory to download under the ONE cache.
+
+    Returns
+    -------
+    Path or None
+        The downloaded model directory, or None if the download failed.
     """
-    Resolve ``(model_path, ctx_local_path, bank_path, one)`` for the Spatial Encoder.
+    cache_root = Path(one.cache_dir).joinpath('ephys_atlas_features')
+    cache_root.joinpath(model_name).mkdir(parents=True, exist_ok=True)
+    try:
+        from ephysatlas.regionclassifier import download_model  # noqa: PLC0415
 
-    Uses the Channel Prediction plugin's ``local_encoder_dir`` / ``local_encoder_data`` when set
-    (fully offline). Otherwise downloads the encoder from S3 via ONE — a standalone ``ONE()`` is
-    created when the data backend exposes none (offline/yaml mode).
+        model_path = download_model(cache_root, model_name, one=one)
+    except Exception as exc:
+        logger.warning('download_model skipped/failed: %s', exc)
+        return None
+
+    return model_path
+
+
+def _get_encoder_data_from_s3(one: ONE, feature_vintage: str = MODEL_VINTAGE) -> Path | None:
+    """Download the feature tables for a vintage from S3 and return their local directory.
+
+    Parameters
+    ----------
+    one : ONE
+        ONE connection used for the download.
+    feature_vintage : str
+        Vintage label whose feature tables to download (defaults to :data:`MODEL_VINTAGE`).
+
+    Returns
+    -------
+    Path or None
+        The directory holding the downloaded feature tables, or None if the download failed.
     """
-    plugin = controller.plugins.get('Channel Prediction', {})
-    local_encoder_dir = plugin.get('local_encoder_dir')
-    local_encoder_data = plugin.get('local_encoder_data')
+    cache_root = Path(one.cache_dir).joinpath('ephys_atlas_features')
+    try:
+        from ephysatlas.data import download_tables # noqa: PLC0415
 
-    # Online backends (ProbeHandlerONE/CSV) expose a ready ONE; offline/yaml mode does not.
-    one = getattr(controller.model, 'one', None)
+        data_path = download_tables(cache_root, feature_vintage, one=one)
+    except Exception as exc:
+        logger.warning('download_tables skipped/failed: %s', exc)
+        return None
+    return data_path
 
-    if local_encoder_dir is not None:
-        # Local encoder: the dir holding SE_model_*.pt, *_vol_pca.npy and the confidence model.
-        model_path = Path(local_encoder_dir)
-        ctx_local_path = model_path
-        print(f'[Alignment engine] Using local encoder dir {model_path}')
-    else:
-        # S3 encoder: download into the ONE cache. Needs a ONE; fall back to a standalone ONE().
-        if one is None:
-            from one.api import ONE  # noqa: PLC0415
+def load_alignment_engine(
+    controller: AlignmentGUIController,
+    model_path: Path | None = None,
+    data_path: Path | None = None,
+    model_name: str | None = None,
+    one: ONE | None = None,
+) -> None:
+    """Build the Spatial Encoder alignment engine and cache it on the plugin.
 
-            try:
-                one = ONE()
-            except Exception as exc:
-                raise RuntimeError(
-                    'Spatial Encoder needs a local encoder dir (Channel Prediction → "Set local '
-                    'Spatial Encoder dir…") or a configured ONE/Alyx connection for S3 download.'
-                ) from exc
-        local_path = Path(one.cache_dir).joinpath('ephys_atlas_features')
-        ctx_local_path = local_path
-        model_path = local_path / model_name
-        model_path.mkdir(parents=True, exist_ok=True)
-        try:
-            from ephysatlas.regionclassifier import download_model
+    Resolves the encoder weights and feature tables — from local ``model_path`` / ``data_path``
+    when both are provided, otherwise downloading ``model_name`` (and its feature vintage) from S3
+    via ``one`` — then builds the model, context manager and reference-bank handles and stores the
+    resulting :class:`AlignmentEngine` under
+    ``controller.plugins['Channel Prediction'][MODEL_NAME]['model']``.
 
-            model_path = download_model(model_path, f'encoding_models/{MODEL_VINTAGE}', one=one)
-        except Exception as e:
-            print(f'[Alignment engine] download_model skipped/failed: {e}')
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    model_path : Path or None
+        Local encoder model directory. When given together with ``data_path``, the engine loads
+        from disk and S3 is not used.
+    data_path : Path or None
+        Local feature data directory (see ``model_path``).
+    model_name : str or None
+        S3 model name to download when both local directories are not provided.
+    one : ONE or None
+        ONE connection used for the S3 download.
 
-    # Reference-bank root for LoadInsertionData: local dir when set, else the ONE cache.
-    if local_encoder_data is not None:
-        bank_path = Path(local_encoder_data)
-    elif one is not None:
-        bank_path = Path(one.cache_dir).joinpath('ephys_atlas_features')
-    else:
-        raise RuntimeError(
-            'No Spatial Encoder reference bank available: set one via Channel Prediction → '
-            '"Set Spatial Encoder bank dir…" (offline) or run online.')
-
-    return model_path, ctx_local_path, bank_path, one
-
-
-def load_alignment_engine(controller) -> AlignmentEngine:
+    Raises
+    ------
+    RuntimeError
+        If the source cannot be resolved (no ONE and both local directories missing), or a
+        provided local directory fails validation.
+    """
     print('Data loading and model initialization (one-time)')
     t0 = time.time()
     device = _as_device()
 
-    model_name = f'{MODEL_VINTAGE}_SE_model'
-    model_path, ctx_local_path, bank_path, one = _resolve_encoder_sources(controller, model_name)
+    plugin = controller.plugins['Channel Prediction'][MODEL_NAME]
+
+    if one is None and (data_path is None or model_path is None):
+        raise RuntimeError(
+            'No ONE connection found, must specify both local encoder and local feature directories')
+
+    if data_path is not None and model_path is not None:
+        # TODO do we need this validation here given that we have done it before?
+        if not validate_encoder_folder(model_path):
+            raise RuntimeError(f'No "SE_model_*.pt" found under the given model path: {model_path}')
+
+        if not validate_feature_folder(data_path):
+            raise RuntimeError(f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) found under the given data path: {data_path}')
+
+        plugin['local_encoder_dir'] = model_path
+        plugin['local_encoder_data'] = data_path
+        plugin['model_name'] = None
+    else:
+
+        data_path = _get_encoder_data_from_s3(one, _get_date_from_vintage(model_name))
+        model_path = _get_encoder_path_from_s3(one, model_name)
+
+        plugin['local_encoder_dir'] = model_path
+        plugin['local_encoder_data'] = data_path
+        plugin['model_name'] = model_name
+
 
     optimization_features = np.arange(len(FEATURE_LIST), dtype=int)
 
@@ -221,13 +711,13 @@ def load_alignment_engine(controller) -> AlignmentEngine:
     ctx_manager = _build_context_manager(
         cfg,
         model_name=model_name,
-        local_path=ctx_local_path,
+        local_path=model_path,
         model_path=model_path,
     )
 
     pid_str, ephys, probe_positions, _ = LoadInsertionData(
         VINTAGE=MODEL_VINTAGE,
-        path_data=bank_path,
+        path_data=data_path,
     )
 
     M_MAX = 8
@@ -276,7 +766,7 @@ def load_alignment_engine(controller) -> AlignmentEngine:
 
     print(f'[Alignment engine ready] build time: {time.time() - t0:.2f}s')
 
-    return AlignmentEngine(
+    plugin['model'] = AlignmentEngine(
         device=device,
         cfg=cfg,
         ctx_manager=ctx_manager,
@@ -290,18 +780,54 @@ def load_alignment_engine(controller) -> AlignmentEngine:
         RADIUS_UM=RADIUS_UM,
         optimization_features=optimization_features,
         model_name=model_name,
-        local_path=ctx_local_path,
+        local_path=model_path,
         conf_model=conf_model,
     )
 
 
-def ensure_engine(controller) -> AlignmentEngine:
-    plug = controller.plugins.setdefault('Channel Prediction', {})
-    if MODEL_NAME not in plug or plug[MODEL_NAME] is None:
-        plug[MODEL_NAME] = load_alignment_engine(controller)
-    return plug[MODEL_NAME]
+def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
+    """Return the cached alignment engine, loading or prompting for it on first use.
 
+    If no Channel Prediction model state exists yet, opens the load dialog and retries. If state
+    exists but the engine has not been built, rebuilds it from the cached local paths when present
+    (otherwise prompts via the dialog) and retries. Returns None if the user cancels the load
+    dialog.
 
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+
+    Returns
+    -------
+    AlignmentEngine or None
+        The loaded alignment engine, or None if the user cancelled loading.
+    """
+    plugin = controller.plugins['Channel Prediction'].get(MODEL_NAME, None)
+
+    # First time loading: prompt the user; bail out if they cancel.
+    if plugin is None:
+        if not load_model_dialog(controller):
+            return None
+        return get_model(controller)
+
+    if plugin.get('model', None) is None:
+        if (plugin.get('local_encoder_dir', None) is not None
+                and plugin.get('local_encoder_data', None) is not None):
+            load_alignment_engine(
+                controller,
+                model_path=plugin['local_encoder_dir'],
+                data_path=plugin['local_encoder_data'],
+            )
+        elif not load_model_dialog(controller):
+            return None
+        return get_model(controller)
+
+    return plugin['model']
+
+# -----------------------------------------------------------------------------
+# Feature & geometry utils
+# -----------------------------------------------------------------------------
 def _extract_recorded_features(items):
     if not items.model.raw_data['features']['exists']:
         raise RuntimeError('No raw ephys feature table is available for this insertion.')
@@ -954,8 +1480,16 @@ def align(
     )
 
 
+# -----------------------------------------------------------------------------
+# Model prediction
+# -----------------------------------------------------------------------------
+
+
 def predict(controller, items):
-    engine = ensure_engine(controller)
+    engine = get_model(controller)
+    if engine is None:
+        # User cancelled the load dialog; nothing to predict with.
+        return None
 
     try:
         recorded_full, df = _extract_recorded_features(items)

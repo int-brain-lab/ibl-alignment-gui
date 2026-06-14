@@ -1015,7 +1015,7 @@ class FeatureLoaderOne(FeatureLoader):
         data = self.load_dataframe('ea_active', self.feature_version, table_path)
 
         if len(data) == 0 and self.multi_area:
-            data = self.load_dataframe('multi_area_comm', '2025_W52', table_path)
+            data = self.load_dataframe('multi_area_comm', self.feature_version, table_path)
 
         feature_data = Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)
 

@@ -125,12 +125,14 @@ def main() -> None:
     # keys with None. Pre-set the model dir (and a features override if given) so the file dialogs
     # are skipped on the first click. Features normally come from the session YAML.
     plugin_state = controller.plugins[PLUGIN_NAME]
-    plugin_state['local_model_dir'] = args.model_dir
+    plugin_state['Inference'] = {'local_inference_dir': args.model_dir, 'model_name': None, 'model': None}
     if args.features is not None:
         plugin_state['features_path'] = args.features
     # Pre-wire the Spatial Encoder (automatic alignment) at local paths too, so it runs offline.
-    plugin_state['local_encoder_dir'] = args.encoder_dir
-    plugin_state['local_encoder_data'] = args.encoder_data
+    plugin_state['Encoding'] = {'local_encoder_dir': args.encoder_dir,
+                                'local_encoder_data': args.encoder_data,
+                                'model_name': None,
+                                'model': None}
     logger.info(
         'Pre-populated %r plugin. Click Plugins -> %s -> Inference Model to run inference.',
         PLUGIN_NAME, PLUGIN_NAME)

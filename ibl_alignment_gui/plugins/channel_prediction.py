@@ -1,6 +1,7 @@
 import importlib.util
 import logging
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
 
 PLUGIN_NAME = 'Channel Prediction'
 
+# Track depths are stored along the histology track in meters; region plots expect microns.
+M_TO_UM = 1e6
+
 
 def setup(controller: 'AlignmentGUIController') -> None:
     """Register the Channel Prediction plugin and (when available) its menu.
@@ -44,7 +48,6 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     if importlib.util.find_spec('ephysatlas') is None:
         return
-
 
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
@@ -134,8 +137,8 @@ class ChannelPrediction:
         self.controller = controller
         self.ba: AllenAtlas = self.controller.model.brain_atlas
         self.func_map = {
-            'Beryl': compute_beryl_predictions,
-            'Cosmos': compute_cosmos_predictions,
+            'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
+            'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
             'Spatial Encoder': compute_spatial_encoder_predictions,
             'Inference Model': compute_inference_predictions,
             'Inference Cumulative': compute_cumulative_predictions,
@@ -146,7 +149,7 @@ class ChannelPrediction:
 
         Looks up ``model`` in the dispatch map and runs the matching ``compute_*`` function on
         each shank.
-        
+
         Parameters
         ----------
         model : str
@@ -163,13 +166,12 @@ class ChannelPrediction:
         _plot_region_panels(self.controller, model, func)
 
 
-
 @shank_loop
 def _plot_region_panels(
     controller: 'AlignmentGUIController',
     items: 'ShankController',
     model: str,
-    func: Callable,
+    func: Callable[..., Bunch | None],
     **kwargs,
 ) -> None:
     """Compute (and cache) a shank's prediction for ``model`` and draw it.
@@ -236,11 +238,18 @@ def compute_mapping_predictions(
     return get_region_boundaries(regions, depth_samples)
 
 
-def compute_cosmos_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController'
-) -> Bunch[str, np.ndarray]:
-    """
-    Example prediction model that returns cosmos brain regions.
+def _compute_region_id_predictions(
+    controller: 'AlignmentGUIController',
+    items: 'ShankController',
+    predict: Callable[['AlignmentGUIController', 'ShankController'], tuple | None],
+    depth_scale: float = 1.0,
+) -> Bunch[str, np.ndarray] | None:
+    """Run a region-id ``predict`` callable and convert its output to region boundaries.
+
+    Shared pipeline for the model-backed predictors: it calls ``predict`` (which returns
+    ``(region_ids, depths)`` or ``None``), maps the ids to atlas regions, and reduces them to
+    contiguous region boundaries. ``depth_scale`` converts the predictor's native depth unit to
+    meters (the unit expected by :func:`get_region_boundaries`).
 
     Parameters
     ----------
@@ -248,34 +257,23 @@ def compute_cosmos_predictions(
         The main application controller.
     items : ShankController
         The shank controller containing the model and view for the current shank.
+    predict : Callable
+        Predictor returning ``(region_ids, depths)`` for the shank, or ``None`` if unavailable.
+    depth_scale : float
+        Multiplier converting the predictor's depths to meters.
 
     Returns
     -------
-    Bunch
-        A bunch containing the predicted brain regions.
+    Bunch or None
+        The predicted brain regions along the probe, or None if no prediction is available.
     """
-    return compute_mapping_predictions(controller, items, mapping='Cosmos')
+    result = predict(controller, items)
+    if result is None:
+        return None
+    region_ids, depths = result
+    regions = controller.model.brain_atlas.regions.get(region_ids)
 
-
-def compute_beryl_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController'
-) -> Bunch[str, np.ndarray]:
-    """
-    Example prediction model that returns beryl brain regions.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-
-    Returns
-    -------
-    Bunch
-        A bunch containing the predicted brain regions.
-    """
-    return compute_mapping_predictions(controller, items, mapping='Beryl')
+    return get_region_boundaries(regions, depths * depth_scale)
 
 
 def compute_spatial_encoder_predictions(
@@ -336,7 +334,7 @@ def compute_inference_predictions(
     region_ids, depths = result
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
-    return get_region_boundaries(regions, depths / 1e6)
+    return get_region_boundaries(regions, depths / M_TO_UM)
 
 
 def compute_cumulative_predictions(
@@ -379,8 +377,8 @@ def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.nd
     ----------
     regions: dict
         The brain regions along the histology track.
-    depths:
-        The depths along the histology track.
+    depths: np.ndarray
+        The depths along the histology track, in meters.
 
     Returns
     -------
@@ -399,8 +397,8 @@ def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.nd
         start = 0 if i == 0 else boundaries[i - 1] + 1
         end = boundaries[i] if i < len(boundaries) else regions.id.size - 1
 
-        region[i, :] = depths[[start, end]] * 1e6
-        region_label[i, :] = (np.mean(depths[[start, end]]) * 1e6, regions.acronym[end])
+        region[i, :] = depths[[start, end]] * M_TO_UM
+        region_label[i, :] = (np.mean(depths[[start, end]]) * M_TO_UM, regions.acronym[end])
         region_colour[i, :] = regions.rgb[end]
 
     data = Bunch(region=region, axis_label=region_label, colour=region_colour)

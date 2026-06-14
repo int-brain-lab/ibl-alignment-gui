@@ -18,11 +18,19 @@ import numpy as np
 import yaml
 from qtpy import QtWidgets
 
+from one.api import ONE
+
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
+from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    clear_predictions,
+    has_features,
+    has_one_connection,
+    needs_reload,
+    plugin_state,
+    s3_cache_root,
+)
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.numerical import ismember
-from iblutil.util import Bunch
-from one.api import ONE
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -204,47 +212,6 @@ def _current_local_dir(current_model: dict | None) -> Path | None:
     return folds_path.parent if folds_path.name == 'folds' else folds_path
 
 
-def _needs_reload_from_path(current_model: dict, new_path: Path | None) -> bool:
-    """Return whether :func:`load_inference_model` should run for a chosen local path.
-
-    Parameters
-    ----------
-    current_model : dict
-        The cached Channel Prediction model state (``model``, ``model_name``,
-        ``local_inference_dir``).
-    new_path : Path or None
-        The local model directory the new selection resolves to.
-
-    Returns
-    -------
-    bool
-        True when no model is built yet or the chosen local path differs from the cached one.
-    """
-    if current_model['model'] is None:
-        return True
-    return new_path != current_model['local_inference_dir']
-
-
-def _needs_reload_from_name(current_model: dict, new_name: str | None) -> bool:
-    """Return whether :func:`load_inference_model` should run for a chosen S3 model name.
-
-    Parameters
-    ----------
-    current_model : dict
-        The cached Channel Prediction model state (see :func:`_needs_reload_from_path`).
-    new_name : str or None
-        The newly-selected S3 model name.
-
-    Returns
-    -------
-    bool
-        True when no model is built yet or the S3 model name changed.
-    """
-    if current_model['model'] is None:
-        return True
-    return new_name != current_model['model_name']
-
-
 def load_model_dialog(controller: AlignmentGUIController) -> bool:
     """Run the full inference-model load GUI and cache the result.
 
@@ -262,9 +229,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     bool
         True if a model was loaded, False if the user cancelled.
     """
-    plugin = _plugin(controller)
+    plugin = plugin_state(controller)
     current_model = plugin.get(MODEL_NAME, None)
-
 
     if current_model is None:
         current_model = dict(
@@ -276,12 +242,12 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
 
     current_dir = current_model['local_inference_dir']
 
-    has_one, _ = has_one_connection(controller)
+    has_one, one = has_one_connection(controller)
 
     if not has_one:
         # Offline inference reads features from a locally-loaded parquet; without one there is
         # nothing to predict on, so steer the user to load it before choosing a model.
-        if plugin.get('features_path') is None:
+        if not has_features(controller):
             QtWidgets.QMessageBox.warning(
                 controller.view, 'Channel Prediction',
                 'Load a features file first via "Load features file…" before loading a model.')
@@ -289,6 +255,13 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         dialog = _InferenceModelDialog(
             controller.view, 'Load Inference Model', current_dir=current_dir)
     else:
+        # Online the model loads without a local features file, so check here that the insertion
+        # actually has features to predict on before letting the user pick a model.
+        if not has_features(controller):
+            QtWidgets.QMessageBox.warning(
+                controller.view, 'Channel Prediction',
+                'No features found for this insertion.')
+            return False
         dialog = _InferenceModelDialog(
             controller.view, 'Load Inference Model', S3_MODEL_NAMES,
             current_model['model_name'] or MODEL_VINTAGE, current_dir)
@@ -298,10 +271,10 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
 
     if dialog.local_dir is not None:
         # Local folder takes precedence over the dropdown in both modes.
-        if not _needs_reload_from_path(current_model, dialog.local_dir):
+        if not needs_reload(current_model, local_inference_dir=dialog.local_dir):
             return True
 
-        load_inference_model(controller, model_dir=dialog.local_dir)
+        load_inference_model(controller, model_dir=dialog.local_dir, one=one)
         invalidate_predictions(controller)
         logger.info('Inference model set to %s', dialog.local_dir)
         return True
@@ -315,9 +288,9 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         return False
 
     model_name = dialog.selected_model()
-    if not _needs_reload_from_name(current_model, model_name):
+    if not needs_reload(current_model, model_name=model_name):
         return True
-    load_inference_model(controller, model_name=model_name)
+    load_inference_model(controller, model_name=model_name, one=one)
     invalidate_predictions(controller)
     logger.info('Inference model set to %s', model_name)
     return True
@@ -339,61 +312,12 @@ def invalidate_predictions(
     items : ShankController
         The shank whose cached predictions are cleared.
     """
-    preds = getattr(items.model, 'predictions', None)
-    if preds:
-        for key in (PREDICTION_KEY, CUMULATIVE_KEY):
-            preds.pop(key, None)
+    clear_predictions(items, PREDICTION_KEY, CUMULATIVE_KEY)
 
 
 # -----------------------------------------------------------------------------
 # Loading utils
 # -----------------------------------------------------------------------------
-
-def has_one_connection(
-    controller: AlignmentGUIController,
-    base_url: str = 'https://alyx.internationalbrainlab.org',
-) -> tuple[bool, ONE | None]:
-    """Return whether a ONE/Alyx connection to ``base_url`` is available.
-
-    Reuses the data backend's ONE when it already targets ``base_url``; otherwise tries to open a
-    standalone connection.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    base_url : str
-        Alyx database URL the connection must target.
-
-    Returns
-    -------
-    tuple of (bool, ONE or None)
-        ``(True, one)`` when a connection is available, otherwise ``(False, None)``.
-    """
-    one = getattr(controller.model, 'one', None)
-    if one is None or one.alyx.base_url != base_url:
-        try:
-            one = ONE(base_url=base_url, silent=True)
-        except Exception:
-            return False, None
-    return True, one
-
-
-def _plugin(controller: AlignmentGUIController) -> Bunch:
-    """Return the Channel Prediction plugin state Bunch.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-
-    Returns
-    -------
-    Bunch
-        The plugin's mutable state container.
-    """
-    return controller.plugins['Channel Prediction']
-
 
 def is_model_loaded(controller: AlignmentGUIController) -> bool:
     """Return whether an inference model is cached on the plugin.
@@ -408,7 +332,7 @@ def is_model_loaded(controller: AlignmentGUIController) -> bool:
     bool
         True if a model has been loaded, else False.
     """
-    return _plugin(controller).get(MODEL_NAME) is not None
+    return plugin_state(controller).get(MODEL_NAME) is not None
 
 
 def get_model(controller: AlignmentGUIController) -> InferenceModel | None:
@@ -428,7 +352,7 @@ def get_model(controller: AlignmentGUIController) -> InferenceModel | None:
     InferenceModel or None
         The loaded model, or None if the user cancelled loading.
     """
-    plugin = _plugin(controller).get(MODEL_NAME, None)
+    plugin = plugin_state(controller).get(MODEL_NAME, None)
 
     # First time loading: prompt the user; bail out if they cancel.
     if plugin is None:
@@ -453,6 +377,7 @@ def load_inference_model(
     controller: AlignmentGUIController,
     model_dir: str | Path | None = None,
     model_name: str | None = None,
+    one: ONE | None = None
 ) -> None:
     """Load the region-classifier model from a local directory or download it from S3.
 
@@ -471,6 +396,8 @@ def load_inference_model(
         S3 model name to download when ``model_dir`` is None. May be a nested name such as
         ``xgboost_channels/2026_W12_Cosmos_careless-clover-dingo``. Defaults to
         :data:`MODEL_VINTAGE` when not provided.
+    one : ONE or None
+        ONE connection used for the S3 download.
 
     Raises
     ------
@@ -478,7 +405,7 @@ def load_inference_model(
         If an S3 download is requested but no ONE/Alyx connection is available.
     """
 
-    plugin = _plugin(controller)[MODEL_NAME]
+    plugin = plugin_state(controller)[MODEL_NAME]
 
     if model_dir is not None:
         # Local model: point straight at the folds directory; no ONE / S3 access needed.
@@ -487,7 +414,7 @@ def load_inference_model(
         plugin['model_name'] = None
     else:
         s3_name = model_name or MODEL_VINTAGE
-        folds_path = _get_model_path_from_s3(controller, s3_name)
+        folds_path = _get_model_path_from_s3(one, s3_name)
 
         plugin['local_inference_dir'] = folds_path
         plugin['model_name'] = s3_name
@@ -529,13 +456,13 @@ def _get_model_path_from_local(model_dir: Path) -> Path:
     return folds_path
 
 
-def _get_model_path_from_s3(controller: AlignmentGUIController, model_name: str) -> Path | None:
+def _get_model_path_from_s3(one: ONE, model_name: str) -> Path | None:
     """Download a named S3 model and return its folds directory.
 
     Parameters
     ----------
-    controller : AlignmentGUIController
-        Provides the ONE connection used for the download.
+    one : ONE
+        ONE connection used for the download.
     model_name : str
         S3 model name (possibly nested, e.g. ``xgboost_channels/<vintage>``).
 
@@ -546,16 +473,9 @@ def _get_model_path_from_s3(controller: AlignmentGUIController, model_name: str)
     """
     import ephysatlas.regionclassifier  # noqa: PLC0415
 
-    has_one, one = has_one_connection(controller)
-    if not has_one:
-        logger.warning(
-            'S3 model download needs a configured ONE/Alyx connection, which is unavailable in '
-            'this offline/YAML session. Set a local model directory instead.')
-        return None
-
     # download_model downloads aggregates/atlas/models/<model_name> into cache_root/<model_name>
     # and returns that path (handles nested names without re-nesting).
-    cache_root = one.cache_dir.joinpath('ephys_atlas_features')
+    cache_root = s3_cache_root(one)
     cache_root.mkdir(parents=True, exist_ok=True)
     model_path = ephysatlas.regionclassifier.download_model(cache_root, model_name, one)
     folds_path = model_path.joinpath('folds')
@@ -710,7 +630,7 @@ def _get_features_df(
     """
     feats = items.model.raw_data.get('features')
     if feats is None or not feats.get('exists', False):
-        features_path = _plugin(controller).get('features_path')
+        features_path = plugin_state(controller).get('features_path')
         if features_path is None:
             return None
         feats = FeatureLoaderLocal(features_path).load_features()
@@ -748,13 +668,24 @@ def _fold_mean_probas(
     """
     import ephysatlas.regionclassifier  # noqa: PLC0415 - lazy import keeps offline startup safe
 
-    df = _get_features_df(controller, items)
-    if df is None:
-        return None
-
+    # Resolve the model first so its load dialog (and the "load a features file first" offline
+    # guard inside it) runs before we bail on missing features, matching the spatial encoder path.
     model = get_model(controller)
     if model is None:
-        return
+        return None
+
+    df = _get_features_df(controller, items)
+    if df is None:
+        # Online the model loads without a features file (no offline guard runs), so warn here
+        # when the insertion has no features available either on the plugin or in the loaded data.
+        has_one, _ = has_one_connection(controller)
+        if has_one:
+            QtWidgets.QMessageBox.warning(
+                controller.view, 'Channel Prediction',
+                'No features found for this insertion.',
+            )
+        return None
+
     df = validate_features(df, model.features)
     predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(
         df, path_model=model.model_path, n_folds=model.n_folds,

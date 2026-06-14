@@ -224,6 +224,10 @@ class AlignmentGUIController:
                 'shortcut': 'Alt+4',
                 'callback': lambda: self.toggle_plots('slice', 1),
             },
+            'Toggle Region Plots ->': {
+                'shortcut': 'Alt+5',
+                'callback': lambda: self.toggle_plots('region', 1),
+            },
             'Toggle Image Plots <-': {
                 'shortcut': 'Shift+Alt+1',
                 'callback': lambda: self.toggle_plots('image', -1),
@@ -239,6 +243,10 @@ class AlignmentGUIController:
             'Toggle Slice Plots <-': {
                 'shortcut': 'Shift+Alt+4',
                 'callback': lambda: self.toggle_plots('slice', -1),
+            },
+            'Toggle Region Plots <-': {
+                'shortcut': 'Shift+Alt+5',
+                'callback': lambda: self.toggle_plots('region', -1),
             },
             # Shortcut to reset axis on figures
             'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},

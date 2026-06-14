@@ -41,6 +41,14 @@ from ephysatlas.spatial_encoder.utils import (
 from iblatlas.atlas import AllenAtlas
 from one.api import ONE
 
+from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    clear_predictions,
+    has_features,
+    has_one_connection,
+    needs_reload,
+    plugin_state,
+    s3_cache_root,
+)
 from ibl_alignment_gui.utils.utils import shank_loop
 
 if TYPE_CHECKING:
@@ -55,7 +63,6 @@ PREDICTION_KEY = 'Spatial Encoder'  # per-shank cache key for the spatial-encode
 
 S3_MODEL_NAMES = [
     f'encoding_models/{MODEL_VINTAGE}',
-    '2024_W43_SE_model',
 ]
 
 # -----------------------------------------------------------------------------
@@ -218,7 +225,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     models added when a ONE connection is available. A chosen pair of local folders takes
     precedence and loads from disk; otherwise the selected dropdown model is downloaded via S3.
     Offline with incomplete local folders warns and aborts. The engine is rebuilt only when the
-    source changed (see :func:`_needs_reload_from_paths` / :func:`_needs_reload_from_name`).
+    source changed (see :func:`ibl_alignment_gui.plugins.ephys_atlas._common.needs_reload`).
 
     Parameters
     ----------
@@ -230,7 +237,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     bool
         True if the engine was (re)loaded, False if the user cancelled or nothing changed.
     """
-    plugin = controller.plugins['Channel Prediction']
+    plugin = plugin_state(controller)
 
     current_model = plugin.get(MODEL_NAME, None)
 
@@ -251,7 +258,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     if not has_one:
         # Offline prediction reads features from a locally-loaded parquet; without one there is
         # nothing to predict on, so steer the user to load it before choosing a model.
-        if plugin.get('features_path') is None:
+        if not has_features(controller):
             QtWidgets.QMessageBox.warning(
                 controller.view, 'Channel Prediction',
                 'Load a features file first via "Load features file…" before loading a model.')
@@ -260,6 +267,13 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
             controller.view, 'Load Spatial Model',
             current_dir=current_dir, current_data=current_data)
     else:
+        # Online the model loads without a local features file, so check here that the insertion
+        # actually has features to predict on before letting the user pick a model.
+        if not has_features(controller):
+            QtWidgets.QMessageBox.warning(
+                controller.view, 'Channel Prediction',
+                'No features found for this insertion.')
+            return False
         dialog = _SpatialModelDialog(
             controller.view, 'Load Spatial Model', options=S3_MODEL_NAMES, current=MODEL_VINTAGE,
             current_dir=current_dir, current_data=current_data)
@@ -271,7 +285,11 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     # dropdown model. Rebuild the engine only when that source actually changed.
     if dialog.enc_dir is not None and dialog.enc_data is not None:
         # Local source: load the encoder + features from disk.
-        if not _needs_reload_from_paths(current_model, dialog.enc_dir, dialog.enc_data):
+        if not needs_reload(
+            current_model,
+            local_encoder_dir=dialog.enc_dir,
+            local_encoder_data=dialog.enc_data,
+        ):
             return True
         load_alignment_engine(
             controller, model_path=dialog.enc_dir, data_path=dialog.enc_data, one=one)
@@ -280,7 +298,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
 
     # S3 source: download the selected dropdown model.
     model_name = dialog.selected_model()
-    if not _needs_reload_from_name(current_model, model_name):
+    if not needs_reload(current_model, model_name=model_name):
         return True
     load_alignment_engine(controller, model_name=model_name, one=one)
     invalidate_predictions(controller)
@@ -355,96 +373,16 @@ def _selection_error(
     return None
 
 
-def _needs_reload_from_paths(
-    current_model: dict,
-    new_dir: Path,
-    new_data: Path,
-) -> bool:
-    """Return whether the alignment engine must be (re)built for chosen local paths.
-
-    Parameters
-    ----------
-    current_model : dict
-        The cached Channel Prediction model state (``model``, ``local_encoder_dir``,
-        ``local_encoder_data``, ``model_name``).
-    new_dir : Path
-        The newly-chosen local encoder directory.
-    new_data : Path
-        The newly-chosen local feature directory.
-
-    Returns
-    -------
-    bool
-        True when no engine is built yet or either the encoder or feature path changed.
-    """
-    if current_model['model'] is None:
-        return True
-    return (
-        new_dir != current_model['local_encoder_dir']
-        or new_data != current_model['local_encoder_data']
-    )
-
-
-def _needs_reload_from_name(current_model: dict, new_name: str) -> bool:
-    """Return whether the alignment engine must be (re)built for a chosen S3 model name.
-
-    Parameters
-    ----------
-    current_model : dict
-        The cached Channel Prediction model state (see :func:`_needs_reload_from_paths`).
-    new_name : str
-        The newly-selected S3 model name.
-
-    Returns
-    -------
-    bool
-        True when no engine is built yet or the S3 model name changed.
-    """
-    if current_model['model'] is None:
-        return True
-    return new_name != current_model['model_name']
-
-
 def _get_date_from_vintage(model_name: str) -> str:
     """ Get the date from the model vintage string
 
     which is expected to be in the format '<vintage>_SE_Model'. or xxxx/<vintage>
 
     """
-    if len(model_name.split('/')) > 0:
+    if len(model_name.split('/')) > 1:
         return model_name.split('/')[1]
 
-    return model_name[:9]
-
-
-def has_one_connection(
-    controller: AlignmentGUIController,
-    base_url: str = 'https://alyx.internationalbrainlab.org',
-) -> tuple[bool, ONE | None]:
-    """Return whether a ONE/Alyx connection to ``base_url`` is available.
-
-    Reuses the data backend's ONE when it already targets ``base_url``; otherwise tries to open a
-    standalone connection.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    base_url : str
-        Alyx database URL the connection must target.
-
-    Returns
-    -------
-    tuple of (bool, ONE or None)
-        ``(True, one)`` when a connection is available, otherwise ``(False, None)``.
-    """
-    one = getattr(controller.model, 'one', None)
-    if one is None or one.alyx.base_url != base_url:
-        try:
-            one = ONE(base_url=base_url, silent=True)
-        except Exception:
-            return False, None
-    return True, one
+    return model_name[:8]
 
 
 @shank_loop
@@ -463,9 +401,7 @@ def invalidate_predictions(
     items : ShankController
         The shank whose cached prediction is cleared.
     """
-    preds = getattr(items.model, 'predictions', None)
-    if preds:
-        preds.pop(PREDICTION_KEY, None)
+    clear_predictions(items, PREDICTION_KEY)
 
 # -----------------------------------------------------------------------------
 # Loading utils
@@ -601,7 +537,7 @@ def _get_encoder_path_from_s3(one: ONE, model_name: str) -> Path | None:
     Path or None
         The downloaded model directory, or None if the download failed.
     """
-    cache_root = Path(one.cache_dir).joinpath('ephys_atlas_features')
+    cache_root = s3_cache_root(one)
     cache_root.joinpath(model_name).mkdir(parents=True, exist_ok=True)
     try:
         from ephysatlas.regionclassifier import download_model  # noqa: PLC0415
@@ -629,7 +565,7 @@ def _get_encoder_data_from_s3(one: ONE, feature_vintage: str = MODEL_VINTAGE) ->
     Path or None
         The directory holding the downloaded feature tables, or None if the download failed.
     """
-    cache_root = Path(one.cache_dir).joinpath('ephys_atlas_features')
+    cache_root = s3_cache_root(one)
     try:
         from ephysatlas.data import download_tables # noqa: PLC0415
 
@@ -678,7 +614,7 @@ def load_alignment_engine(
     t0 = time.time()
     device = _as_device()
 
-    plugin = controller.plugins['Channel Prediction'][MODEL_NAME]
+    plugin = plugin_state(controller)[MODEL_NAME]
 
     if one is None and (data_path is None or model_path is None):
         raise RuntimeError(
@@ -803,7 +739,7 @@ def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
     AlignmentEngine or None
         The loaded alignment engine, or None if the user cancelled loading.
     """
-    plugin = controller.plugins['Channel Prediction'].get(MODEL_NAME, None)
+    plugin = plugin_state(controller).get(MODEL_NAME, None)
 
     # First time loading: prompt the user; bail out if they cancel.
     if plugin is None:

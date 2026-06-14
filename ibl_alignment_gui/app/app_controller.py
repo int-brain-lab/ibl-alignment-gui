@@ -857,8 +857,8 @@ class AlignmentGUIController:
         self.view.clear_selection_dropdown('align')
         self.model.set_info(idx)
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load the initial alignment
-        self.model.get_starting_alignment(0)
+        # Load the stored (resolved) alignment if available, otherwise the most recent
+        self.model.get_starting_alignment(self.model.get_stored_alignment_idx())
         if self.loaded is not None:
             # If in tab view, update the tab to display the selected shank
             self.view.set_tabs(idx)

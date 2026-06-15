@@ -343,7 +343,34 @@ def make_slice_loader(
     """
     if space == 'anatomical':
         return AnatomicalSliceLoader(file_path, brain_atlas)
-    return NrrdSliceLoader(file_path, brain_atlas)
+    return _build_slice_loader(file_path, brain_atlas)
+
+
+def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader:
+    """
+    Pick the right SliceLoader by inspecting the histology directory.
+
+    Used by the offline ProbeHandlers (:class:`ProbeHandlerLocal` and
+    :class:`ProbeHandlerLocalYaml`). If the directory contains any ``.tif`` / ``.tiff`` files
+    (e.g. brainreg outputs), return a :class:`TiffSliceLoader`. Otherwise default to the existing
+    :class:`NrrdSliceLoader` so all current NRRD workflows keep working.
+
+    Parameters
+    ----------
+    hist_path : Path
+        Directory containing the histology volumes.
+    brain_atlas : AllenAtlas
+        Brain atlas for alignment.
+
+    Returns
+    -------
+    SliceLoader
+        A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
+    """
+    if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
+        return TiffSliceLoader(hist_path, brain_atlas)
+    return NrrdSliceLoader(hist_path, brain_atlas)
+
 
 
 class TiffSliceLoader(SliceLoader):

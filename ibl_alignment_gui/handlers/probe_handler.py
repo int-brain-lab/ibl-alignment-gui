@@ -939,32 +939,6 @@ class ProbeHandlerLocal(ProbeHandler):
             self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
 
 
-def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader:
-    """
-    Pick the right SliceLoader by inspecting the histology directory.
-
-    Used by the offline ProbeHandlers (:class:`ProbeHandlerLocal` and
-    :class:`ProbeHandlerLocalYaml`). If the directory contains any ``.tif`` / ``.tiff`` files
-    (e.g. brainreg outputs), return a :class:`TiffSliceLoader`. Otherwise default to the existing
-    :class:`NrrdSliceLoader` so all current NRRD workflows keep working.
-
-    Parameters
-    ----------
-    hist_path : Path
-        Directory containing the histology volumes.
-    brain_atlas : AllenAtlas
-        Brain atlas for alignment.
-
-    Returns
-    -------
-    SliceLoader
-        A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
-    """
-    if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
-        return TiffSliceLoader(hist_path, brain_atlas)
-    return NrrdSliceLoader(hist_path, brain_atlas)
-
-
 class ProbeHandlerLocalYaml(ProbeHandler):
     """
     Local file system ProbeHandler driven by a session yaml file.
@@ -982,9 +956,11 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         An AllenAtlas instance (created if None).
     """
 
-    def __init__(self, yaml_file: str | Path, brain_atlas: AllenAtlas | None = None):
-        super().__init__(brain_atlas)
+    def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
         self.configs, self.probes, self.data_paths = load_alignment_yaml(yaml_file)
+        if brain_atlas is None:
+            brain_atlas = self._make_atlas()
+        super().__init__(brain_atlas)
 
         # The base sets a single 'default' config; mirror it to the yaml config name and, when the
         # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.

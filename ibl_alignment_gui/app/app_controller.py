@@ -1014,7 +1014,7 @@ class AlignmentGUIController:
             return
         self.yaml = str(yaml_path)
         # Reuse the existing brain atlas so we do not re-download it for the new session.
-        self.model = ProbeHandlerLocalYaml(self.yaml, brain_atlas=self.model.brain_atlas)
+        self.model = ProbeHandlerLocalYaml(self.yaml)
         # The features override is reset for every new session in data_button_pressed.
         self._load_current_session()
 

@@ -262,19 +262,6 @@ class TestAlignmentHandler(unittest.TestCase):
         self.assertIn('region', hist_data_ref)
         self.assertIn('axis_label', hist_data_ref)
 
-    def test_offset_hist_dat(self):
-        self.align_handler.tracks[self.align_handler.idx] = np.array([1, 2, 3])
-        self.align_handler.features[self.align_handler.idx] = np.array([4, 5, 6])
-        self.align_handler.offset_hist_data(offset=5)
-        idx = self.align_handler.idx
-        prev_idx = self.align_handler.idx_prev
-        np.testing.assert_array_equal(
-            self.align_handler.tracks[idx], self.align_handler.tracks[prev_idx] + 5
-        )
-        np.testing.assert_array_equal(
-            self.align_handler.features[idx], self.align_handler.features[prev_idx]
-        )
-
     def test_scale_hist_data_calls(self):
         self.align_handler.tracks[self.align_handler.idx] = np.array([1, 2, 3])
         self.align_handler.features[self.align_handler.idx] = np.array([4, 5, 6])

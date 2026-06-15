@@ -184,7 +184,6 @@ class AlignmentGUIController:
 
         # Setup connections for alignment buttons
         self.view.connect_button('fit', self.fit_button_pressed)
-        self.view.connect_button('offset', self.offset_button_pressed)
         self.view.connect_button('reset', self.reset_button_pressed)
         self.view.connect_button('upload', self.complete_button_pressed)
         self.view.connect_button('next', self.next_button_pressed)
@@ -203,10 +202,6 @@ class AlignmentGUIController:
         fit_options = {
             # Shortcuts to apply fit
             'Fit': {'shortcut': 'Return', 'callback': self.fit_button_pressed},
-            # Shortcuts to apply offset
-            'Offset': {'shortcut': 'O', 'callback': self.offset_button_pressed},
-            'Offset + 100um': {'shortcut': 'Shift+Up', 'callback': self.moveup_button_pressed},
-            'Offset - 100um': {'shortcut': 'Shift+Down', 'callback': self.movedown_button_pressed},
             # Shortcut to remove a reference line
             'Remove Line': {'shortcut': 'Shift+D', 'callback': self.delete_reference_line},
             # Shortcut to move between previous/next moves
@@ -1180,11 +1175,6 @@ class AlignmentGUIController:
     # Fitting functions
     # --------------------------------------------------------------------------------------------
     @shank_loop
-    def offset_hist_data(self, items: ShankController, *args, **kwargs) -> None:
-        """See :meth:`ShankController.offset_hist_data` for details."""
-        items.offset_hist_data(*args)
-
-    @shank_loop
     def scale_hist_data(self, items: ShankController, **kwargs) -> None:
         """Scale brain regions along the probe track based on reference lines."""
         items.scale_hist_data(self.extend_feature, self.lin_fit)
@@ -1207,30 +1197,6 @@ class AlignmentGUIController:
         """
         fit_function(**kwargs)
         self.update_plots(shanks=[self.model.selected_shank])
-
-    def offset_button_pressed(self) -> None:
-        """
-        Apply an offset to the selected shank based on location of the probe tip line.
-
-        Called when the offset button or O key is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank])
-
-    def movedown_button_pressed(self) -> None:
-        """
-        Offset the probe tip of selected shank by 100 µm downwards.
-
-        Called when Shift+down arrow is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=-100 / 1e6)
-
-    def moveup_button_pressed(self) -> None:
-        """
-        Offset the probe tip of selected shank by 100 µm upwards.
-
-        Called when Shift+up arrow is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=100 / 1e6)
 
     def fit_button_pressed(self) -> None:
         """

@@ -56,10 +56,6 @@ class ShankHandler:
     # -------------------------------------------------------------------------
     # Alignment handler - attributes and methods in align_handle
     # -------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`AlignmentHandler.offset_hist_data` for details."""
-        self.align_handle.offset_hist_data(*args)
-
     def scale_hist_data(self, *args, **kwargs) -> None:
         """See :meth:`AlignmentHandler.scale_hist_data` for details."""
         self.align_handle.scale_hist_data(*args, **kwargs)

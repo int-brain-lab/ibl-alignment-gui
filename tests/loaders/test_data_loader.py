@@ -489,6 +489,9 @@ class TestSpikeGLXLoader(unittest.TestCase):
             def load_ap_data(self):
                 return mock_data
 
+            def load_lf_data(self):
+                return mock_data
+
         return MockDataLoader(self.temp_path)
 
     @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.geometry_from_meta')
@@ -526,17 +529,17 @@ class TestSpikeGLXLoader(unittest.TestCase):
 
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
-    def test_get_snippet(self, mock_destripe, mock_bad_channels):
-        """Test the _get_snippet method"""
+    def test_get_ap_snippet(self, mock_destripe, mock_bad_channels):
+        """Test the _get_ap_snippet method"""
         mock_bad_channels.return_value = (np.zeros(384), None)
         mock_destripe.return_value = np.ones((384, 30000))
 
         loader = self._mock_loaders(None)
-        snippet, *_ = loader._get_snippet(self.mock_spikeglx, t=0, twin=1)
+        snippet, *_ = loader._get_ap_snippet(self.mock_spikeglx, t=0, twin=1)
         self.assertEqual(snippet.shape, (1500, 384))
 
     @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader.get_time_snippets')
-    @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader._get_snippet')
+    @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader._get_ap_snippet')
     def test_load_ap_snippets(self, mock_snippet, mock_times):
         """Test the load_ap_snippets method"""
         mock_raw = np.random.randn(1500, 384)

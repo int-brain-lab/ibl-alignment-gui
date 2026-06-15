@@ -348,21 +348,6 @@ class AlignmentHandler:
 
         return hist_data, hist_data_ref, scale_data
 
-    def offset_hist_data(self, offset: float) -> None:
-        """
-        Apply an offset to the brain regions along the probe track.
-
-        Adds the new alignment state into next buffer index of the feature and track arrays.
-
-        Parameters
-        ----------
-        offset : float
-            Offset value to apply to the track alignment.
-        """
-        self.buffer.next_idx_to_fill()
-        self.tracks[self.idx] = self.tracks[self.idx_prev] + offset
-        self.features[self.idx] = self.features[self.idx_prev]
-
     def scale_hist_data(
         self,
         line_track: np.ndarray,

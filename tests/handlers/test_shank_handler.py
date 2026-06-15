@@ -73,7 +73,6 @@ class TestShankHandler(unittest.TestCase):
 
         # Make a mock alignment handler
         self.mock_align_handle = MagicMock()
-        self.mock_align_handle.offset_hist_data.return_value = None
         self.mock_align_handle.scale_hist_data.return_value = None
         self.mock_align_handle.get_scaled_histology.return_value = ('hist', 'hist_ref', 'scale')
         self.mock_align_handle.ephysalign.feature2track_lin.return_value = np.array([100, 200])
@@ -97,12 +96,6 @@ class TestShankHandler(unittest.TestCase):
         np.testing.assert_array_equal(
             self.shank_handler.feature_prev, self.mock_align.feature_prev
         )
-
-    def test_offset_hist_data(self):
-        """Test the offset_hist_data method."""
-        self.shank_handler.offset_hist_data(10)
-        self.mock_align_handle.offset_hist_data.assert_called_with(10)
-        self.mock_align_handle.offset_hist_data.assert_called_once()
 
     def test_scale_hist_data(self):
         """Test the scale_hist_data method."""

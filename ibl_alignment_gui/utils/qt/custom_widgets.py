@@ -753,8 +753,6 @@ class ButtonWidget(QtWidgets.QWidget):
         """Create the buttons and labels."""
         # Button to apply interpolation
         self.buttons['fit'] = QtWidgets.QPushButton('Fit')
-        # Button to apply offset
-        self.buttons['offset'] = QtWidgets.QPushButton('Offset')
         # String to display current move index
         self.labels['current'] = QtWidgets.QLabel()
         # String to display total number of moves
@@ -773,7 +771,6 @@ class ButtonWidget(QtWidgets.QWidget):
         # Layout rows
         hlayout1 = QtWidgets.QHBoxLayout()
         hlayout1.addWidget(self.buttons['fit'], stretch=1)
-        hlayout1.addWidget(self.buttons['offset'], stretch=1)
         hlayout1.addWidget(QtWidgets.QLabel(), stretch=2)
         hlayout2 = QtWidgets.QHBoxLayout()
         hlayout2.addWidget(self.buttons['previous'], stretch=1)

@@ -330,10 +330,6 @@ class ShankController:
     # --------------------------------------------------------------------------------------------
     # Fitting functions
     # --------------------------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`ShankHandler.offset_hist_data` for details."""
-        self.model.offset_hist_data(*args)
-
     def scale_hist_data(self, extend_feature: float, lin_fit: bool) -> None:
         """
         Scale brain regions along the probe track based on reference lines.

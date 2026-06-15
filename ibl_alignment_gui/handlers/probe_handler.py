@@ -546,6 +546,51 @@ class ProbeHandlerONE(ProbeHandler):
 
         return list(shanks)
 
+    def resolve_pid(self, pid: str) -> tuple[int, int, int]:
+        """
+        Resolve a probe insertion id to subject, session and shank dropdown indices.
+
+        The internal session and shank state is populated as a side effect (via
+        :meth:`get_sessions` and :meth:`get_shanks`) so that the dropdowns can be
+        configured to point at the requested insertion.
+
+        Parameters
+        ----------
+        pid : str
+            The probe insertion id (UUID) to resolve.
+
+        Returns
+        -------
+        tuple[int, int, int]
+            The subject, session and shank dropdown indices for the insertion.
+
+        Raises
+        ------
+        ValueError
+            If no insertion exists for `pid`, or its subject has no spikesorted
+            insertions (and so is absent from the subject dropdown).
+        """
+        ins = self.one.alyx.rest('insertions', 'list', id=pid)
+        if len(ins) == 0:
+            raise ValueError(f'No probe insertion found for pid {pid}')
+        ins = ins[0]
+
+        subject = ins['session_info']['subject']
+        subj_match = np.where(self.subjects == subject)[0]
+        if len(subj_match) == 0:
+            raise ValueError(
+                f'Subject {subject} for pid {pid} has no spikesorted insertions'
+            )
+        subj_idx = int(subj_match[0])
+
+        sessions = self.get_sessions(subj_idx)
+        sess_idx = int(np.where(sessions == self.get_session_probe_name(ins))[0][0])
+
+        shanks = self.get_shanks(sess_idx)
+        shank_idx = shanks.index(ins['name'])
+
+        return subj_idx, sess_idx, shank_idx
+
     def get_session_probe_name(self, ins: dict) -> str:
         """
         Make a string containing the combination of session information and probe name.

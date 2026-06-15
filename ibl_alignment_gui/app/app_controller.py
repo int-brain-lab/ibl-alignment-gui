@@ -78,10 +78,17 @@ class AlignmentGUIController:
         A mapping of plugin names to plugin instances.
     """
 
-    def __init__(self, offline: bool = False, csv: str | None = None, yaml: str | None = None):
+    def __init__(
+        self,
+        offline: bool = False,
+        csv: str | None = None,
+        yaml: str | None = None,
+        pid: str | None = None,
+    ):
         self.offline = offline
         self.csv: str | None = csv
         self.yaml: str | None = yaml
+        self.pid: str | None = pid
 
         if offline:
             if self.yaml is None:
@@ -149,6 +156,9 @@ class AlignmentGUIController:
         # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
             self._load_current_session()
+        # With a pid the online session is fully specified up front, so load it immediately.
+        elif self.pid is not None:
+            self.load_pid(self.pid)
 
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
@@ -969,6 +979,39 @@ class AlignmentGUIController:
         self.view.activate_selection_button()
         self.data_button_pressed()
 
+    def load_pid(self, pid: str) -> None:
+        """
+        Configure the dropdowns to a probe insertion and load its data.
+
+        Resolves `pid` to the subject, session and shank dropdown selections, sets each
+        dropdown accordingly and loads the data, reproducing a manual subject -> session ->
+        shank selection followed by pressing the data button. Only valid in online mode.
+
+        Parameters
+        ----------
+        pid : str
+            The probe insertion id (UUID) to load.
+
+        Raises
+        ------
+        ValueError
+            If `pid` cannot be resolved to an insertion in the subject dropdown.
+        """
+        # loaded=None so the early on_shank_selected skips display updates until
+        # shank_items are built in data_button_pressed.
+        self.loaded = None
+        subj_idx, sess_idx, shank_idx = self.model.resolve_pid(pid)
+
+        self.view.set_selection_dropdown('subject', subj_idx)
+        self.view.populate_selection_dropdown('session', self.model.sessions)
+        self.view.set_selection_dropdown('session', sess_idx)
+        self.view.populate_selection_dropdown('shank', list(self.model.shanks.keys()))
+        self.view.set_selection_dropdown('shank', shank_idx)
+
+        self.on_shank_selected(shank_idx)
+        self.view.activate_selection_button()
+        self.data_button_pressed()
+
     def on_open_session_yaml(self) -> None:
         """Open a different session yaml (File menu) and reload the whole GUI."""
         yaml_path = self.view.get_selected_yaml()
@@ -1017,7 +1060,7 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
-        print(time.time() - start)
+        print(f'Loading time: {time.time() - start}')
 
     def setup(self, init=True) -> None:
         """

@@ -910,9 +910,11 @@ class ShankView:
         fig: pg.PlotItem
             The figure whose y-axis range will be updated
         """
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
         fig.setYRange(
-            min=self.yrange[0] - self.ylim_extra,
-            max=self.yrange[1] + self.ylim_extra,
+            min=float(self.yrange[0] - self.ylim_extra),
+            max=float(self.yrange[1] + self.ylim_extra),
             padding=self.yaxis_pad,
         )
 
@@ -928,7 +930,9 @@ class ShankView:
             The xrange values to use. If None, the default values are used.
         """
         xrange = xrange if xrange is not None else self.xrange
-        fig.setXRange(*xrange, padding=0)
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
+        fig.setXRange(float(xrange[0]), float(xrange[1]), padding=0)
 
     @staticmethod
     def make_transform(scale: list | np.ndarray, offset: list | np.ndarray) -> QtGui.QTransform:

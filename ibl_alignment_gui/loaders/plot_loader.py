@@ -16,6 +16,12 @@ from ibl_alignment_gui.loaders.geometry_loader import (
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
 
+try:
+    import ephysatlas.features
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
+
 logger = logging.getLogger(__name__)
 
 np.seterr(divide='ignore', invalid='ignore')
@@ -1022,11 +1028,40 @@ class PlotLoader:
 
         return passive_imgs
 
-    @skip_missing(['raw_snippets'])
-    def image_raw_data(self) -> dict[str, Any]:
+    @skip_missing(['raw_ap_snippets'])
+    def image_raw_ap_data(self) -> dict[str, Any]:
+        """
+        Generate data for image plots of raw AP band ephys data snippets.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ImageData objects with keys according to the time of the
+            snippet during the recording.
+        """
+        return self._image_raw_data('ap')
+
+    @skip_missing(['raw_lf_snippets'])
+    def image_raw_lf_data(self) -> dict[str, Any]:
+        """
+        Generate data for image plots of raw LFP band ephys data snippets.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ImageData objects with keys according to the time of the
+            snippet during the recording.
+        """
+        return self._image_raw_data('lf')
+
+    def _image_raw_data(self, band: str) -> dict[str, Any]:
         """
         Generate data for image plots of raw ephys data snippets.
 
+        Parameters
+        ----------
+        band : str
+            The frequency band of the raw data snippets to plot. Ap or Lf
         Returns
         -------
         Dict
@@ -1035,8 +1070,10 @@ class PlotLoader:
         """
         raw_imgs = dict()
 
-        for i, (t, raw_img) in enumerate(self.data['raw_snippets']['images'].items()):
-            x_range = np.array([0, raw_img.shape[0] - 1]) / self.data['raw_snippets']['fs'] * 1e3
+        for i, (t, raw_img) in enumerate(self.data[f'raw_{band}_snippets']['images'].items()):
+            x_range = (
+                np.array([0, raw_img.shape[0] - 1]) / self.data[f'raw_{band}_snippets']['fs'] * 1e3
+            )
             xscale = (x_range[1] - x_range[0]) / raw_img.shape[0]
             yscale = (self.chn_max - self.chn_min) / raw_img.shape[1]
             levels = 10 ** (-90 / 20) * 4 * np.array([-1, 1])
@@ -1052,7 +1089,7 @@ class PlotLoader:
                 xaxis='Time (ms)',
                 title=f'Power (uV) T={int(t)} s',
             )
-            raw_imgs[f'Raw ap snippet {i}'] = img
+            raw_imgs[f'Raw {band} snippet {i}'] = img
 
         return raw_imgs
 
@@ -1117,7 +1154,7 @@ class PlotLoader:
 
         return {'Amplitude': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_dead_channels(self) -> dict[str, Any]:
         """
         Generate data for a line plot of dead channels across depth.
@@ -1127,7 +1164,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Dead Channels'.
         """
-        data = self.data['raw_snippets']['dead_channels']
+        data = self.data['raw_ap_snippets']['dead_channels']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1147,7 +1184,7 @@ class PlotLoader:
 
         return {'Dead Channels': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_noisy_channels_coherence(self) -> dict[str, Any]:
         """
         Generate data for a line plot of noisy channels across depth.
@@ -1159,7 +1196,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels Coherence'.
         """
-        data = self.data['raw_snippets']['noisy_channels_coherence']
+        data = self.data['raw_ap_snippets']['noisy_channels_coherence']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1179,7 +1216,7 @@ class PlotLoader:
 
         return {'Noisy Channels Coherence': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_noisy_channels_psd(self) -> dict[str, Any]:
         """
         Generate data for a line plot of noisy channels across depth.
@@ -1191,7 +1228,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels PSD'.
         """
-        data = self.data['raw_snippets']['noisy_channels_psd']
+        data = self.data['raw_ap_snippets']['noisy_channels_psd']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1211,7 +1248,7 @@ class PlotLoader:
 
         return {'Noisy Channels PSD': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_outside_channels(self) -> dict[str, Any]:
         """
         Generate data for a line plot of outide channels across depth.
@@ -1221,7 +1258,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Outside Channels'.
         """
-        data = self.data['raw_snippets']['outside_channels']
+        data = self.data['raw_ap_snippets']['outside_channels']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1424,23 +1461,8 @@ class PlotLoader:
         Dict
             A dict containing multiple ProbeData objects with keys according to features.
         """
-        ignore_cols = [
-            'pid',
-            'axial_um',
-            'lateral_um',
-            'x',
-            'y',
-            'z',
-            'acronym',
-            'atlas_id',
-            'x_target',
-            'y_target',
-            'z_target',
-            'outside',
-            'Allen_id',
-            'Cosmos_id',
-            'Beryl_id',
-        ]
+        if not EPHYS_ATLAS:
+            return {}
 
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
@@ -1452,12 +1474,11 @@ class PlotLoader:
         chn_geom.split_sites_per_shank()
         sites = chn_geom._get_sites_for_shank(0)
 
-        features = [k for k in feature_data if k not in ignore_cols]
-        features.sort()
-
         data = Bunch()
 
-        for i, feature in enumerate(features):
+        feature_set = ephysatlas.features.voltage_features_set()
+
+        for i, feature in enumerate(feature_set):
             vals = feature_data[feature].values
             min_val = np.nanmin(vals)
             max_val = np.nanmax(vals)

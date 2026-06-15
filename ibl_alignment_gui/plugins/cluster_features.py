@@ -110,10 +110,13 @@ class ClusterPopup(PopupWindow):
     def setup(self) -> None:
         """Configure the plots inside the popup window."""
         autocorr_plot = pg.PlotItem()
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
         autocorr_plot.setXRange(
-            min=np.min(self.data['t_autocorr']), max=np.max(self.data['t_autocorr'])
+            min=float(np.min(self.data['t_autocorr'])),
+            max=float(np.max(self.data['t_autocorr'])),
         )
-        autocorr_plot.setYRange(min=0, max=1.05 * np.max(self.data['autocorr']))
+        autocorr_plot.setYRange(min=0, max=float(1.05 * np.max(self.data['autocorr'])))
         set_axis(autocorr_plot, 'bottom', label='T (ms)')
         set_axis(autocorr_plot, 'left', label='Number of spikes')
         plot = pg.BarGraphItem(
@@ -127,7 +130,8 @@ class ClusterPopup(PopupWindow):
         template_plot = pg.PlotItem()
         plot = pg.PlotCurveItem()
         template_plot.setXRange(
-            min=np.min(self.data['t_template']), max=np.max(self.data['t_template'])
+            min=float(np.min(self.data['t_template'])),
+            max=float(np.max(self.data['t_template'])),
         )
         set_axis(template_plot, 'bottom', label='T (ms)')
         set_axis(template_plot, 'left', label='Amplitude (a.u.)')

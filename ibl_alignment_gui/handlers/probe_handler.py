@@ -20,6 +20,7 @@ from ibl_alignment_gui.loaders.alignment_uploader import (
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderLocal,
     FeatureLoaderOne,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
@@ -40,6 +41,12 @@ from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
 from one.api import ONE
+
+try:
+    import ephysatlas.data
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
 
 
 class ProbeHandler(ABC):
@@ -158,6 +165,23 @@ class ProbeHandler(ABC):
         for config in self.configs:
             self.get_selected_shank()[config].loaders['align'].get_starting_alignment(idx)
 
+    def get_stored_alignment_idx(self) -> int:
+        """
+        Return the index of the stored (resolved) alignment for the selected shank.
+
+        Delegates to the default configuration's alignment loader.
+
+        Returns
+        -------
+        int
+            Index of the stored alignment in the alignment keys list, or 0 if not found.
+        """
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_stored_alignment_idx()
+        )
+
     def set_init_alignment(self) -> None:
         """Initialise the alignment for the selected shank and each configuration."""
         for config in self.configs:
@@ -202,7 +226,10 @@ class ProbeHandler(ABC):
         int
             The index of the current alignment
         """
-        return self.get_selected_shank()[self.default_config].align_handle.current_idx
+        try:
+            return self.get_selected_shank()[self.default_config].align_handle.current_idx
+        except AttributeError:
+            return 0
 
     @property
     def total_idx(self) -> int:
@@ -214,7 +241,10 @@ class ProbeHandler(ABC):
         int
             The total number of alignments stored in the circular buffer
         """
-        return self.get_selected_shank()[self.default_config].align_handle.total_idx
+        try:
+            return self.get_selected_shank()[self.default_config].align_handle.total_idx
+        except AttributeError:
+            return 0
 
     def get_plot(self, shank: str, plot: str, key: str, config: str | None = None) -> Any:
         """
@@ -434,6 +464,11 @@ class ProbeHandlerONE(ProbeHandler):
     ):
         self.one = one or ONE()
         self.spike_collection = spike_collection
+        if EPHYS_ATLAS:
+            self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        else:
+            self.ea_model = None
+
         super().__init__(brain_atlas)
 
     def get_subjects(self) -> np.ndarray:
@@ -505,9 +540,56 @@ class ProbeHandlerONE(ProbeHandler):
         self.shank_labels = np.array(self.shank_labels)[idx]
         shanks = np.array(shanks)[idx]
 
+        self.lab = self.shank_labels[0]['session_info']['lab']
+
         self.initialise_shanks()
 
         return list(shanks)
+
+    def resolve_pid(self, pid: str) -> tuple[int, int, int]:
+        """
+        Resolve a probe insertion id to subject, session and shank dropdown indices.
+
+        The internal session and shank state is populated as a side effect (via
+        :meth:`get_sessions` and :meth:`get_shanks`) so that the dropdowns can be
+        configured to point at the requested insertion.
+
+        Parameters
+        ----------
+        pid : str
+            The probe insertion id (UUID) to resolve.
+
+        Returns
+        -------
+        tuple[int, int, int]
+            The subject, session and shank dropdown indices for the insertion.
+
+        Raises
+        ------
+        ValueError
+            If no insertion exists for `pid`, or its subject has no spikesorted
+            insertions (and so is absent from the subject dropdown).
+        """
+        ins = self.one.alyx.rest('insertions', 'list', id=pid)
+        if len(ins) == 0:
+            raise ValueError(f'No probe insertion found for pid {pid}')
+        ins = ins[0]
+
+        subject = ins['session_info']['subject']
+        subj_match = np.where(self.subjects == subject)[0]
+        if len(subj_match) == 0:
+            raise ValueError(
+                f'Subject {subject} for pid {pid} has no spikesorted insertions'
+            )
+        subj_idx = int(subj_match[0])
+
+        sessions = self.get_sessions(subj_idx)
+        sess_idx = int(np.where(sessions == self.get_session_probe_name(ins))[0][0])
+
+        shanks = self.get_shanks(sess_idx)
+        shank_idx = shanks.index(ins['name'])
+
+        return subj_idx, sess_idx, shank_idx
 
     def get_session_probe_name(self, ins: dict) -> str:
         """
@@ -566,7 +648,10 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-            loaders['features'] = FeatureLoaderOne(ins, self.one)
+            if EPHYS_ATLAS:
+                loaders['features'] = FeatureLoaderOne(
+                    ins, self.one, self.ea_model, multi_area=self.lab == 'steinmetzlab'
+                )
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
@@ -603,6 +688,10 @@ class ProbeHandlerCSV(ProbeHandler):
         self.default_config = 'dense'
         self.non_default_config = 'quarter'
         self.selected_config = 'quarter'
+        if EPHYS_ATLAS:
+            self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        else:
+            self.ea_model = None
 
     def get_subjects(self) -> np.ndarray:
         """
@@ -711,7 +800,6 @@ class ProbeHandlerCSV(ProbeHandler):
                 )
                 loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
                 loaders['plots'] = PlotLoader()
-                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
                 # If we don't have the data locally we download it
@@ -728,7 +816,10 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-                loaders['features'] = FeatureLoaderOne(ins, self.one)
+                if EPHYS_ATLAS:
+                    loaders['features'] = FeatureLoaderOne(
+                        ins, self.one, self.ea_model, multi_area=True
+                    )
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 
@@ -745,19 +836,20 @@ class ProbeHandlerCSV(ProbeHandler):
             if dense_align.alignment_keys != ['original']:
                 # Alyx alignment exists: overwrite local
                 quarter_align.alignments = dense_align.alignments
+                quarter_align.stored_alignment_key = dense_align.stored_alignment_key
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(0)
+                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
 
             elif quarter_align.alignment_keys != ['original']:
                 # Local alignment exists: add to online
                 dense_align.add_extra_alignments(quarter_align.alignments)
                 dense_align.get_previous_alignments()
-                dense_align.get_starting_alignment(0)
+                dense_align.get_starting_alignment(dense_align.get_stored_alignment_idx())
 
                 # Ensure consistency by syncing quarter with updated dense
                 quarter_align.alignments = dense_align.alignments
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(0)
+                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
 
     def get_insertion(self, shank: pd.Series) -> dict:
         """Get the alyx probe insertion for the shank."""
@@ -847,54 +939,91 @@ class ProbeHandlerLocal(ProbeHandler):
             self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
 
 
+def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader:
+    """
+    Pick the right SliceLoader by inspecting the histology directory.
+
+    Used by the offline ProbeHandlers (:class:`ProbeHandlerLocal` and
+    :class:`ProbeHandlerLocalYaml`). If the directory contains any ``.tif`` / ``.tiff`` files
+    (e.g. brainreg outputs), return a :class:`TiffSliceLoader`. Otherwise default to the existing
+    :class:`NrrdSliceLoader` so all current NRRD workflows keep working.
+
+    Parameters
+    ----------
+    hist_path : Path
+        Directory containing the histology volumes.
+    brain_atlas : AllenAtlas
+        Brain atlas for alignment.
+
+    Returns
+    -------
+    SliceLoader
+        A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
+    """
+    if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
+        return TiffSliceLoader(hist_path, brain_atlas)
+    return NrrdSliceLoader(hist_path, brain_atlas)
+
+
 class ProbeHandlerLocalYaml(ProbeHandler):
     """
-    Local file system implementation of ProbeHandler that uses a yaml file.
+    Local file system ProbeHandler driven by a session yaml file.
 
-    The yaml file contains information about where to read the relevant data from.
+    The yaml (see :func:`ibl_alignment_gui.utils.parse_yaml.load_alignment_yaml`) specifies, per
+    probe/config, where each dataset lives (spike sorting, raw/processed ephys, picks, histology,
+    output, and optional per-channel features). The resolved ``DatasetPaths`` for each probe/config
+    are wired directly into the local loaders (``DataLoaderLocal``, ``GeometryLoaderLocal`` etc.).
+
+    Parameters
+    ----------
+    yaml_file : str or Path
+        Path to the session yaml configuration file.
+    brain_atlas : AllenAtlas or None
+        An AllenAtlas instance (created if None).
     """
 
-    def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
-        configs, probes, self.data_paths = load_alignment_yaml(yaml_file)
-
-        if brain_atlas is None:
-            brain_atlas = self._make_atlas()
-
+    def __init__(self, yaml_file: str | Path, brain_atlas: AllenAtlas | None = None):
         super().__init__(brain_atlas)
+        self.configs, self.probes, self.data_paths = load_alignment_yaml(yaml_file)
 
-        if len(configs) > 1:
-            self.configs = configs
-            self.default_config = self.configs[0]
+        # The base sets a single 'default' config; mirror it to the yaml config name and, when the
+        # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.
+        self.default_config = self.configs[0]
+        if len(self.configs) > 1:
             self.non_default_config = self.configs[1]
             self.possible_configs = self.configs + ['both']
-            self.selected_config = self.configs[0]
-
-        self.probes = probes
+        else:
+            self.possible_configs = [self.default_config]
+        self.selected_config = self.default_config
 
     def get_shanks(self, _) -> list[str]:
         """
-        Initialise the shanks based on the yaml file.
+        Determine the shanks from the yaml and initialise the loaders.
 
-        If only one probe label is given we load in the geometry to see if it is a
-        multi-shank recording. Otherwise, we assume the yaml has specified all shanks
-        and these are treated individually.
+        If a single probe is specified we load its geometry to detect whether it is a multi-shank
+        recording. Otherwise each probe entry in the yaml is treated as an individual shank.
+
+        Parameters
+        ----------
+        _ : Any
+            Ignored — the yaml path was supplied at construction time. The signature matches the
+            other ProbeHandlers so the controller can call it uniformly.
         """
-        # If we have only one probe label we load in the geometry to see if it is a
-        # multi-shank recording
         if len(self.probes) == 1:
-            # Load in the geometry and find the number of shanks
             data_path = self.data_paths[self.default_config][self.probes[0]]
-            self.geom = GeometryLoaderLocal(data_path)
-            self.geom.get_geometry()
-
-            self.n_shanks = self.geom.channels.n_shanks
+            geom = GeometryLoaderLocal(data_path)
+            geom.get_geometry()
+            # Shank count comes from the ALF channels object when present, else from the SpikeGLX
+            # meta (e.g. external datasets with no spike sorting), mirroring the fallback used in
+            # GeometryLoader.get_sites_for_shank.
+            sites = geom.channels if geom.channels is not None else geom.electrodes
+            self.n_shanks = sites.n_shanks
             if self.n_shanks == 1:
-                self.shank_labels = self.probes
+                self.shank_labels = list(self.probes)
             else:
-                self.shank_labels = [f'shank_{iShank + 1}' for iShank in range(self.n_shanks)]
-        # Otherwise we assume the yaml has specified all shanks and these are treated individually
+                self.shank_labels = [f'shank_{ishank + 1}' for ishank in range(self.n_shanks)]
         else:
-            self.shank_labels = self.probes
+            self.shank_labels = list(self.probes)
             self.n_shanks = 1
 
         self.initialise_shanks()
@@ -907,8 +1036,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
         Parameters
         ----------
-        idx: int
-            The index of the selected shank
+        idx : int
+            The index of the selected shank.
         """
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
@@ -926,22 +1055,36 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         return make_slice_loader(data_paths.histology, self.brain_atlas, data_paths.histology_space)
 
     def initialise_shanks(self) -> None:
-        """Initialise each shank and config with the selected loaders."""
+        """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
         self.shanks = defaultdict(Bunch)
+
+        # A single probe entry may still be multi-shank; in that case all shanks share that one
+        # probe's dataset paths and are told apart by their shank index (the geometry is split per
+        # shank inside ShankHandler.load_data via get_sites_for_shank).
+        single_probe = len(self.probes) == 1
 
         for ish, shank in enumerate(self.shank_labels):
             ishank = ish if self.n_shanks > 1 else 0
+            probe = self.probes[0] if single_probe else shank
 
             for config in self.configs:
-                data_paths = self.data_paths[config][shank]
+                data_path = self.data_paths[config][probe]
 
                 loaders = Bunch()
-                loaders['data'] = DataLoaderLocal(data_paths)
-                loaders['geom'] = GeometryLoaderLocal(data_paths)
-                loaders['align'] = AlignmentLoaderLocal(data_paths.picks, ishank, self.n_shanks)
-                loaders['upload'] = AlignmentUploaderLocal(
-                    data_paths.output, ishank, loaders['geom'], self.brain_atlas
+                loaders['geom'] = GeometryLoaderLocal(data_path)
+                loaders['data'] = DataLoaderLocal(data_path)
+                loaders['align'] = AlignmentLoaderLocal(
+                    data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
                 )
-                loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
+                loaders['upload'] = AlignmentUploaderLocal(
+                    data_path.output, ishank, self.n_shanks, self.brain_atlas
+                )
+                loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
+                # Per-session features (if the yaml specifies them) load via the existing
+                # shank_handler.load_data -> loaders['features'] path, so the session is
+                # self-contained and switching yaml switches the features too.
+                # TODO pass in geometry
+                if data_path.features is not None:
+                    loaders['features'] = FeatureLoaderLocal(data_path.features)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank][config] = ShankHandler(loaders, ishank)

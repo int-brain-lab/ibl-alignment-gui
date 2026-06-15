@@ -92,6 +92,21 @@ class TestAlignmentLoaderOne(unittest.TestCase):
             np.testing.assert_array_equal(self.loader.feature_prev, np.array([-0.006, 0.006]))
             np.testing.assert_array_equal(self.loader.track_prev, np.array([-0.006, 0.006]))
 
+    def test_stored_alignment_idx(self):
+        """Test get_stored_alignment_idx returns stored key index or 0 as fallback."""
+        self.loader.alignment_keys = ['2025-07-03_user1', '2025-06-10_user2', 'original']
+        self.assertEqual(self.loader.get_stored_alignment_idx(), 0)  # no stored key
+        self.loader.stored_alignment_key = '2025-06-10_user2'
+        self.assertEqual(self.loader.get_stored_alignment_idx(), 1)  # key present
+        self.loader.stored_alignment_key = '2025-01-01_other'
+        self.assertEqual(self.loader.get_stored_alignment_idx(), 0)  # key missing
+
+    def test_stored_alignment_key_from_insertion(self):
+        """Test stored_alignment_key is read from insertion extended_qc on construction."""
+        ins = {'id': uuid.uuid4(), 'json': {'extended_qc': {'alignment_stored': '2025-06-10_user2'}}}
+        loader = AlignmentLoaderOne(ins, self.one_mock)
+        self.assertEqual(loader.stored_alignment_key, '2025-06-10_user2')
+
     def test_extra_alignment(self):
         """Test the add_extra_alignments method"""
         self.loader.alignments = self.alignments

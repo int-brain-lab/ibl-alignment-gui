@@ -78,10 +78,17 @@ class AlignmentGUIController:
         A mapping of plugin names to plugin instances.
     """
 
-    def __init__(self, offline: bool = False, csv: str | None = None, yaml: str | None = None):
+    def __init__(
+        self,
+        offline: bool = False,
+        csv: str | None = None,
+        yaml: str | None = None,
+        pid: str | None = None,
+    ):
         self.offline = offline
         self.csv: str | None = csv
         self.yaml: str | None = yaml
+        self.pid: str | None = pid
 
         if offline:
             if self.yaml is None:
@@ -129,6 +136,7 @@ class AlignmentGUIController:
         self.feature_init: str | None = None
         self.slice_init: str | None = None
         self.filter_init: str | None = None
+        self.region_init: str | None = None
 
         # The ephys view mode
         self.show_feature = False
@@ -145,9 +153,12 @@ class AlignmentGUIController:
         # Setup plugins
         Plugins(self)
 
+        # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
-            self.on_folder_selected(self.yaml)
-            self.data_button_pressed()
+            self._load_current_session()
+        # With a pid the online session is fully specified up front, so load it immediately.
+        elif self.pid is not None:
+            self.load_pid(self.pid)
 
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
@@ -155,8 +166,16 @@ class AlignmentGUIController:
         if not self.offline:
             self.view.connect_selection_dropdown('subject', self.on_subject_selected)
             self.view.connect_selection_dropdown('session', self.on_session_selected)
-        elif self.yaml is None:
-            self.view.connect_selection_button('folder', self.on_folder_selected)
+        else:
+            # Offline the source button offers both a data folder and a session yaml; each handler
+            # swaps in the matching ProbeHandler, so the sources are interchangeable at runtime.
+            self.view.connect_selection_menu(
+                'folder',
+                {
+                    'Open data folder…': self.on_folder_selected,
+                    'Open session YAML…': self.on_open_session_yaml,
+                },
+            )
 
         self.view.connect_selection_dropdown('shank', self.on_shank_selected)
         self.view.connect_selection_dropdown('align', self.on_alignment_selected)
@@ -165,7 +184,6 @@ class AlignmentGUIController:
 
         # Setup connections for alignment buttons
         self.view.connect_button('fit', self.fit_button_pressed)
-        self.view.connect_button('offset', self.offset_button_pressed)
         self.view.connect_button('reset', self.reset_button_pressed)
         self.view.connect_button('upload', self.complete_button_pressed)
         self.view.connect_button('next', self.next_button_pressed)
@@ -184,10 +202,6 @@ class AlignmentGUIController:
         fit_options = {
             # Shortcuts to apply fit
             'Fit': {'shortcut': 'Return', 'callback': self.fit_button_pressed},
-            # Shortcuts to apply offset
-            'Offset': {'shortcut': 'O', 'callback': self.offset_button_pressed},
-            'Offset + 100um': {'shortcut': 'Shift+Up', 'callback': self.moveup_button_pressed},
-            'Offset - 100um': {'shortcut': 'Shift+Down', 'callback': self.movedown_button_pressed},
             # Shortcut to remove a reference line
             'Remove Line': {'shortcut': 'Shift+D', 'callback': self.delete_reference_line},
             # Shortcut to move between previous/next moves
@@ -216,6 +230,10 @@ class AlignmentGUIController:
                 'shortcut': 'Alt+4',
                 'callback': lambda: self.toggle_plots('slice', 1),
             },
+            'Toggle Region Plots ->': {
+                'shortcut': 'Alt+5',
+                'callback': lambda: self.toggle_plots('region', 1),
+            },
             'Toggle Image Plots <-': {
                 'shortcut': 'Shift+Alt+1',
                 'callback': lambda: self.toggle_plots('image', -1),
@@ -231,6 +249,10 @@ class AlignmentGUIController:
             'Toggle Slice Plots <-': {
                 'shortcut': 'Shift+Alt+4',
                 'callback': lambda: self.toggle_plots('slice', -1),
+            },
+            'Toggle Region Plots <-': {
+                'shortcut': 'Shift+Alt+5',
+                'callback': lambda: self.toggle_plots('region', -1),
             },
             # Shortcut to reset axis on figures
             'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
@@ -286,6 +308,10 @@ class AlignmentGUIController:
         filter_keys = ['All', 'KS good', 'KS mua', 'IBL good']
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
+        )
+        region_keys = ['Allen', 'Beryl', 'Cosmos']
+        self.region_init = self.view.populate_menu_tab(
+            'region', self.plot_region_ref_panels, region_keys
         )
 
     # --------------------------------------------------------------------------------------------
@@ -381,6 +407,14 @@ class AlignmentGUIController:
         """Plot histology reference panel per shank and config."""
         items.plot_histology_ref()
 
+    def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
+        """Handle Region Plots menu selection — delegates non-Original keys to the plugin."""
+        self.region_init = plot_key
+        if plot_key == 'Allen':
+            self.plot_histology_ref_panels()
+            return
+        self.plugins['Channel Prediction']['loader'].plot_regions(plot_key, data_only=data_only)
+
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """
         Plot scale factor panel for list of shanks.
@@ -459,7 +493,7 @@ class AlignmentGUIController:
             if not self.show_channels:
                 self.toggle_channels()
             # If plot key changes reset the lut levels
-            self.view.set_levels(None)
+            self.view.reset_levels()
 
         self.slice_figs = Bunch()
         if self.model.selected_config == 'both':
@@ -837,8 +871,8 @@ class AlignmentGUIController:
         self.view.clear_selection_dropdown('align')
         self.model.set_info(idx)
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load the initial alignment
-        self.model.get_starting_alignment(0)
+        # Load the stored (resolved) alignment if available, otherwise the most recent
+        self.model.get_starting_alignment(self.model.get_stored_alignment_idx())
         if self.loaded is not None:
             # If in tab view, update the tab to display the selected shank
             self.view.set_tabs(idx)
@@ -898,17 +932,91 @@ class AlignmentGUIController:
             self.view.focus()
 
     def on_folder_selected(self, folder_path: str | None = None) -> None:
-        """Triggered in offline mode when the folder button is clicked."""
-        self.loaded = None
-        self.view.clear_selection_dropdown(['align', 'shank'])
+        """Triggered in offline mode when a data folder is chosen from the source button."""
         if folder_path:
             self.view.set_selected_path(folder_path)
         else:
             folder_path = self.view.get_selected_path()
+            if folder_path is None:
+                # Dialog cancelled: leave the current session untouched.
+                return
+        # Coming from a yaml session, rebuild the folder-based model (reusing the brain atlas so it
+        # is not re-downloaded) so get_shanks reads the chosen folder rather than the old yaml.
+        if not isinstance(self.model, ProbeHandlerLocal):
+            self.model = ProbeHandlerLocal(brain_atlas=self.model.brain_atlas)
+            self.yaml = None
+        self.loaded = None
+        self.view.clear_selection_dropdown(['align', 'shank'])
         shank_options = self.model.get_shanks(folder_path)
         self.view.populate_selection_dropdown('shank', shank_options)
         self.on_shank_selected(0)
         self.view.activate_selection_button()
+        # Load immediately, mirroring the yaml session flow.
+        self.data_button_pressed()
+
+    def _load_current_session(self) -> None:
+        """
+        Load the yaml session currently held in ``self.model`` and (re)build the GUI.
+
+        Mirrors :meth:`on_folder_selected` without the file dialog. Safe to call again to switch
+        sessions: ``data_button_pressed`` rebuilds shanks/plots/menubar from scratch (the shank
+        tabs are cleared in ``setup`` and the menu tabs self-clear on repopulate).
+        """
+        # loaded=None so the early on_shank_selected skips add_points_to_display() until
+        # shank_items are (re)built in data_button_pressed.
+        self.loaded = None
+        # Show the yaml path in the source line edit (the offline folder/yaml share the widget).
+        self.view.set_selected_path(self.yaml)
+        self.view.clear_selection_dropdown(['align', 'shank'])
+        shank_options = self.model.get_shanks(self.yaml)
+        self.view.populate_selection_dropdown('shank', shank_options)
+        self.on_shank_selected(0)
+        self.view.activate_selection_button()
+        self.data_button_pressed()
+
+    def load_pid(self, pid: str) -> None:
+        """
+        Configure the dropdowns to a probe insertion and load its data.
+
+        Resolves `pid` to the subject, session and shank dropdown selections, sets each
+        dropdown accordingly and loads the data, reproducing a manual subject -> session ->
+        shank selection followed by pressing the data button. Only valid in online mode.
+
+        Parameters
+        ----------
+        pid : str
+            The probe insertion id (UUID) to load.
+
+        Raises
+        ------
+        ValueError
+            If `pid` cannot be resolved to an insertion in the subject dropdown.
+        """
+        # loaded=None so the early on_shank_selected skips display updates until
+        # shank_items are built in data_button_pressed.
+        self.loaded = None
+        subj_idx, sess_idx, shank_idx = self.model.resolve_pid(pid)
+
+        self.view.set_selection_dropdown('subject', subj_idx)
+        self.view.populate_selection_dropdown('session', self.model.sessions)
+        self.view.set_selection_dropdown('session', sess_idx)
+        self.view.populate_selection_dropdown('shank', list(self.model.shanks.keys()))
+        self.view.set_selection_dropdown('shank', shank_idx)
+
+        self.on_shank_selected(shank_idx)
+        self.view.activate_selection_button()
+        self.data_button_pressed()
+
+    def on_open_session_yaml(self) -> None:
+        """Open a different session yaml (File menu) and reload the whole GUI."""
+        yaml_path = self.view.get_selected_yaml()
+        if yaml_path is None or not yaml_path.is_file():
+            return
+        self.yaml = str(yaml_path)
+        # Reuse the existing brain atlas so we do not re-download it for the new session.
+        self.model = ProbeHandlerLocalYaml(self.yaml, brain_atlas=self.model.brain_atlas)
+        # The features override is reset for every new session in data_button_pressed.
+        self._load_current_session()
 
     def on_view_changed(self):
         """Triggered when the view is changed between feature and ephys plots."""
@@ -947,7 +1055,7 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
-        print(time.time() - start)
+        print(f'Loading time: {time.time() - start}')
 
     def setup(self, init=True) -> None:
         """
@@ -981,7 +1089,7 @@ class AlignmentGUIController:
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
         self.get_scaled_histology()
-        self.plot_histology_ref_panels()
+        self.view.trigger_menu_option('region', self.region_init)
         self.plot_histology_panels()
         self.plot_scale_factor_panels()
         self.show_labels = False
@@ -1067,11 +1175,6 @@ class AlignmentGUIController:
     # Fitting functions
     # --------------------------------------------------------------------------------------------
     @shank_loop
-    def offset_hist_data(self, items: ShankController, *args, **kwargs) -> None:
-        """See :meth:`ShankController.offset_hist_data` for details."""
-        items.offset_hist_data(*args)
-
-    @shank_loop
     def scale_hist_data(self, items: ShankController, **kwargs) -> None:
         """Scale brain regions along the probe track based on reference lines."""
         items.scale_hist_data(self.extend_feature, self.lin_fit)
@@ -1094,30 +1197,6 @@ class AlignmentGUIController:
         """
         fit_function(**kwargs)
         self.update_plots(shanks=[self.model.selected_shank])
-
-    def offset_button_pressed(self) -> None:
-        """
-        Apply an offset to the selected shank based on location of the probe tip line.
-
-        Called when the offset button or O key is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank])
-
-    def movedown_button_pressed(self) -> None:
-        """
-        Offset the probe tip of selected shank by 100 µm downwards.
-
-        Called when Shift+down arrow is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=-100 / 1e6)
-
-    def moveup_button_pressed(self) -> None:
-        """
-        Offset the probe tip of selected shank by 100 µm upwards.
-
-        Called when Shift+up arrow is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=100 / 1e6)
 
     def fit_button_pressed(self) -> None:
         """

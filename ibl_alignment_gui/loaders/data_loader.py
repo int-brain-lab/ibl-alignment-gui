@@ -21,6 +21,12 @@ from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
 from one.api import ONE
 from one.remote import aws
 
+try:
+    import ephysatlas.data
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,9 +126,7 @@ class DataLoader(ABC):
                         f'cannot disambiguate, some plots will not display'
                     )
                 else:
-                    raise_message = (
-                        f'{alf_object} data was not found, some plots will not display'
-                    )
+                    raise_message = f'{alf_object} data was not found, some plots will not display'
             logger.warning(raise_message)
             if raise_error:
                 logger.error(raise_message)
@@ -172,12 +176,14 @@ class DataLoader(ABC):
                 vis_stim = Bunch(exists=False)
             else:
                 vis_stim = Bunch()
-                vis_stim['leftGabor'] = np.array(gabor['start'][
-                    (gabor['position'] == 35) & (gabor['contrast'] > 0.1)
-                ], dtype=np.float64)
-                vis_stim['rightGabor'] =  np.array(gabor['start'][
-                    (gabor['position'] == -35) & (gabor['contrast'] > 0.1)
-                ], dtype=np.float64)
+                vis_stim['leftGabor'] = np.array(
+                    gabor['start'][(gabor['position'] == 35) & (gabor['contrast'] > 0.1)],
+                    dtype=np.float64,
+                )
+                vis_stim['rightGabor'] = np.array(
+                    gabor['start'][(gabor['position'] == -35) & (gabor['contrast'] > 0.1)],
+                    dtype=np.float64,
+                )
                 vis_stim['exists'] = True
         except Exception:
             logger.warning('Failed to process passiveGabor data, some plots will not display')
@@ -401,7 +407,7 @@ class DataLoaderOne(DataLoader):
         self.probe_label: str = insertion['name']
         self.spike_collection: str | None = spike_collection
         self.probe_path: Path = self.get_spike_sorting_path()
-        self.probe_collection: str = str(self.probe_path.relative_to(self.session_path).as_posix())
+        self.probe_collection: str = str(self.probe_path.relative_to(self.session_path))
         self.filter: bool = True
 
         super().__init__()
@@ -589,8 +595,11 @@ class SpikeGLXLoader(ABC):
     def __init__(self, save_path: Path | None = None):
         self.meta: Bunch | None = None
         self.save_path: Path | None = save_path
-        self.cached_path: Path | None = (
+        self.cached_ap_path: Path | None = (
             save_path.joinpath('alignment_gui_raw_data_snippets.npy') if save_path else None
+        )
+        self.cached_lf_path: Path | None = (
+            save_path.joinpath('alignment_gui_raw_lf_data_snippets.npy') if save_path else None
         )
 
     def get_meta_data(self) -> Bunch[str, Any]:
@@ -617,6 +626,10 @@ class SpikeGLXLoader(ABC):
     def load_ap_data(self) -> spikeglx.Reader | Streamer | None:
         """Abstract method to return a SpikeGLX reader or Streamer object."""
 
+    @abstractmethod
+    def load_lf_data(self) -> spikeglx.Reader | Streamer | None:
+        """Abstract method to return a SpikeGLX reader or Streamer object."""
+
     def load_ap_snippets(self, twin: float = 1) -> Bunch[str, Any] | defaultdict[str, Any]:
         """
         Load AP snippets centered around selected time points.
@@ -634,8 +647,8 @@ class SpikeGLXLoader(ABC):
         data: Bunch
             Snippets of raw data for three timepoints in addition to metadata (exists, fs).
         """
-        if self.cached_path and self.cached_path.exists():
-            data = np.load(self.cached_path, allow_pickle=True).item()
+        if self.cached_ap_path and self.cached_ap_path.exists():
+            data = np.load(self.cached_ap_path, allow_pickle=True).item()
             if 'dead_channels' in data:
                 return data
 
@@ -651,7 +664,7 @@ class SpikeGLXLoader(ABC):
         data = defaultdict(Bunch)
 
         for i, t in enumerate(times):
-            raw, labels, features = self._get_snippet(sr, t, twin=twin, **detection_thresholds)
+            raw, labels, features = self._get_ap_snippet(sr, t, twin=twin, **detection_thresholds)
 
             if i == 0:
                 chn_labels = np.zeros((raw.shape[1], len(times)))
@@ -691,13 +704,56 @@ class SpikeGLXLoader(ABC):
         data['exists'] = True
         data['fs'] = sr.fs
 
-        if self.cached_path:
-            np.save(self.cached_path, data)
+        if self.cached_ap_path:
+            np.save(self.cached_ap_path, data)
+
+        return data
+
+    def load_lf_snippets(self, twin: float = 5) -> Bunch[str, Any] | defaultdict[str, Any]:
+        """
+        Load LF snippets centered around selected time points.
+
+        Also computes channel quality metrics across snippets to detect dead, noisy
+        and outside channels.
+
+        Parameters
+        ----------
+        twin : float
+            Time window in seconds for each snippet.
+
+        Returns
+        -------
+        data: Bunch
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+        """
+        if self.cached_lf_path and self.cached_lf_path.exists():
+            data = np.load(self.cached_lf_path, allow_pickle=True).item()
+            return data
+
+        sr = self.load_lf_data()
+        if not sr:
+            return Bunch(exists=False)
+
+        times = self.get_time_snippets(sr)
+
+        data = defaultdict(Bunch)
+
+        for i, t in enumerate(times):
+            raw = self._get_lf_snippet(sr, t, twin=twin)
+
+            data['images'][t] = raw
+
+        data['exists'] = True
+        data['fs'] = sr.fs
+
+        # TODO uncomment once we are happy with the snippet length
+        # if self.cached_lf_path:
+        #     np.save(self.cached_lf_path, data)
 
         return data
 
     @staticmethod
-    def _get_snippet(
+    def _get_ap_snippet(
         sr: spikeglx.Reader | Streamer, t: float, twin: float = 1, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -726,8 +782,48 @@ class SpikeGLXLoader(ABC):
         raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels)
 
         # Extract a window in time (450–500 ms)
-        window = slice(int(0.450 * sr.fs), int(0.500 * sr.fs))
+        window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
         return raw[:, window].T, channel_labels, channel_features
+
+    @staticmethod
+    def _get_lf_snippet(
+        sr: spikeglx.Reader | Streamer, t: float, twin: float = 3, **kwargs
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Extract a snippet of LF data centered at time t.
+
+        Parameters
+        ----------
+        sr : spikeglx.Reader or Streamer
+            The raw data reader
+        t : float
+            Time in seconds for center of snippet.
+        twin : float
+            Time window (in seconds) to extract.
+
+        Returns
+        -------
+        np.ndarray
+            Snippet of raw data (time, channels)
+        """
+        start_sample = int(t * sr.fs)
+        end_sample = start_sample + int(twin * sr.fs)
+        raw = sr[start_sample:end_sample, : -sr.nsync].T
+
+        butter_kwargs = {'N': 3, 'Wn': 2 / sr.fs * 2, 'btype': 'highpass'}
+        # Detect bad channels and destripe
+        raw = ibldsp.voltage.destripe(
+            raw,
+            fs=sr.fs,
+            channel_labels=True,
+            butter_kwargs=butter_kwargs,
+            h=sr.geometry,
+            k_filter=None,
+        )
+
+        # Extract a window in time (1–2 seconds)
+        window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
+        return raw[:, window].T
 
     @staticmethod
     def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:
@@ -817,6 +913,17 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         """
         return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
 
+    def load_lf_data(self):
+        """
+        Load LF data using ONE.
+
+        Returns
+        -------
+        Streamer
+            A streamer object for LF band.
+        """
+        return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
+
 
 class SpikeGLXLoaderLocal(SpikeGLXLoader):
     """
@@ -859,13 +966,33 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         ap_file = next(self.meta_path.glob('*.ap.*bin'), None)
         return spikeglx.Reader(ap_file) if ap_file else None
 
+    def load_lf_data(self) -> spikeglx.Reader | None:
+        """
+        Load binary LF data from local path.
+
+        Returns
+        -------
+        spikeglx.Reader or None
+            A spikeglx.Reader instance to load the raw data, or None if not found.
+        """
+        lf_file = next(self.meta_path.glob('*.lf.*bin'), None)
+        return spikeglx.Reader(lf_file) if lf_file else None
+
 
 class FeatureLoader(ABC):
     """Abstract base class for loading ephys atlas features."""
 
     @abstractmethod
-    def load_features(self) -> Bunch[str, Any]:
-        """Abstract method to load ephys atlas features."""
+    def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
+        """Abstract method to load ephys atlas features.
+
+        Parameters
+        ----------
+        shank_sites : Bunch or None
+            The sites for the shank being loaded (see
+            :meth:`GeometryLoader.get_sites_for_shank`). When given, implementations that read a
+            combined multi-shank file use it to keep only this shank's channels.
+        """
 
 
 class FeatureLoaderOne(FeatureLoader):
@@ -875,47 +1002,127 @@ class FeatureLoaderOne(FeatureLoader):
     Loads feature from ephys feature table.
     """
 
-    def __init__(self, insertion: dict, one: ONE, session_path: Path | None = None):
+    def __init__(self, insertion: dict, one: ONE, feature_version: str, multi_area: bool = False):
+
         self.one: ONE = one
         self.pid: str = insertion['id']
+        self.feature_version: str = feature_version
+        self.multi_area: bool = multi_area
 
-    def load_features(self) -> Bunch[str, Any]:
+    def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
         """
         Load ephys atlas features from ONE.
+
+        Parameters
+        ----------
+        shank_sites : Bunch or None
+            Unused here — the ONE table is already filtered to this insertion's ``pid``. Accepted
+            to keep the :class:`FeatureLoader` interface uniform across loaders.
 
         Returns
         -------
         feature_data: Bunch
             A Bunch containing a dataFrame containing ephys atlas features for the probe.
         """
-        fname = 'df_all_cols_merged.pqt'
-        table_path = self.one.cache_dir.joinpath('ephys_atlas_features', fname)
+        table_path = self.one.cache_dir.joinpath('ephys_atlas_features')
         table_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not table_path.exists():
-            self.download_features(fname, save_path=table_path)
+        data = self.load_dataframe('ea_active', self.feature_version, table_path)
 
-        data = pd.read_parquet(table_path).reset_index()
-        data = data[data['pid'] == self.pid]
+        if len(data) == 0 and self.multi_area:
+            data = self.load_dataframe('multi_area_comm', self.feature_version, table_path)
 
         feature_data = Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)
 
         return feature_data
 
-    def download_features(self, fname: str, save_path: Path) -> None:
+    def download_features(self, project, feature, save_path: Path) -> None:
         """
         Download the latest ephys atlas features from S3.
 
         Parameters
         ----------
-        fname: str
-            Filename to download
+        project: str
+            The project name
+        feature: str
+            The feature version
         save_path: Path
             A path to save the downloaded file
         """
-        s3, bucket_name = aws.get_s3_from_alyx(alyx=self.one.alyx)
-        # Download file
-        base_path = Path('aggregates/atlas/features/ea_active/2025_W43/agg_full/')
-        aws.s3_download_file(
-            base_path.joinpath(fname), save_path.joinpath(fname), s3=s3, bucket_name=bucket_name
-        )
+        ephysatlas.data.download_tables(save_path, label=feature, project=project, one=self.one)
+
+    def load_dataframe(self, project: str, feature: str, save_path: Path) -> pd.DataFrame:
+
+        model_path = save_path.joinpath(project, feature)
+
+        if not model_path.exists():
+            if not EPHYS_ATLAS:
+                # Downloading the feature tables needs ephysatlas; without it (and no cached
+                # tables) there are simply no features for this insertion.
+                logger.warning(
+                    'ephysatlas is not installed; cannot download ephys-atlas feature tables. '
+                    'No features will be available for this insertion.'
+                )
+                return pd.DataFrame()
+            self.download_features(project, feature, save_path)
+
+        data = pd.read_parquet(
+            model_path.joinpath('agg_full', 'df_all_cols_merged.pqt')
+        ).reset_index()
+
+        return data[data['pid'] == self.pid]
+
+
+class FeatureLoaderLocal(FeatureLoader):
+    """
+    Feature loader using the local file system.
+
+    Mirrors :class:`FeatureLoaderOne` but reads a single per-channel feature parquet from disk
+    instead of downloading the ephys-atlas feature table via ONE. Used in offline/yaml mode where
+    the features file is supplied directly (e.g. by the local channel-prediction plugin dialog or
+    the launcher script).
+
+    Parameters
+    ----------
+    features_path : Path
+        Path to a per-channel features parquet file (one row per channel).
+    """
+
+    def __init__(self, features_path: Path):
+
+        self.features_path: Path = Path(features_path)
+
+    def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
+        """
+        Load the per-channel features parquet from disk.
+
+        A single features file may hold every channel of a multi-shank probe. When ``shank_sites``
+        is given, the rows are split down to this shank by matching the file's ``channel`` column
+        against ``shank_sites['raw_ind']`` (the raw-data channel indices for the shank). For a
+        single-shank file (or a file already restricted to this shank) this is a no-op.
+
+        Parameters
+        ----------
+        shank_sites : Bunch or None
+            The sites for the shank being loaded (see
+            :meth:`GeometryLoader.get_sites_for_shank`). When None the full file is returned.
+
+        Returns
+        -------
+        feature_data: Bunch
+            A Bunch with ``df`` (the features DataFrame) and ``exists=True`` if the file was
+            found and non-empty, otherwise ``Bunch(exists=False)``.
+        """
+        # The local file is flat (unlike the S3 multi-index table), so we neither filter by pid nor
+        # reset the index here. ``infer_regions`` selects the columns it needs via the model's
+        # FEATURES list, so the (per-shank) DataFrame is passed through as-is.
+        if not self.features_path.is_file():
+            logger.warning('Local features file not found: %s', self.features_path)
+            return Bunch(exists=False)
+
+        data = pd.read_parquet(self.features_path)
+
+        if shank_sites is not None and 'channel' in data.columns:
+            data = data[data['channel'].isin(shank_sites['raw_ind'])]
+
+        return Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)

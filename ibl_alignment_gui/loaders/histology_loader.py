@@ -346,6 +346,87 @@ def make_slice_loader(
     return NrrdSliceLoader(file_path, brain_atlas)
 
 
+class TiffSliceLoader(SliceLoader):
+    """
+    SliceLoader for histology in TIFF format (e.g. brainreg outputs).
+
+    Detects brainreg's standard ``C0`` (green) / ``C1`` (red) channel
+    suffixes first, then falls back to the NRRD loader's ``GR`` / ``RD``
+    substring rules so manually-named TIFFs also load.
+
+    Parameters
+    ----------
+    file_path : Path
+        Directory containing ``.tif`` / ``.tiff`` files.
+    brain_atlas : AllenAtlas
+        Brain atlas for alignment.
+    """
+
+    def __init__(self, file_path: Path, brain_atlas: AllenAtlas):
+        super().__init__(file_path, brain_atlas)
+
+    def get_paths(self) -> None:
+        """Locate histology TIFFs and store paths keyed by display label."""
+        # Brainreg writes both `.tif` and `.tiff` depending on version.
+        files = list(self.file_path.glob('*.tif')) + list(self.file_path.glob('*.tiff'))
+
+        brainreg_map = {'green': 'C0', 'red': 'C1'}
+
+        # Preferred: brainreg files in Allen CCF space — filename contains 'standard'.
+        # (Subject-space brainreg outputs share the same C0/C1 suffix but are not in
+        # atlas coordinates, so we must not match them when standard ones exist.)
+        standard_files = [f for f in files if 'standard' in f.stem]
+        for color, abbrev in brainreg_map.items():
+            match = next((f for f in standard_files if abbrev in f.stem), None)
+            if match:
+                self.hist_paths[f'Histology {color}'] = match
+
+        # Fallback 1: any brainreg-style C0/C1 file (e.g. user only kept subject-space).
+        for color, abbrev in brainreg_map.items():
+            label = f'Histology {color}'
+            if label in self.hist_paths:
+                continue
+            match = next((f for f in files if abbrev in f.stem), None)
+            if match:
+                self.hist_paths[label] = match
+
+        # Fallback 2: generic GR/RD substring (mirrors NrrdSliceLoader convention)
+        # so users with manually-renamed TIFFs do not need brainreg-style names.
+        generic_map = {'green': 'GR', 'red': 'RD'}
+        for color, abbrev in generic_map.items():
+            label = f'Histology {color}'
+            if label in self.hist_paths:
+                continue
+            match = next((f for f in files if abbrev in f.stem), None)
+            if match:
+                self.hist_paths[label] = match
+
+    def load_volume(self, vol_path: Path) -> np.ndarray:
+        """
+        Load a TIFF and reorient to AllenAtlas (AP, ML, DV) convention.
+
+        Parameters
+        ----------
+        vol_path : Path
+            A path to a histology TIFF volume.
+
+        Returns
+        -------
+        np.ndarray
+            Loaded volume with shape ``(AP, ML, DV)`` ready for slicing by
+            :meth:`SliceLoader.get_slice`.
+
+        Notes
+        -----
+        Brainreg's ``downsampled_standard_brain_C*.tiff`` are 25 µm
+        isotropic in Allen CCF space, with ``sitk.GetArrayFromImage`` axis
+        order ``(AP, DV, ML)``. The AllenAtlas convention is ``(AP, ML, DV)``,
+        so a single axis swap suffices — no flips required.
+        """
+        arr = sitk.GetArrayFromImage(sitk.ReadImage(str(vol_path)))
+        return np.transpose(arr, (0, 2, 1))
+
+
 def download_histology_data(
     subject: str, laboratory: str
 ) -> tuple[list[Path], Path] | tuple[None, Path]:

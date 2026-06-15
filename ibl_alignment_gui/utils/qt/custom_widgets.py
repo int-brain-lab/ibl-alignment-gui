@@ -753,8 +753,6 @@ class ButtonWidget(QtWidgets.QWidget):
         """Create the buttons and labels."""
         # Button to apply interpolation
         self.buttons['fit'] = QtWidgets.QPushButton('Fit')
-        # Button to apply offset
-        self.buttons['offset'] = QtWidgets.QPushButton('Offset')
         # String to display current move index
         self.labels['current'] = QtWidgets.QLabel()
         # String to display total number of moves
@@ -773,7 +771,6 @@ class ButtonWidget(QtWidgets.QWidget):
         # Layout rows
         hlayout1 = QtWidgets.QHBoxLayout()
         hlayout1.addWidget(self.buttons['fit'], stretch=1)
-        hlayout1.addWidget(self.buttons['offset'], stretch=1)
         hlayout1.addWidget(QtWidgets.QLabel(), stretch=2)
         hlayout2 = QtWidgets.QHBoxLayout()
         hlayout2.addWidget(self.buttons['previous'], stretch=1)
@@ -1153,6 +1150,10 @@ class LutWidget(pg.GraphicsLayoutWidget):
             self.lut_layout.removeItem(self.slice_lut)
             self.lut_status = False
 
+    def reset_lut_levels(self) -> None:
+        """Clear stored LUT levels so the next set_lut call computes fresh levels."""
+        self.lut_levels = None
+
     def set_lut_levels(self, levels: list | tuple | None = None) -> None:
         """
         Apply the specified intensity levels to all linked images and update the LUT.
@@ -1213,7 +1214,7 @@ class MenuWidget(QtWidgets.QMenuBar):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'feature', 'slice', 'filter']:
+        for group in ['image', 'line', 'probe', 'feature', 'slice', 'region', 'filter']:
             self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)

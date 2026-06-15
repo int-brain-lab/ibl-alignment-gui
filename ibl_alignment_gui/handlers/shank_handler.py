@@ -27,9 +27,10 @@ class ShankHandler:
         self.shank_idx: int = shank_idx
         self.loaders: Bunch = loaders
         self.loaders['align'].load_previous_alignments()
-        self.loaders['align'].get_starting_alignment(0)
+        self.loaders['align'].get_starting_alignment(self.loaders['align'].get_stored_alignment_idx())
         self.align_exists: bool = True
         self.data_loaded: bool = False
+        self.align_handle = None
 
     # -------------------------------------------------------------------------
     # Alignment loader - attributes and methods in loaders['align']
@@ -55,10 +56,6 @@ class ShankHandler:
     # -------------------------------------------------------------------------
     # Alignment handler - attributes and methods in align_handle
     # -------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`AlignmentHandler.offset_hist_data` for details."""
-        self.align_handle.offset_hist_data(*args)
-
     def scale_hist_data(self, *args, **kwargs) -> None:
         """See :meth:`AlignmentHandler.scale_hist_data` for details."""
         self.align_handle.scale_hist_data(*args, **kwargs)
@@ -283,11 +280,12 @@ class ShankHandler:
         self.raw_data = self.loaders['data'].get_data(shank_sites)
 
         # Load in the raw data snippets
-        self.raw_data['raw_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_ap_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_lf_snippets'] = self.loaders['ephys'].load_lf_snippets()
 
         # Load in the features data
         if self.loaders.get('features', None) is not None:
-            self.raw_data['features'] = self.loaders['features'].load_features()
+            self.raw_data['features'] = self.loaders['features'].load_features(shank_sites)
         else:
             self.raw_data['features'] = Bunch(exists=False)
 

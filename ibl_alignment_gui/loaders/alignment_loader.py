@@ -36,6 +36,7 @@ class AlignmentLoader(ABC):
         self.alignment_keys: list = ['original']
         self.feature_prev: np.ndarray | None = None
         self.track_prev: np.ndarray | None = None
+        self.stored_alignment_key: str | None = None
 
     @abstractmethod
     def load_alignments(self) -> dict[str, Any] | None:
@@ -92,6 +93,22 @@ class AlignmentLoader(ABC):
             self.feature_prev = np.array(self.alignments[self.alignment_keys[idx]][0])
             self.track_prev = np.array(self.alignments[self.alignment_keys[idx]][1])
 
+    def get_stored_alignment_idx(self) -> int:
+        """
+        Return the index of the stored (resolved) alignment in the alignment keys list.
+
+        If no stored alignment is set or the stored key is not present in the current
+        alignment keys, returns 0 (i.e. the most recent alignment).
+
+        Returns
+        -------
+        int
+            Index of the stored alignment in ``self.alignment_keys``, or 0 if not found.
+        """
+        if self.stored_alignment_key is None or self.stored_alignment_key not in self.alignment_keys:
+            return 0
+        return self.alignment_keys.index(self.stored_alignment_key)
+
     def add_extra_alignments(self, extra_alignments: dict[str, Any]) -> list[str]:
         """
         Add additional alignment data.
@@ -143,6 +160,10 @@ class AlignmentLoaderOne(AlignmentLoader):
         self.traj_id: str | None = None
 
         super().__init__(user=user)
+
+        self.stored_alignment_key: str | None = (
+            insertion['json'].get('extended_qc', {}).get('alignment_stored')
+        )
 
     def load_xyz_picks(self) -> np.ndarray | None:
         """

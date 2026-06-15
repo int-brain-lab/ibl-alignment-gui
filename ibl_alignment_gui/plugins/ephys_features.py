@@ -263,7 +263,9 @@ class EphysFeatureView(PopupWindow):
         image.setLevels((levels[0], levels[1]))
         fig_probe.addItem(image)
 
-        fig_probe.setXRange(min=data['xrange'][0], max=data['xrange'][1], padding=0)
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
+        fig_probe.setXRange(min=float(data['xrange'][0]), max=float(data['xrange'][1]), padding=0)
         if self.aligned:
             fig_probe.setYRange(min=-1000, max=1000)
         else:

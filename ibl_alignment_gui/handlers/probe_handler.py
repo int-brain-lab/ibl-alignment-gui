@@ -44,7 +44,6 @@ from one.api import ONE
 
 try:
     import ephysatlas.data
-
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -467,6 +466,8 @@ class ProbeHandlerONE(ProbeHandler):
         self.spike_collection = spike_collection
         if EPHYS_ATLAS:
             self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        else:
+            self.ea_model = None
 
         super().__init__(brain_atlas)
 
@@ -602,9 +603,10 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-            loaders['features'] = FeatureLoaderOne(
-                ins, self.one, self.ea_model, multi_area=self.lab == 'steinmetzlab'
-            )
+            if EPHYS_ATLAS:
+                loaders['features'] = FeatureLoaderOne(
+                    ins, self.one, self.ea_model, multi_area=self.lab == 'steinmetzlab'
+                )
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
@@ -643,6 +645,8 @@ class ProbeHandlerCSV(ProbeHandler):
         self.selected_config = 'quarter'
         if EPHYS_ATLAS:
             self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        else:
+            self.ea_model = None
 
     def get_subjects(self) -> np.ndarray:
         """

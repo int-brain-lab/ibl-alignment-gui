@@ -18,8 +18,9 @@ from iblutil.util import Bunch
 
 try:
     import ephysatlas.features
+    EPHYS_ATLAS = True
 except ImportError:
-    pass
+    EPHYS_ATLAS = False
 
 logger = logging.getLogger(__name__)
 
@@ -1460,6 +1461,9 @@ class PlotLoader:
         Dict
             A dict containing multiple ProbeData objects with keys according to features.
         """
+        if not EPHYS_ATLAS:
+            return {}
+
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
         chn_coords['localCoordinates'] = np.c_[

@@ -23,8 +23,9 @@ from one.remote import aws
 
 try:
     import ephysatlas.data
+    EPHYS_ATLAS = True
 except ImportError:
-    pass
+    EPHYS_ATLAS = False
 
 logger = logging.getLogger(__name__)
 
@@ -1041,6 +1042,14 @@ class FeatureLoaderOne(FeatureLoader):
         model_path = save_path.joinpath(project, feature)
 
         if not model_path.exists():
+            if not EPHYS_ATLAS:
+                # Downloading the feature tables needs ephysatlas; without it (and no cached
+                # tables) there are simply no features for this insertion.
+                logger.warning(
+                    'ephysatlas is not installed; cannot download ephys-atlas feature tables. '
+                    'No features will be available for this insertion.'
+                )
+                return pd.DataFrame()
             self.download_features(project, feature, save_path)
 
         data = pd.read_parquet(

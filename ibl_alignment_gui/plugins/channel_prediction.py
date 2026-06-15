@@ -61,11 +61,13 @@ def setup(controller: 'AlignmentGUIController') -> None:
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
-    for label, handler in (
-        ('Load inference model', _load_inference_model),
-        ('Load spatial model',   _load_spatial_model),
-        ('Load features file…',  _set_local_features),
-    ):
+    menu_actions = [('Load inference model', _load_inference_model)]
+    # The spatial encoder needs torch; only offer it when torch is installed.
+    if importlib.util.find_spec('torch') is not None:
+        menu_actions.append(('Load spatial model', _load_spatial_model))
+    menu_actions.append(('Load features file…', _set_local_features))
+
+    for label, handler in menu_actions:
         action = QtWidgets.QAction(label, controller.view)
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)

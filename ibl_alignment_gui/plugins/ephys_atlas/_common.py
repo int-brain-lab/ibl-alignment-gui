@@ -208,7 +208,9 @@ def _get_features_df(
         features_path = plugin_state(controller).get('features_path')
         if features_path is None:
             return None
-        feats = FeatureLoaderLocal(features_path).load_features()
+        # Split a combined features file down to this shank using its raw channel indices.
+        shank_sites = items.model.loaders['geom'].get_sites_for_shank(items.model.shank_idx)
+        feats = FeatureLoaderLocal(features_path).load_features(shank_sites)
         items.model.raw_data['features'] = feats
         if not feats.get('exists', False):
             return None

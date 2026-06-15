@@ -963,8 +963,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
             other ProbeHandlers so the controller can call it uniformly.
         """
         if len(self.probes) == 1:
-            dp = self.data_paths[self.default_config][self.probes[0]]
-            geom = GeometryLoaderLocal(dp)
+            data_path = self.data_paths[self.default_config][self.probes[0]]
+            geom = GeometryLoaderLocal(data_path)
             geom.get_geometry()
             # Shank count comes from the ALF channels object when present, else from the SpikeGLX
             # meta (e.g. external datasets with no spike sorting), mirroring the fallback used in
@@ -997,8 +997,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
     def download_histology(self) -> SliceLoader:
         """Load in the histology slice data, auto-detecting TIFF (e.g. brainreg) vs NRRD."""
-        dp = self.data_paths[self.selected_config][self.probes[0]]
-        return _build_slice_loader(dp.histology, self.brain_atlas)
+        data_path = self.data_paths[self.selected_config][self.probes[0]]
+        return _build_slice_loader(data_path.histology, self.brain_atlas)
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
@@ -1014,22 +1014,23 @@ class ProbeHandlerLocalYaml(ProbeHandler):
             probe = self.probes[0] if single_probe else shank
 
             for config in self.configs:
-                dp = self.data_paths[config][probe]
+                data_path = self.data_paths[config][probe]
 
                 loaders = Bunch()
-                loaders['geom'] = GeometryLoaderLocal(dp)
-                loaders['data'] = DataLoaderLocal(dp)
+                loaders['geom'] = GeometryLoaderLocal(data_path)
+                loaders['data'] = DataLoaderLocal(data_path)
                 loaders['align'] = AlignmentLoaderLocal(
-                    dp.picks or dp.spike_sorting, ishank, self.n_shanks
+                    data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
                 )
                 loaders['upload'] = AlignmentUploaderLocal(
-                    dp.output, ishank, self.n_shanks, self.brain_atlas
+                    data_path.output, ishank, self.n_shanks, self.brain_atlas
                 )
-                loaders['ephys'] = SpikeGLXLoaderLocal(dp.raw_ephys)
+                loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
                 # Per-session features (if the yaml specifies them) load via the existing
                 # shank_handler.load_data -> loaders['features'] path, so the session is
                 # self-contained and switching yaml switches the features too.
-                if dp.features is not None:
-                    loaders['features'] = FeatureLoaderLocal(dp.features)
+                # TODO pass in geometry
+                if data_path.features is not None:
+                    loaders['features'] = FeatureLoaderLocal(data_path.features)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank][config] = ShankHandler(loaders, ishank)

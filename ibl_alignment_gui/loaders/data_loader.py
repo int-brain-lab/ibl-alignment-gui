@@ -983,8 +983,16 @@ class FeatureLoader(ABC):
     """Abstract base class for loading ephys atlas features."""
 
     @abstractmethod
-    def load_features(self) -> Bunch[str, Any]:
-        """Abstract method to load ephys atlas features."""
+    def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
+        """Abstract method to load ephys atlas features.
+
+        Parameters
+        ----------
+        shank_sites : Bunch or None
+            The sites for the shank being loaded (see
+            :meth:`GeometryLoader.get_sites_for_shank`). When given, implementations that read a
+            combined multi-shank file use it to keep only this shank's channels.
+        """
 
 
 class FeatureLoaderOne(FeatureLoader):
@@ -1001,9 +1009,15 @@ class FeatureLoaderOne(FeatureLoader):
         self.feature_version: str = feature_version
         self.multi_area: bool = multi_area
 
-    def load_features(self) -> Bunch[str, Any]:
+    def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
         """
         Load ephys atlas features from ONE.
+
+        Parameters
+        ----------
+        shank_sites : Bunch or None
+            Unused here — the ONE table is already filtered to this insertion's ``pid``. Accepted
+            to keep the :class:`FeatureLoader` interface uniform across loaders.
 
         Returns
         -------
@@ -1078,9 +1092,20 @@ class FeatureLoaderLocal(FeatureLoader):
 
         self.features_path: Path = Path(features_path)
 
-    def load_features(self) -> Bunch[str, Any]:
+    def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
         """
         Load the per-channel features parquet from disk.
+
+        A single features file may hold every channel of a multi-shank probe. When ``shank_sites``
+        is given, the rows are split down to this shank by matching the file's ``channel`` column
+        against ``shank_sites['raw_ind']`` (the raw-data channel indices for the shank). For a
+        single-shank file (or a file already restricted to this shank) this is a no-op.
+
+        Parameters
+        ----------
+        shank_sites : Bunch or None
+            The sites for the shank being loaded (see
+            :meth:`GeometryLoader.get_sites_for_shank`). When None the full file is returned.
 
         Returns
         -------
@@ -1088,13 +1113,16 @@ class FeatureLoaderLocal(FeatureLoader):
             A Bunch with ``df`` (the features DataFrame) and ``exists=True`` if the file was
             found and non-empty, otherwise ``Bunch(exists=False)``.
         """
-        # The local file is already per-probe and flat (unlike the S3 multi-index table), so we
-        # neither filter by pid nor reset the index here. ``infer_regions`` selects the columns it
-        # needs via the model's FEATURES list, so the full DataFrame is passed through as-is.
+        # The local file is flat (unlike the S3 multi-index table), so we neither filter by pid nor
+        # reset the index here. ``infer_regions`` selects the columns it needs via the model's
+        # FEATURES list, so the (per-shank) DataFrame is passed through as-is.
         if not self.features_path.is_file():
             logger.warning('Local features file not found: %s', self.features_path)
             return Bunch(exists=False)
 
         data = pd.read_parquet(self.features_path)
+
+        if shank_sites is not None and 'channel' in data.columns:
+            data = data[data['channel'].isin(shank_sites['raw_ind'])]
 
         return Bunch(exists=False) if len(data) == 0 else Bunch(df=data, exists=True)

@@ -289,7 +289,7 @@ class ShankHandler:
 
         # Load in the features data
         if self.loaders.get('features', None) is not None:
-            self.raw_data['features'] = self.loaders['features'].load_features()
+            self.raw_data['features'] = self.loaders['features'].load_features(shank_sites)
         else:
             self.raw_data['features'] = Bunch(exists=False)
 

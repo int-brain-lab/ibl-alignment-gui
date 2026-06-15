@@ -77,8 +77,6 @@ def setup(controller: 'AlignmentGUIController') -> None:
     )
 
 def _set_local_features(controller: 'AlignmentGUIController') -> None:
-    # TODO we need to make this work with 4 shanks, if the feature files are all in individual folders
-    # Alternatively if it is one feature file we need to split per shank
     """Prompt for a per-channel features parquet and use it for inference."""
     import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
     parent = controller.view
@@ -88,18 +86,22 @@ def _set_local_features(controller: 'AlignmentGUIController') -> None:
         return
 
     path = Path(chosen)
-    feats = FeatureLoaderLocal(path).load_features()
-    if not feats.get('exists', False):
+    loader = FeatureLoaderLocal(path)
+    if not loader.load_features().get('exists', False):
         QtWidgets.QMessageBox.warning(parent, PLUGIN_NAME, f'No features found in:\n{path}')
         return
 
     controller.plugins[PLUGIN_NAME]['features_path'] = path
-    # Inject into any already-loaded shanks so inference (and re-runs) use the new file; if data
-    # is not loaded yet, ephys_atlas.inference._get_features_df will load it lazily from this path.
+    # Inject into any already-loaded shanks so inference (and re-runs) use the new file; a single
+    # combined file is split per shank via shank_sites['raw_ind']. If data is not loaded yet,
+    # ephys_atlas._common._get_features_df will load (and split) it lazily from this path.
     for shank_dict in controller.model.shanks.values():
         for shank_handler in shank_dict.values():
             if getattr(shank_handler, 'raw_data', None) is not None:
-                shank_handler.raw_data['features'] = feats
+                shank_sites = shank_handler.loaders['geom'].get_sites_for_shank(
+                    shank_handler.shank_idx
+                )
+                shank_handler.raw_data['features'] = loader.load_features(shank_sites)
     inference.invalidate_predictions(controller)
     logger.info('Local features file set to %s', path)
 

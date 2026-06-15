@@ -302,6 +302,24 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         if option:
             self.menu_widgets.find_actions(option, self.menu_widgets.tabs[tab]['group']).trigger()
 
+    def has_menu_option(self, tab: str, option: str) -> bool:
+        """Return whether an option already exists in a menu tab's action group.
+
+        Parameters
+        ----------
+        tab : str
+            The name of the tab.
+        option : str
+            The option label to look for.
+
+        Returns
+        -------
+        bool
+            True if the option is present in the tab, else False.
+        """
+        mw = self.menu_widgets
+        return mw.find_actions(option, mw.tabs[tab]['group']) is not None
+
     def toggle_menu_option(self, tab: str, direction: int) -> None:
         """
         Toggle through the options in an action group stored in the menubar.

@@ -48,6 +48,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     needs_reload,
     plugin_state,
     s3_cache_root,
+    _get_features_df
 )
 from ibl_alignment_gui.utils.utils import shank_loop
 
@@ -261,7 +262,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
                 controller.view, 'Channel Prediction',
-                'Load a features file first via "Load features file…" before loading a model.')
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
             return False
         dialog = _SpatialModelDialog(
             controller.view, 'Load Spatial Model',
@@ -272,7 +273,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
                 controller.view, 'Channel Prediction',
-                'No features found for this insertion.')
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
             return False
         dialog = _SpatialModelDialog(
             controller.view, 'Load Spatial Model', options=S3_MODEL_NAMES, current=MODEL_VINTAGE,
@@ -364,7 +365,7 @@ def _selection_error(
     if enc_dir is not None and not validate_encoder_folder(enc_dir):
         return f'No "SE_model_*.pt" found under:\n{enc_dir}'
     if enc_data is not None and not validate_feature_folder(enc_data):
-        return f'No feature tables (raw_ephys_features*.pqt) found under:\n{enc_data}'
+        return f'No features table (raw_ephys_features*.pqt) found under:\n{enc_data}'
     # Local folders are all-or-nothing; offline (no dropdown) requires the full pair.
     if (enc_dir is not None) != (enc_data is not None):
         return 'Select both a model dir and a feature dir, or pick a model from the dropdown.'
@@ -626,7 +627,7 @@ def load_alignment_engine(
             raise RuntimeError(f'No "SE_model_*.pt" found under the given model path: {model_path}')
 
         if not validate_feature_folder(data_path):
-            raise RuntimeError(f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) found under the given data path: {data_path}')
+            raise RuntimeError(f'No features table (raw_ephys_features*.pqt) found under the given data path: {data_path}')
 
         plugin['local_encoder_dir'] = model_path
         plugin['local_encoder_data'] = data_path
@@ -765,8 +766,6 @@ def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
 # Feature & geometry utils
 # -----------------------------------------------------------------------------
 def _extract_recorded_features(items):
-    if not items.model.raw_data['features']['exists']:
-        raise RuntimeError('No raw ephys feature table is available for this insertion.')
 
     df = items.model.raw_data['features']['df'].copy()
     df = df.sort_values('axial_um', ascending=True).reset_index(drop=True)
@@ -1427,14 +1426,15 @@ def predict(controller, items):
         # User cancelled the load dialog; nothing to predict with.
         return None
 
-    try:
-        recorded_full, df = _extract_recorded_features(items)
-    except RuntimeError as e:
-        print(e)
-        print(
-            'Could not extract ephys feature table. The automated alignment would not be computed'
+    df = _get_features_df(controller, items)
+    if df is None:
+        QtWidgets.QMessageBox.warning(
+            controller.view, 'Channel Prediction',
+            'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
         )
         return None
+
+    recorded_full, df = _extract_recorded_features(items)
 
     # align() expects the native GUI/histology trace order. Do not reverse here.
     xyz_samples = items.model.align_handle.xyz_samples.copy().astype(np.float32)

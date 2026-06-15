@@ -18,6 +18,9 @@ from typing import TYPE_CHECKING
 
 from iblutil.util import Bunch
 from one.api import ONE
+import pandas as pd
+
+from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController
@@ -42,6 +45,28 @@ def plugin_state(controller: AlignmentGUIController) -> Bunch:
         The plugin's mutable state container.
     """
     return controller.plugins[PLUGIN_KEY]
+
+
+def is_model_loaded(controller: AlignmentGUIController, state_key: str) -> bool:
+    """Return whether a model has been loaded under ``state_key`` on the plugin.
+
+    Light enough to call without importing the (heavy) backend module: it only reads the cached
+    plugin state.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    state_key : str
+        The plugin-state key the backend caches its model under (its ``MODEL_NAME``).
+
+    Returns
+    -------
+    bool
+        True when a model is cached under ``state_key``, else False.
+    """
+    state = plugin_state(controller).get(state_key)
+    return bool(state) and state.get('model') is not None
 
 
 def has_features(controller: AlignmentGUIController) -> bool:
@@ -154,3 +179,37 @@ def clear_predictions(items: ShankController, *keys: str) -> None:
     if preds:
         for key in keys:
             preds.pop(key, None)
+
+
+def _get_features_df(
+    controller: AlignmentGUIController, items: ShankController
+) -> pd.DataFrame | None:
+    """Return the per-channel features DataFrame for a shank, or None if unavailable.
+
+    Uses the already-loaded features (online ONE path) when present. Otherwise, in offline/yaml
+    mode where no features loader exists, loads them from the local parquet configured on the
+    plugin (``features_path``) and injects the result into ``raw_data['features']`` so the rest of
+    the inference path is unchanged.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    items : ShankController
+        The shank being predicted on.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The features DataFrame, or None when no features are available.
+    """
+    feats = items.model.raw_data.get('features')
+    if feats is None or not feats.get('exists', False):
+        features_path = plugin_state(controller).get('features_path')
+        if features_path is None:
+            return None
+        feats = FeatureLoaderLocal(features_path).load_features()
+        items.model.raw_data['features'] = feats
+        if not feats.get('exists', False):
+            return None
+    return feats['df']

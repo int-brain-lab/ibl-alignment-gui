@@ -9,6 +9,7 @@ import numpy as np
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
+from ibl_alignment_gui.plugins.ephys_atlas._common import is_model_loaded
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
 from iblatlas.atlas import AllenAtlas
@@ -27,6 +28,14 @@ PLUGIN_NAME = 'Channel Prediction'
 
 # Track depths are stored along the histology track in meters; region plots expect microns.
 M_TO_UM = 1e6
+
+# Region-plot dropdown options contributed by loadable models. Each entry maps the plugin-state
+# key the backend caches its model under (its ``MODEL_NAME``) to the region keys it enables, plus
+# whether torch is required. In offline mode an option is only shown once its model is loaded.
+_MODEL_OPTIONS = (
+    ('Encoding', ['Spatial Encoder'], True),
+    ('Inference', ['Inference Model', 'Inference Cumulative'], False),
+)
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -61,21 +70,9 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)
 
-    # TODO add these so they are only added once the model has been loaded
-    def _add_model_options(controller=controller):
-        # All models are offline-capable from local assets: the inference (xgboost) model via a
-        # local model dir, and the Spatial Encoder via a local encoder dir + bank dir (set through
-        # the dialogs above). They fall back to S3/ONE only when no local source is set.
-        model_keys = []
-        if importlib.util.find_spec('torch') is not None:
-            model_keys.append('Spatial Encoder')
-        model_keys.append('Inference Model')
-        model_keys.append('Inference Cumulative')
-        controller.view.populate_menu_tab(
-            'region', controller.plot_region_ref_panels, model_keys, set_checked=False
-        )
-
-    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = _add_model_options
+    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = partial(
+        _on_data_loaded, controller
+    )
 
 def _set_local_features(controller: 'AlignmentGUIController') -> None:
     # TODO we need to make this work with 4 shanks, if the feature files are all in individual folders
@@ -106,17 +103,65 @@ def _set_local_features(controller: 'AlignmentGUIController') -> None:
 
 
 def _load_inference_model(controller: 'AlignmentGUIController') -> None:
-    """Load inference model via GUI dialog; invalidate cache and refresh on success."""
+    """Load inference model via GUI dialog; reveal its region options and refresh on success."""
     import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
     if inference.load_model_dialog(controller):
+        # Reveal the now-loaded model's region options (offline only adds them once loaded).
+        _refresh_model_options(controller)
         controller.view.trigger_menu_option('region', inference.PREDICTION_KEY)
 
 
 def _load_spatial_model(controller: 'AlignmentGUIController') -> None:
-    """Load the spatial model via dialog (builds the engine); invalidate cache and refresh."""
+    """Load the spatial model via dialog; reveal its region option and refresh on success."""
     import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
     if spatial.load_model_dialog(controller):
+        # Reveal the now-loaded model's region option (offline only adds it once loaded).
+        _refresh_model_options(controller)
         controller.view.trigger_menu_option('region', spatial.PREDICTION_KEY)
+
+
+def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
+    """Data-load hook: reset per-session plugin state and expose available model region options.
+
+    Runs on every data load (i.e. each new session). Drops any manual features override so it does
+    not leak across sessions (each session supplies its own features), then refreshes which model
+    region-plot options are offered.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    """
+    controller.plugins[PLUGIN_NAME]['features_path'] = None
+    _refresh_model_options(controller)
+
+
+def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
+    """Add the region-plot options for models that should currently be available.
+
+    Online, every model's option is offered (the model loads on demand). Offline, an option is
+    added only once its model has been loaded, so the dropdown never lists a model the user cannot
+    run. Options already present are left untouched, so this is safe to call repeatedly (e.g. after
+    each successful model load and on every data reload).
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    """
+    new_keys = []
+    for state_key, region_keys, needs_torch in _MODEL_OPTIONS:
+        if needs_torch and importlib.util.find_spec('torch') is None:
+            continue
+        if controller.offline and not is_model_loaded(controller, state_key):
+            continue
+        new_keys.extend(
+            key for key in region_keys if not controller.view.has_menu_option('region', key)
+        )
+    if new_keys:
+        controller.view.populate_menu_tab(
+            'region', controller.plot_region_ref_panels, new_keys, set_checked=False
+        )
 
 
 class ChannelPrediction:

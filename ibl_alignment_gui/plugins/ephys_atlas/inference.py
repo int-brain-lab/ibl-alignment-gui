@@ -20,7 +20,6 @@ from qtpy import QtWidgets
 
 from one.api import ONE
 
-from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     clear_predictions,
     has_features,
@@ -28,6 +27,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     needs_reload,
     plugin_state,
     s3_cache_root,
+    _get_features_df
 )
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.numerical import ismember
@@ -250,7 +250,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
                 controller.view, 'Channel Prediction',
-                'Load a features file first via "Load features file…" before loading a model.')
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
             return False
         dialog = _InferenceModelDialog(
             controller.view, 'Load Inference Model', current_dir=current_dir)
@@ -260,7 +260,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
                 controller.view, 'Channel Prediction',
-                'No features found for this insertion.')
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
             return False
         dialog = _InferenceModelDialog(
             controller.view, 'Load Inference Model', S3_MODEL_NAMES,
@@ -605,41 +605,6 @@ def validate_model_folder(model_dir: Path) -> bool:
         or model_dir.joinpath('FOLD00').is_dir()
     )
 
-
-def _get_features_df(
-    controller: AlignmentGUIController, items: ShankController
-) -> pd.DataFrame | None:
-    """Return the per-channel features DataFrame for a shank, or None if unavailable.
-
-    Uses the already-loaded features (online ONE path) when present. Otherwise, in offline/yaml
-    mode where no features loader exists, loads them from the local parquet configured on the
-    plugin (``features_path``) and injects the result into ``raw_data['features']`` so the rest of
-    the inference path is unchanged.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank being predicted on.
-
-    Returns
-    -------
-    pandas.DataFrame or None
-        The features DataFrame, or None when no features are available.
-    """
-    feats = items.model.raw_data.get('features')
-    if feats is None or not feats.get('exists', False):
-        features_path = plugin_state(controller).get('features_path')
-        if features_path is None:
-            return None
-        feats = FeatureLoaderLocal(features_path).load_features()
-        items.model.raw_data['features'] = feats
-        if not feats.get('exists', False):
-            return None
-    return feats['df']
-
-
 # -----------------------------------------------------------------------------
 # Model prediction
 # -----------------------------------------------------------------------------
@@ -678,12 +643,12 @@ def _fold_mean_probas(
     if df is None:
         # Online the model loads without a features file (no offline guard runs), so warn here
         # when the insertion has no features available either on the plugin or in the loaded data.
-        has_one, _ = has_one_connection(controller)
-        if has_one:
-            QtWidgets.QMessageBox.warning(
-                controller.view, 'Channel Prediction',
-                'No features found for this insertion.',
-            )
+        # has_one, _ = has_one_connection(controller)
+        # if has_one:
+        QtWidgets.QMessageBox.warning(
+            controller.view, 'Channel Prediction',
+            'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+        )
         return None
 
     df = validate_features(df, model.features)

@@ -977,12 +977,7 @@ class AlignmentGUIController:
         self.yaml = str(yaml_path)
         # Reuse the existing brain atlas so we do not re-download it for the new session.
         self.model = ProbeHandlerLocalYaml(self.yaml, brain_atlas=self.model.brain_atlas)
-        # The session is self-contained via the yaml; drop any dialog features override so the new
-        # session's yaml features take precedence. The model (Channel Prediction) is session
-        # independent and is intentionally left untouched.
-        plugin = self.plugins.get('Channel Prediction')
-        if plugin is not None:
-            plugin['features_path'] = None
+        # The features override is reset for every new session in data_button_pressed.
         self._load_current_session()
 
     def on_view_changed(self):

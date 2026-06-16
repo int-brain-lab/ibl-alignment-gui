@@ -36,6 +36,7 @@ from ibl_alignment_gui.loaders.histology_loader import (
     make_slice_loader,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
+from ibl_alignment_gui.loaders.transform_loader import TransformLoaderAllen
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
 from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
@@ -1052,8 +1053,19 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                 loaders['align'] = AlignmentLoaderLocal(
                     data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
                 )
+                # In the anatomical workflow a transforms folder warps channel locations into
+                # the Allen CCF; without it only atlas-space locations are saved.
+                transform_loader = (
+                    TransformLoaderAllen(data_path.transforms)
+                    if data_path.transforms is not None
+                    else None
+                )
                 loaders['upload'] = AlignmentUploaderLocal(
-                    data_path.output, ishank, self.n_shanks, self.brain_atlas
+                    data_path.output,
+                    ishank,
+                    self.n_shanks,
+                    self.brain_atlas,
+                    transform_loader=transform_loader,
                 )
                 loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
                 # Per-session features (if the yaml specifies them) load via the existing

@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 import ibllib.qc.critical_reasons as critical_note
+from ibl_alignment_gui.loaders.transform_loader import TransformLoader
 from iblatlas import atlas
 from iblatlas.atlas import AllenAtlas, BrainAtlas
 from ibllib.pipes import histology
@@ -317,6 +318,10 @@ class AlignmentUploaderLocal(AlignmentUploader):
         A BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical)
     user: str or None
         Username for tagging alignments.
+    transform_loader: TransformLoader or None
+        A TransformLoader used to additionally save channel locations in the Allen CCF
+        (used in the anatomical workflow). If None, only the atlas-space channel locations
+        are saved.
     """
 
     def __init__(
@@ -326,11 +331,13 @@ class AlignmentUploaderLocal(AlignmentUploader):
         n_shanks: int,
         brain_atlas: BrainAtlas,
         user: str | None = None,
+        transform_loader: TransformLoader | None = None,
     ):
         self.data_path: Path = data_path
         self.shank_idx: int = shank_idx
         self.n_shanks: int = n_shanks
         self.user: str | None = user
+        self.transform_loader: TransformLoader | None = transform_loader
         self.orig_idx: np.ndarray | None = None
         super().__init__(brain_atlas)
 
@@ -449,6 +456,9 @@ class AlignmentUploaderLocal(AlignmentUploader):
         """
         Get channel locations and save to local json file.
 
+        When a TransformLoader is available, the channel locations are additionally warped
+        into the Allen CCF and saved to a separate ``channel_locations_ccf`` json file.
+
         Parameters
         ----------
         data : dict
@@ -457,6 +467,53 @@ class AlignmentUploaderLocal(AlignmentUploader):
         brain_regions = self.get_brain_regions(data)
         channels = self.get_channels(brain_regions)
         self.save_channels(channels)
+
+        if self.transform_loader is not None and self.transform_loader.exists:
+            ccf_channels = self.get_ccf_channels(brain_regions, data['xyz_channels'])
+            self.save_channels(ccf_channels, suffix='_ccf')
+
+    def get_ccf_channels(
+        self, brain_regions: dict[str, Any], xyz_channels: np.ndarray
+    ) -> dict[str, dict]:
+        """
+        Create a channel dictionary with channel locations warped into the Allen CCF.
+
+        Mirrors :meth:`get_channels` but replaces the atlas-space x/y/z coordinates with the
+        CCF coordinates returned by the transform loader. The CCF coordinates are stored in
+        the native units of the registration output (not scaled to microns), and the bregma
+        origin is omitted, as the registration target defines its own coordinate system.
+
+        Parameters
+        ----------
+        brain_regions: dict
+            Information about location of electrode channels in brain atlas.
+        xyz_channels: np.ndarray
+            An (N, 3) array of channel locations in the atlas physical space (RAS, metres).
+
+        Returns
+        -------
+        channels : dict[str, dict]
+            Dictionary of dictionaries containing CCF data for each channel.
+        """
+        ccf_xyz = self.transform_loader.transform_to_ccf(xyz_channels, self.brain_atlas)
+
+        channel_dict = dict()
+        for i in np.arange(brain_regions.id.size):
+            channel = {
+                'x': np.float64(ccf_xyz[i, 0]),
+                'y': np.float64(ccf_xyz[i, 1]),
+                'z': np.float64(ccf_xyz[i, 2]),
+                'axial': np.float64(brain_regions.axial[i]),
+                'lateral': np.float64(brain_regions.lateral[i]),
+                'brain_region_id': int(brain_regions.id[i]),
+                'brain_region': brain_regions.acronym[i],
+            }
+            if self.orig_idx is not None:
+                channel['original_channel_idx'] = int(self.orig_idx[i])
+
+            channel_dict.update({'channel_' + str(i): channel})
+
+        return channel_dict
 
     def save_alignments(self, alignments: dict[str, Any]) -> None:
         """
@@ -475,7 +532,7 @@ class AlignmentUploaderLocal(AlignmentUploader):
 
         self._save_json_file(prev_align_filename, alignments)
 
-    def save_channels(self, channels: dict[str, dict]) -> None:
+    def save_channels(self, channels: dict[str, dict], suffix: str = '') -> None:
         """
         Save channel locations to local json file.
 
@@ -483,11 +540,14 @@ class AlignmentUploaderLocal(AlignmentUploader):
         ----------
         channels: dict[str, dict]
             Dictionary of dictionaries containing data for each channel
+        suffix: str
+            Suffix appended to the ``channel_locations`` filename stem (e.g. ``'_ccf'`` for
+            channel locations in the Allen CCF). Empty by default.
         """
         chan_loc_filename = (
-            'channel_locations.json'
+            f'channel_locations{suffix}.json'
             if self.n_shanks == 1
-            else f'channel_locations_shank{self.shank_idx + 1}.json'
+            else f'channel_locations{suffix}_shank{self.shank_idx + 1}.json'
         )
 
         self._save_json_file(chan_loc_filename, channels)

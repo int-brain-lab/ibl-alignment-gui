@@ -39,6 +39,10 @@ class DatasetPaths(BaseModel):
     features : Path | None
         Path to a per-channel ephys-features parquet file (used by the local channel-prediction
         plugin so the features travel with the session config).
+    transforms : Path | None
+        Path to a folder of registration transforms used to warp channel locations into the
+        Allen CCF (anatomical workflow only). When set, channel locations are additionally
+        saved in CCF coordinates.
     """
 
     spike_sorting: Path | None = None
@@ -51,6 +55,7 @@ class DatasetPaths(BaseModel):
     histology_space: str = 'ccf'
     output: Path | None = None
     features: Path | None = None
+    transforms: Path | None = None
 
 
 class Datasets(BaseModel):
@@ -286,6 +291,7 @@ def load_alignment_yaml(
                 'histology',
                 'output',
                 'features',
+                'transforms',
             ]:
                 path_value = get_path(dataset_name)
                 default_value = get_default_path(dataset_name)

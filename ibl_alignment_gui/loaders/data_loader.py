@@ -1052,7 +1052,46 @@ class FeatureLoaderOne(FeatureLoader):
         ephysatlas.data.download_tables(save_path, label=feature, project=project, one=self.one)
 
     def load_dataframe(self, project: str, feature: str, save_path: Path) -> pd.DataFrame:
+        """
+        Load the ephys-atlas feature table filtered to this insertion's ``pid``.
 
+        Parameters
+        ----------
+        project : str
+            The project name.
+        feature : str
+            The feature version label.
+        save_path : Path
+            Directory under which the ``<project>/<feature>`` tables are stored.
+
+        Returns
+        -------
+        pd.DataFrame
+            The feature table rows for this insertion's ``pid``.
+        """
+        data = self.read_full_dataframe(project, feature, save_path)
+
+        return data[data['pid'] == self.pid]
+
+    def read_full_dataframe(self, project: str, feature: str, save_path: Path) -> pd.DataFrame:
+        """
+        Read the full ephys-atlas feature table for all insertions, downloading if needed.
+
+        Parameters
+        ----------
+        project : str
+            The project name.
+        feature : str
+            The feature version label.
+        save_path : Path
+            Directory under which the ``<project>/<feature>`` tables are stored.
+
+        Returns
+        -------
+        pd.DataFrame
+            The full feature table across all insertions, or an empty frame if the tables are
+            not cached and ephysatlas is unavailable to download them.
+        """
         model_path = save_path.joinpath(project, feature)
 
         if not model_path.exists():
@@ -1066,11 +1105,9 @@ class FeatureLoaderOne(FeatureLoader):
                 return pd.DataFrame()
             self.download_features(project, feature, save_path)
 
-        data = pd.read_parquet(
+        return pd.read_parquet(
             model_path.joinpath('agg_full', 'df_all_cols_merged.pqt')
         ).reset_index()
-
-        return data[data['pid'] == self.pid]
 
 
 class FeatureLoaderLocal(FeatureLoader):

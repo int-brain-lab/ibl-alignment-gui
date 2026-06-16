@@ -602,17 +602,23 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     # --------------------------------------------------------------------------------------------
     # Upload dialog boxes
     # --------------------------------------------------------------------------------------------
-    def upload_prompt(self) -> bool:
+    def upload_prompt(self, shank: str | None = None) -> bool:
         """
         Show a message box to ask the user if they want to upload the channels and alignments.
+
+        Parameters
+        ----------
+        shank: str or None
+            The shank label to include in the prompt. If None, the prompt is not shank-specific.
 
         Returns
         -------
         bool:
             True if the user wants to upload the channels and alignments, False otherwise
         """
+        message = f'Upload alignment for {shank}?' if shank else 'Upload alignment?'
         upload = QtWidgets.QMessageBox.question(
-            self, '', 'Upload alignment?', QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            self, '', message, QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
         )
         return upload == QtWidgets.QMessageBox.Yes
 

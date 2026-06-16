@@ -1,6 +1,7 @@
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -63,12 +64,15 @@ class ProbeHandler(ABC):
 
     Parameters
     ----------
-    brain_atlas: BrainAtlas
-        A BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical).
+    brain_atlas: BrainAtlas or None
+        A pre-built BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical). If None, the atlas
+        is built lazily by :meth:`build_atlas` (run on a background thread as part of
+        :meth:`load_all`), so that the slow atlas construction does not block the GUI.
     """
 
     def __init__(self, brain_atlas: BrainAtlas | None = None):
-        self.brain_atlas: BrainAtlas = brain_atlas or AllenAtlas()
+        # Built lazily by build_atlas() (off the GUI thread) when not supplied up front.
+        self.brain_atlas: BrainAtlas | None = brain_atlas
         self.shanks: dict[str, Bunch] = defaultdict(Bunch)
 
         # Configuration state
@@ -367,19 +371,104 @@ class ProbeHandler(ABC):
     # -------------------------------------------------------------------------
     # Data loading & upload
     # -------------------------------------------------------------------------
-    def load_data(self) -> None:
-        """Download and load data for all configs and shanks."""
-        slice_loader = self.download_histology()
+    def _make_atlas(self) -> BrainAtlas:
+        """
+        Build the brain atlas to use for this probe handler.
+
+        The base implementation returns an Allen CCF atlas; subclasses override this to select a
+        different atlas (e.g. an anatomical atlas built from the session histology).
+
+        Returns
+        -------
+        BrainAtlas
+            The brain atlas instance.
+        """
+        return AllenAtlas()
+
+    def build_atlas(self) -> None:
+        """
+        Build the brain atlas if not already available, and share it with the shank uploaders.
+
+        Building the atlas (downloading/reading volumes) is slow, so this is called from
+        :meth:`load_all` on a background thread rather than in ``__init__``. The uploaders created
+        in ``initialise_shanks`` hold a reference to the atlas; because the atlas may not exist yet
+        at that point, this method (re)assigns the freshly built atlas onto each of them.
+        """
+        if self.brain_atlas is None:
+            self.brain_atlas = self._make_atlas()
         for probe in self.shanks:
             for config in self.configs:
+                upload = self.shanks[probe][config].loaders.get('upload')
+                if upload is not None:
+                    upload.brain_atlas = self.brain_atlas
+
+    def load_all(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
+        """
+        Build the atlas, then load all data and plots for the session.
+
+        This is the single entry point run on the background loading thread, so the slow atlas
+        construction, data loading and plot building all happen off the GUI thread.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` to report
+            progress. No-op when None.
+        """
+        if progress_callback is not None:
+            progress_callback('Building atlas…', 0, 0)
+        self.build_atlas()
+        self.load_data(progress_callback=progress_callback)
+        self.load_plots(progress_callback=progress_callback)
+
+    def load_data(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
+        """
+        Download and load data for all configs and shanks.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before
+            each loading step to report progress (e.g. to a GUI progress dialog). No-op when
+            None, so headless callers are unaffected.
+        """
+        total = len(self.shanks) * len(self.configs) + 1
+        if progress_callback is not None:
+            progress_callback('Downloading histology…', 0, total)
+        slice_loader = self.download_histology()
+        idx = 1
+        for probe in self.shanks:
+            for config in self.configs:
+                if progress_callback is not None:
+                    progress_callback(f'Loading {probe} ({config})…', idx, total)
                 self.shanks[probe][config].loaders['hist'] = slice_loader
                 self.shanks[probe][config].load_data()
+                idx += 1
 
-    def load_plots(self):
-        """Load plots for all configs and shanks."""
+    def load_plots(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
+        """
+        Load plots for all configs and shanks.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before
+            each loading step to report progress. No-op when None.
+        """
+        total = len(self.shanks) * len(self.configs)
+        idx = 0
         for probe in self.shanks:
             for config in self.configs:
+                if progress_callback is not None:
+                    progress_callback(f'Computing plots {probe} ({config})…', idx, total)
                 self.shanks[probe][config].load_plots()
+                idx += 1
 
     def upload_data(self) -> str:
         """
@@ -396,6 +485,41 @@ class ProbeHandler(ABC):
         for config in self.configs:
             info[config] = self.get_selected_shank()[config].upload_data()
         return info[self.default_config]
+
+    def upload_shanks(
+        self,
+        shanks: list[str],
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, str]:
+        """
+        Upload data for several shanks in turn.
+
+        Saving channels and alignments (and, online, registering tracks, running alignment QC and
+        writing to flatiron) is slow, so this is run on a background thread. Any per-shank user
+        input (QC, upload confirmation) must be gathered on the main thread beforehand; this method
+        only performs the saving.
+
+        Parameters
+        ----------
+        shanks : list of str
+            The shanks to upload, in order.
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before each
+            shank is uploaded. No-op when None.
+
+        Returns
+        -------
+        dict[str, str]
+            A mapping of shank label to the upload result message for that shank.
+        """
+        info: dict[str, str] = {}
+        total = len(shanks)
+        for idx, shank in enumerate(shanks):
+            if progress_callback is not None:
+                progress_callback(f'Saving {shank}…', idx, total)
+            self.selected_shank = shank
+            info[shank] = self.upload_data()
+        return info
 
     # -------------------------------------------------------------------------
     # Utility
@@ -656,10 +780,12 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
-    def load_data(self) -> None:
+    def load_data(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
         """Load data for all configs and shanks."""
         print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
-        super().load_data()
+        super().load_data(progress_callback=progress_callback)
 
 
 class ProbeHandlerCSV(ProbeHandler):
@@ -959,8 +1085,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
     def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
         self.configs, self.probes, self.data_paths = load_alignment_yaml(yaml_file)
-        if brain_atlas is None:
-            brain_atlas = self._make_atlas()
+        # The atlas (anatomical or Allen, see _make_atlas) is built lazily by build_atlas() on the
+        # background loading thread rather than here, so it does not block GUI construction.
         super().__init__(brain_atlas)
 
         # The base sets a single 'default' config; mirror it to the yaml config name and, when the

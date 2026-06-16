@@ -5,8 +5,10 @@ from collections.abc import Callable
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
 import pyqtgraph as pg
+from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.app.app_view import AlignmentGUIView
+from ibl_alignment_gui.app.load_worker import Worker
 from ibl_alignment_gui.app.shank_controller import ShankController
 from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerCSV,
@@ -147,6 +149,12 @@ class AlignmentGUIController:
         # Plugin management
         self.blockPlugins: bool = False
 
+        # Background loading thread state
+        self._load_thread: QtCore.QThread | None = None
+        self._load_worker: Worker | None = None
+        self._load_dialog: QtWidgets.QProgressDialog | None = None
+        self._load_start: float = 0.0
+
         # Setup all callbacks
         self.setup_connections()
 
@@ -273,17 +281,6 @@ class AlignmentGUIController:
 
         self.view.add_shortcuts_to_menu('fit', fit_options)
         self.view.add_shortcuts_to_menu('display', display_options)
-
-    def load_data(self) -> None:
-        """Load data for the selected session."""
-        self.model.load_data()
-        self.loaded = True
-        self.create_shanks()
-        self.execute_plugins('load_data', self)
-
-    def load_plots(self) -> None:
-        """Load available plots for the selected session."""
-        self.model.load_plots()
 
     def populate_menubar(self):
         """Populate menu bar tabs based on avaialble plots."""
@@ -1026,21 +1023,124 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Load data
     # --------------------------------------------------------------------------------------------
+    def _run_in_thread(
+        self,
+        func: Callable,
+        *args,
+        on_finished: Callable,
+        busy_message: str,
+        report_progress: bool = False,
+        **kwargs,
+    ) -> bool:
+        """
+        Run a slow callable on a background thread, showing a modal progress dialog.
+
+        The callable runs off the GUI thread so the window stays responsive; ``on_finished`` is
+        then called on the main thread with the callable's return value. Any exception is shown in
+        a message box via :meth:`_on_thread_error`. Only one background task runs at a time.
+
+        Parameters
+        ----------
+        func : Callable
+            The callable to run on the background thread.
+        *args : Any
+            Positional arguments forwarded to ``func``.
+        on_finished : Callable
+            Slot called on the main thread with ``func``'s result when it completes.
+        busy_message : str
+            Initial message shown in the progress dialog.
+        report_progress : bool
+            If True, ``func`` is given a ``progress_callback`` to drive the dialog.
+        **kwargs : Any
+            Keyword arguments forwarded to ``func``.
+
+        Returns
+        -------
+        bool
+            True if the task was started, False if another task is already running.
+        """
+        if self._load_thread is not None:
+            return False
+
+        # Progress dialog (no cancel button; starts indeterminate until totals are known)
+        self._load_dialog = QtWidgets.QProgressDialog(busy_message, None, 0, 0, self.view)
+        self._load_dialog.setWindowTitle('Please wait')
+        self._load_dialog.setWindowModality(QtCore.Qt.WindowModal)
+        self._load_dialog.setMinimumDuration(0)
+        self._load_dialog.setValue(0)
+
+        # Worker running the slow callable on a background thread
+        self._load_thread = QtCore.QThread()
+        self._load_worker = Worker(func, *args, report_progress=report_progress, **kwargs)
+        self._load_worker.moveToThread(self._load_thread)
+        self._load_thread.started.connect(self._load_worker.run)
+        self._load_worker.progress.connect(self._on_thread_progress)
+        self._load_worker.finished.connect(on_finished)
+        self._load_worker.error.connect(self._on_thread_error)
+        # Stop the thread once the worker is done, then dispose of everything
+        self._load_worker.finished.connect(self._load_thread.quit)
+        self._load_worker.error.connect(self._load_thread.quit)
+        self._load_thread.finished.connect(self._cleanup_thread)
+
+        self._load_dialog.show()
+        self._load_thread.start()
+        return True
+
+    def _on_thread_progress(self, message: str, current: int, total: int) -> None:
+        """Update the progress dialog with a message from the background worker."""
+        if self._load_dialog is None:
+            return
+        self._load_dialog.setLabelText(message)
+        if total > 0:
+            self._load_dialog.setMaximum(total)
+            self._load_dialog.setValue(current)
+
+    def _on_thread_error(self, message: str) -> None:
+        """Report a background task failure (main thread)."""
+        QtWidgets.QMessageBox.critical(
+            self.view, 'Error', f'A background task failed:\n\n{message}'
+        )
+
+    def _cleanup_thread(self) -> None:
+        """Close the dialog and dispose of the worker and thread once it has stopped."""
+        if self._load_dialog is not None:
+            self._load_dialog.close()
+        if self._load_worker is not None:
+            self._load_worker.deleteLater()
+        if self._load_thread is not None:
+            self._load_thread.deleteLater()
+        self._load_worker = None
+        self._load_thread = None
+        self._load_dialog = None
+
     def data_button_pressed(self) -> None:
         """
         Load in all the relevant data and instantiate the GUI display.
 
-        Triggered when data button is pressed.
+        Triggered when the data button is pressed. The atlas build, data load and plot build run
+        on a background thread (see :meth:`_run_in_thread` and ``ProbeHandler.load_all``) so the
+        GUI stays responsive and a progress dialog can be shown. The display is assembled in
+        :meth:`_on_load_finished` once loading completes.
         """
-        if self.loaded:
+        if self.loaded or self._load_thread is not None:
             return
-        start = time.time()
+        self._load_start = time.time()
         # Get the list of shanks
         self.all_shanks = list(self.model.shanks.keys())
-        # Load and prepare all data
-        self.load_data()
-        # Load in all the plots
-        self.load_plots()
+
+        self._run_in_thread(
+            self.model.load_all,
+            on_finished=self._on_load_finished,
+            busy_message='Loading data…',
+            report_progress=True,
+        )
+
+    def _on_load_finished(self, _result: object = None) -> None:
+        """Assemble the GUI display once background loading has completed (main thread)."""
+        self.loaded = True
+        # Build the shank controllers and run any load-time plugins
+        self.create_shanks()
+        self.execute_plugins('load_data', self)
         # Add all the plot options to the menubar
         self.populate_menubar()
         # If csv add the config options
@@ -1055,7 +1155,7 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
-        print(f'Loading time: {time.time() - start}')
+        print(f'Loading time: {time.time() - self._load_start}')
 
     def setup(self, init=True) -> None:
         """
@@ -1144,32 +1244,61 @@ class AlignmentGUIController:
         """
         Triggered when complete button or Shift+U is pressed.
 
-        Saves channel locations and alignments.
+        Saves channel locations and alignments. The per-shank user input (which shanks, QC
+        assessment, upload confirmation) is gathered here on the main thread via modal dialogs;
+        the slow saving itself then runs on a background thread (see :meth:`_run_in_thread` and
+        ``ProbeHandler.upload_shanks``), with the results reported in :meth:`_on_upload_finished`.
         """
+        if self._load_thread is not None:
+            return
+
         if len(self.all_shanks) > 1:
             shanks_to_upload = display_upload_dialog(self)
         else:
             shanks_to_upload = self.all_shanks
 
+        # Gather all user decisions up front (modal dialogs must stay on the main thread).
+        # Online the QC dialog both captures the assessment (stored on the shank's uploader) and
+        # confirms the upload; offline there is no QC step so a simple upload prompt is used
+        # instead. Only one of the two is ever shown per shank.
+        approved: list[str] = []
         for shank in shanks_to_upload:
             self.model.selected_shank = shank
             self.model.current_shank = shank
 
             if not self.offline:
-                accepted = display_qc_dialog(self, shank)
-                if accepted == 0:
+                # Cancelling the QC dialog aborts the whole upload.
+                if display_qc_dialog(self, shank) == 0:
                     break
-
-            upload = self.view.upload_prompt()
-            if upload:
-                info = self.model.upload_data()
-                self.view.populate_selection_dropdown(
-                    'align', self.model.load_previous_alignments()
-                )
-                self.model.get_starting_alignment(0)
-                self.view.upload_info(upload, info)
+                approved.append(shank)
+            elif self.view.upload_prompt(shank):
+                approved.append(shank)
             else:
-                self.view.upload_info(upload)
+                self.view.upload_info(False)
+
+        if not approved:
+            return
+
+        # Save the approved shanks off the GUI thread.
+        self._run_in_thread(
+            self.model.upload_shanks,
+            approved,
+            on_finished=self._on_upload_finished,
+            busy_message='Saving…',
+            report_progress=True,
+        )
+
+    def _on_upload_finished(self, info: dict[str, str]) -> None:
+        """Refresh the alignment dropdown and report results once saving completes."""
+        self.view.populate_selection_dropdown('align', self.model.load_previous_alignments())
+        self.model.get_starting_alignment(0)
+        # Combine the per-shank results into a single message. Label each shank only when more
+        # than one was uploaded, so the single-shank case reads exactly as before.
+        if len(info) == 1:
+            message = next(iter(info.values()))
+        else:
+            message = '\n\n'.join(f'{shank}:\n{msg}' for shank, msg in info.items())
+        self.view.upload_info(True, message)
 
     # --------------------------------------------------------------------------------------------
     # Fitting functions

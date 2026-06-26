@@ -1524,8 +1524,6 @@ def predict(controller, items):
         )
         return None
 
-    recorded_full, df = _extract_recorded_features(items)
-
     # ------------------------------------------------------------------
     # GUI histology trace is bottom -> top.
     # Local/batch alignment convention is top -> bottom.
@@ -1540,6 +1538,10 @@ def predict(controller, items):
     xyz_samples_work_order = xyz_samples_gui_order[::-1].copy()
     recorded_full_work_order = recorded_full_gui_order[::-1].copy()
 
+    # ------------------------------------------------------------------
+    # No extension.
+    # Use only the original GUI histology samples.
+    # ------------------------------------------------------------------
     out = align(
         engine.model,
         engine.ctx_manager,
@@ -1558,55 +1560,42 @@ def predict(controller, items):
     if out is None:
         return None
 
-    est_xyz = out['est_xyz']
-    j_start = int(out['j_start'])
-    j_end = int(out['j_end'])
+    # ------------------------------------------------------------------
+    # Build full warped region-id vector.
+    #
+    # This keeps regions beyond the probe boundaries visible when possible.
+    # Missing/out-of-range samples are set to 0.
+    # ------------------------------------------------------------------
+    # Channel depth axis: should be 0 at tip and ~3840 at top.
+    channel_depth_um_gui_order = df["axial_um"].to_numpy(dtype=float)
 
-    sampling_trk = items.model.align_handle.ephysalign.sampling_trk.copy()
-
-    region_ids_before = gui_region_ids_from_xyz(
-        out['xyz_samples_ext'][:j_start],
-        controller.model.brain_atlas,
-    )
-    region_ids_probe = gui_region_ids_from_xyz(
-        est_xyz,
-        controller.model.brain_atlas,
-    )
-    region_ids_after = gui_region_ids_from_xyz(
-        out['xyz_samples_ext'][j_end + 1 :],
-        controller.model.brain_atlas,
-    )
-
-    region_ids = np.concatenate(
-        [
-            region_ids_before,
-            region_ids_probe,
-            region_ids_after,
-        ],
-        axis=0,
-    )
-
-    depth_samples = _depths_for_extended_trace_fixed(
-        df=df,
-        sampling_trk=sampling_trk,
-        j_start=j_start,
-        j_end=j_end,
-        trace_len=out["xyz_samples_ext"].shape[0],
+    region_ids, depth_samples, j_map_gui_order, warp_info = (
+        _build_warped_region_ids_and_depths(
+            xyz_samples_gui_order=xyz_samples_gui_order,
+            j_map_work_order=out["j_map_all_i"],
+            channel_depth_um_gui_order=channel_depth_um_gui_order,
+            brain_atlas=controller.model.brain_atlas,
+        )
     )
 
     if len(region_ids) != len(depth_samples):
         print(
-            '[Alignment engine] WARNING: region_ids/depth_samples length mismatch:',
+            "[Alignment engine] WARNING: region_ids/depth_samples length mismatch:",
             len(region_ids),
             len(depth_samples),
         )
 
-    print('[Alignment debug]')
-    print('j_start/j_end:', j_start, j_end)
-    print('region_ids len:', len(region_ids))
-    print('depth_samples len:', len(depth_samples))
-    print('sampling_trk first/last:', sampling_trk[0], sampling_trk[-1])
-    print('xyz_ext z first/last:', out['xyz_samples_ext'][0, 2], out['xyz_samples_ext'][-1, 2])
-    print('selected xyz z first/last:', est_xyz[0, 2], est_xyz[-1, 2])
+    print("[Alignment debug]")
+    print("[Alignment debug]")
+    print("No trace extension used")
+    print("work-order j_start/j_end:", int(out["j_start"]), int(out["j_end"]))
+    print("region_ids len:", len(region_ids))
+    print("depth_samples len:", len(depth_samples))
+    print("channel_depth_um first/last:", channel_depth_um_gui_order[0],
+          channel_depth_um_gui_order[-1])
+    print("j_map GUI-order first/last/min/max:",
+          j_map_gui_order[0], j_map_gui_order[-1],
+          np.min(j_map_gui_order), np.max(j_map_gui_order))
+    print("warp info:", warp_info)
 
     return region_ids, depth_samples

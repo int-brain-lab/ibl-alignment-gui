@@ -766,6 +766,8 @@ def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
 # Feature & geometry utils
 # -----------------------------------------------------------------------------
 def _extract_recorded_features(items):
+    if not items.model.raw_data['features']['exists']:
+        raise RuntimeError('No raw ephys feature table is available for this insertion.')
 
     df = items.model.raw_data['features']['df'].copy()
     df = df.sort_values('axial_um', ascending=True).reset_index(drop=True)
@@ -1297,24 +1299,13 @@ def align(
 
     ephys_cost_matrix = build_cost_matrix(recorded_opt, pred_std_opt)
 
-    region_cost_matrix = None
-    region_cost_norm = None
-    ephys_cost_norm = None
-    has_region_cost = None
-    trace_region_target_idx = None
-    trace_region_target_name = None
-
     cost_matrix = ephys_cost_matrix
-
-    W_ephys = np.ones_like(ephys_cost_matrix, dtype=np.float64)
-    W_region = np.zeros_like(ephys_cost_matrix, dtype=np.float64)
 
     finite_cost = cost_matrix[np.isfinite(cost_matrix)]
     max_cost = float(np.median(np.nan_to_num(finite_cost)))
-    jump_frac = 0.5
 
-    lam_u = jump_frac * max_cost
-    lam_l = jump_frac * max_cost
+    lam_u = 0.5 * max_cost
+    lam_l = 0.1 * max_cost
 
     j_start, j_end, path, total_cost, D, P = dynamic_time_warping_debug(
         cost_matrix,
@@ -1415,6 +1406,105 @@ def align(
     )
 
 
+def _build_warped_region_ids_and_depths(
+    *,
+    xyz_samples_gui_order: np.ndarray,
+    j_map_work_order: np.ndarray,
+    channel_depth_um_gui_order: np.ndarray,
+    brain_atlas,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """
+    Return full histology region trace, with depth_samples warped into probe-depth space.
+
+    GUI trace order:
+        bottom -> top
+
+    Alignment work order:
+        top -> bottom
+
+    Output:
+        region_ids:
+            one region id per original histology trace sample
+
+        depth_samples:
+            one depth value per original histology trace sample, in meters,
+            where estimated probe tip is ~0 and estimated probe top is ~3840 um
+
+        j_map_gui_order:
+            channel -> histology trace index, in GUI order
+    """
+    xyz_samples_gui_order = np.asarray(xyz_samples_gui_order, dtype=np.float32)
+    j_map_work_order = np.asarray(j_map_work_order, dtype=int)
+    channel_depth_um_gui_order = np.asarray(channel_depth_um_gui_order, dtype=float)
+
+    trace_len = xyz_samples_gui_order.shape[0]
+    n_channels = j_map_work_order.shape[0]
+
+    if channel_depth_um_gui_order.shape[0] != n_channels:
+        raise ValueError(
+            f"channel_depth_um length {channel_depth_um_gui_order.shape[0]} "
+            f"does not match j_map length {n_channels}"
+        )
+
+    # work channel order was flipped relative to GUI channel order.
+    # work trace was also flipped relative to GUI trace order.
+    j_map_gui_order = (trace_len - 1) - j_map_work_order[::-1]
+    j_map_gui_order = np.clip(j_map_gui_order.astype(int), 0, trace_len - 1)
+
+    # Fit: histology_trace_index -> displayed_probe_depth_um
+    #
+    # This is the important part. We fit using the actual channel depths,
+    # not np.arange(trace_len), because the GUI depth axis is physical depth.
+    valid = np.isfinite(channel_depth_um_gui_order) & np.isfinite(j_map_gui_order)
+
+    if np.sum(valid) < 2:
+        print("[Alignment engine] WARNING: not enough valid points for affine warp")
+        trace_idx = np.arange(trace_len, dtype=float)
+        depth_um = trace_idx * 10.0
+        scale_um_per_trace_sample = 10.0
+        offset_um = 0.0
+    else:
+        x = j_map_gui_order[valid].astype(float)
+        y = channel_depth_um_gui_order[valid].astype(float)
+
+        # Robust-ish affine fit. If DTW is basically rigid, this should be close
+        # to the native trace sampling scale.
+        scale_um_per_trace_sample, offset_um = np.polyfit(x, y, deg=1)
+
+        trace_idx = np.arange(trace_len, dtype=float)
+        depth_um = scale_um_per_trace_sample * trace_idx + offset_um
+
+    region_ids = gui_region_ids_from_xyz(
+        xyz_samples_gui_order,
+        brain_atlas,
+    ).astype(int)
+
+    depth_samples = depth_um.astype(float) / 1e6
+
+    warp_info = dict(
+        trace_len=int(trace_len),
+        n_channels=int(n_channels),
+        j_map_first=int(j_map_gui_order[0]),
+        j_map_last=int(j_map_gui_order[-1]),
+        j_map_min=int(np.min(j_map_gui_order)),
+        j_map_max=int(np.max(j_map_gui_order)),
+        channel_depth_first_um=float(channel_depth_um_gui_order[0]),
+        channel_depth_last_um=float(channel_depth_um_gui_order[-1]),
+        output_depth_first_um=float(depth_um[0]),
+        output_depth_last_um=float(depth_um[-1]),
+        estimated_probe_tip_depth_um=float(
+            scale_um_per_trace_sample * j_map_gui_order[0] + offset_um
+        ),
+        estimated_probe_top_depth_um=float(
+            scale_um_per_trace_sample * j_map_gui_order[-1] + offset_um
+        ),
+        scale_um_per_trace_sample=float(scale_um_per_trace_sample),
+        offset_um=float(offset_um),
+    )
+
+    return region_ids, depth_samples, j_map_gui_order, warp_info
+
+
 # -----------------------------------------------------------------------------
 # Model prediction
 # -----------------------------------------------------------------------------
@@ -1426,7 +1516,7 @@ def predict(controller, items):
         # User cancelled the load dialog; nothing to predict with.
         return None
 
-    df = _get_features_df(controller, items)
+    recorded_full_gui_order, df = _extract_recorded_features(items)
     if df is None:
         QtWidgets.QMessageBox.warning(
             controller.view, 'Channel Prediction',
@@ -1436,20 +1526,25 @@ def predict(controller, items):
 
     recorded_full, df = _extract_recorded_features(items)
 
-    # align() expects the native GUI/histology trace order. Do not reverse here.
-    xyz_samples = items.model.align_handle.xyz_samples.copy().astype(np.float32)
+    # ------------------------------------------------------------------
+    # GUI histology trace is bottom -> top.
+    # Local/batch alignment convention is top -> bottom.
+    #
+    # Therefore flip BOTH the histology trace and the recorded ephys table
+    # before calling align().
+    # ------------------------------------------------------------------
+    xyz_samples_gui_order = (
+        items.model.align_handle.xyz_samples.copy().astype(np.float32)
+    )
 
-    xyz_samples_ext = extend_xyz_samples_to_brain(
-        xyz_samples,
-        brain_atlas=controller.model.brain_atlas,
-        mapping='Cosmos',
-    ).astype(np.float32)
+    xyz_samples_work_order = xyz_samples_gui_order[::-1].copy()
+    recorded_full_work_order = recorded_full_gui_order[::-1].copy()
 
     out = align(
         engine.model,
         engine.ctx_manager,
-        xyz_samples_ext,
-        recorded_full,
+        xyz_samples_work_order,
+        recorded_full_work_order,
         engine.handles,
         engine.optimization_features,
         engine.RADIUS_UM,

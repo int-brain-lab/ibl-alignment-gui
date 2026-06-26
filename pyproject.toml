@@ -21,6 +21,7 @@ dependencies = [
   "matplotlib",
   "simpleitk",
   "pydantic",
+  "ibleatools[lite] @ git+https://github.com/int-brain-lab/ibleatools.git",
   #"ibl-datoviz"
 ]
 readme = "README.md"

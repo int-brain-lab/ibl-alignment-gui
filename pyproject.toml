@@ -30,6 +30,18 @@ requires-python = ">=3.10"
 # IBL online mode (ONE/Alyx): raw-data streaming, alignment upload/QC and passive/RF plots.
 # Installs ibllib (which also provides brainbox). Not required for offline mode.
 ibl = ["ibllib"]
+# Allen/Code Ocean (anatomical) mode: read/write alignments to the Allen DocDB and warp channel
+# locations into the Allen CCF. Not required for the local anatomical workflow.
+allen = [
+  "aind-data-schema<2.0",
+  "aind-data-access-api",
+  "aind-data-schema-models",
+  "aind-qcportal-schema",
+  "aws-requests-auth",
+  "boto3",
+  "requests",
+  "antspyx",
+]
 
 [project.urls]
 Changelog = "https://github.com/int-brain-lab/ibl-alignment-gui/blob/main/CHANGELOG.md"
@@ -41,6 +53,7 @@ Repository = "https://github.com/int-brain-lab/ibl-alignment-gui.git"
 [project.scripts]
 alignment-gui = "ibl_alignment_gui.app.main:launch_app"
 alignment-gui-ibl = "ibl_alignment_gui.app.main:launch_app_ibl"
+alignment-gui-allen = "ibl_alignment_gui.app.main:launch_app_allen"
 
 
 [dependency-groups]

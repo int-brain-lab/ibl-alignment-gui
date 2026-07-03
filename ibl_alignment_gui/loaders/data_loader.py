@@ -15,7 +15,6 @@ import spikeglx
 
 import ibldsp.voltage
 import one.alf.io as alfio
-from ibl_alignment_gui.utils.optional import require_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
@@ -916,7 +915,8 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         Streamer
             A streamer object for AP band.
         """
-        spikeglx_io = require_ibllib('Raw AP data streaming', 'brainbox.io.spikeglx')
+        import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
+
         return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
 
     def load_lf_data(self):
@@ -928,7 +928,8 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         Streamer
             A streamer object for LF band.
         """
-        spikeglx_io = require_ibllib('Raw LF data streaming', 'brainbox.io.spikeglx')
+        import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
+
         return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
 
 

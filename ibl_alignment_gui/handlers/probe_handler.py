@@ -1,20 +1,23 @@
+from __future__ import annotations
+
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
 from ibl_alignment_gui.loaders.alignment_loader import (
+    AlignmentLoaderDocDB,
     AlignmentLoaderLocal,
     AlignmentLoaderOne,
 )
 from ibl_alignment_gui.loaders.alignment_uploader import (
+    AlignmentUploaderDocDB,
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
 )
@@ -43,6 +46,11 @@ from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
 from one.api import ONE
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ibl_alignment_gui.utils.allen.docdb_api import DocDB
 
 try:
     import ephysatlas.data
@@ -1145,17 +1153,12 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def _make_atlas(self) -> BrainAtlas:
-        """Return the appropriate atlas based on the histology space in the YAML config."""
-        first_paths = next(iter(next(iter(self.data_paths.values())).values()))
-        if first_paths.histology_space == 'anatomical' and first_paths.histology:
-            return build_anatomical_atlas(first_paths.histology)
-        return AllenAtlas()
-
     def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
         data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
-        return make_slice_loader(data_paths.histology, self.brain_atlas, data_paths.histology_space)
+        return make_slice_loader(
+            data_paths.histology, self.brain_atlas, data_paths.histology_space
+        )
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
@@ -1176,23 +1179,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                 loaders = Bunch()
                 loaders['geom'] = GeometryLoaderLocal(data_path)
                 loaders['data'] = DataLoaderLocal(data_path)
-                loaders['align'] = AlignmentLoaderLocal(
-                    data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
-                )
-                # In the anatomical workflow a transforms folder warps channel locations into
-                # the Allen CCF; without it only atlas-space locations are saved.
-                transform_loader = (
-                    TransformLoaderAllen(data_path.transforms)
-                    if data_path.transforms is not None
-                    else None
-                )
-                loaders['upload'] = AlignmentUploaderLocal(
-                    data_path.output,
-                    ishank,
-                    self.n_shanks,
-                    self.brain_atlas,
-                    transform_loader=transform_loader,
-                )
+                loaders['align'] = self._build_align_loader(data_path, ishank)
+                loaders['upload'] = self._build_upload_loader(data_path, ishank)
                 loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
                 # Per-session features (if the yaml specifies them) load via the existing
                 # shank_handler.load_data -> loaders['features'] path, so the session is
@@ -1202,3 +1190,163 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                     loaders['features'] = FeatureLoaderLocal(data_path.features)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank][config] = ShankHandler(loaders, ishank)
+
+    def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderLocal:
+        """
+        Build the alignment loader for a shank.
+
+        Reads xyz picks and previous alignments from the local file system;
+        :class:`ProbeHandlerAllenYaml` overrides it to use the DocDB backend.
+
+        Parameters
+        ----------
+        data_path : DatasetPaths
+            The resolved dataset paths for the probe/config.
+        ishank : int
+            Index of the shank (0-based).
+
+        Returns
+        -------
+        AlignmentLoaderLocal
+            The alignment loader for the shank.
+        """
+        return AlignmentLoaderLocal(
+            data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
+        )
+
+    def _build_upload_loader(
+        self, data_path: DatasetPaths, ishank: int
+    ) -> AlignmentUploaderLocal:
+        """
+        Build the alignment uploader for a shank.
+
+        Writes channel locations and alignments to the local file system;
+        :class:`ProbeHandlerAllenYaml` overrides it to additionally post the results to DocDB.
+
+        Parameters
+        ----------
+        data_path : DatasetPaths
+            The resolved dataset paths for the probe/config.
+        ishank : int
+            Index of the shank (0-based).
+
+        Returns
+        -------
+        AlignmentUploaderLocal
+            The alignment uploader for the shank.
+        """
+        return AlignmentUploaderLocal(
+            data_path.output,
+            ishank,
+            self.n_shanks,
+            self.brain_atlas,
+        )
+
+
+class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
+    """
+    Probe handler for the Allen/Code Ocean (anatomical) workflow with DocDB support.
+
+    Extends :class:`ProbeHandlerLocalYaml` (so all the yaml/anatomical/data/geometry/histology/
+    transform wiring is reused) and, mirroring how :class:`ProbeHandlerONE` owns a ``one``
+    instance, owns a :class:`~ibl_alignment_gui.utils.allen.docdb_api.DocDB` instance that is
+    injected into the DocDB alignment loader and uploader (overriding the local factory hooks
+    :meth:`ProbeHandler._build_align_loader` / :meth:`ProbeHandler._build_upload_loader`).
+
+    The ``use_docdb`` flag selects the alignment backend: when True the DocDB-backed loader and
+    uploader are used (previous alignments read from DocDB with a local fallback; results written
+    locally and posted to DocDB); when False the plain local variants are used. It can be flipped
+    at runtime with :meth:`set_use_docdb` (e.g. from the DocDB checkbox).
+
+    Parameters
+    ----------
+    yaml_file : str or Path
+        Path to the session yaml configuration file.
+    brain_atlas : BrainAtlas or None
+        A pre-built brain atlas. If None, it is built lazily (anatomical or Allen, per the yaml).
+    docdb : DocDB or None
+        The DocDB client to inject. A default :class:`DocDB` is created if None.
+    use_docdb : bool
+        Whether to use the DocDB alignment backend (True) or the local one (False).
+    """
+
+    def __init__(
+        self,
+        yaml_file: str | Path,
+        brain_atlas: BrainAtlas | None = None,
+        docdb: DocDB | None = None,
+        use_docdb: bool = True,
+    ):
+        # Imported lazily so the base install (offline / IBL modes) does not require the allen
+        # extra; the alignment-gui-allen launcher checks the extra is installed up front.
+        from ibl_alignment_gui.utils.allen.docdb_api import DocDB  # noqa: PLC0415
+
+        self.docdb: DocDB = docdb or DocDB()
+        self.use_docdb: bool = use_docdb
+
+        super().__init__(yaml_file, brain_atlas=brain_atlas)
+
+    def _make_atlas(self) -> BrainAtlas:
+        """Return the appropriate atlas based on the histology space in the YAML config."""
+        first_paths = next(iter(next(iter(self.data_paths.values())).values()))
+        if first_paths.histology_space == 'anatomical' and first_paths.histology:
+            return build_anatomical_atlas(first_paths.histology)
+        return AllenAtlas()
+
+    def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderDocDB:
+        """Build a DocDB alignment loader (falling back to local when ``use_docdb`` is False)."""
+        return AlignmentLoaderDocDB(
+            data_path.picks or data_path.spike_sorting,
+            ishank,
+            self.n_shanks,
+            self.docdb,
+            use_db=self.use_docdb,
+        )
+
+    def _build_upload_loader(
+        self, data_path: DatasetPaths, ishank: int
+    ) -> AlignmentUploaderDocDB:
+        """Build a DocDB alignment uploader (falling back to local when ``use_docdb`` is False)."""
+        return AlignmentUploaderDocDB(
+            data_path.output,
+            ishank,
+            self.n_shanks,
+            self.brain_atlas,
+            self.docdb,
+            transform_loader=self._build_transform_loader(data_path),
+            use_db=self.use_docdb,
+        )
+
+    @staticmethod
+    def _build_transform_loader(data_path: DatasetPaths) -> TransformLoaderAllen | None:
+        """Return a SmartSPIM -> CCF transform loader for the probe, or None if not configured."""
+        return (
+            TransformLoaderAllen(data_path.transforms)
+            if data_path.transforms is not None
+            else None
+        )
+
+    def set_use_docdb(self, use_docdb: bool) -> None:
+        """
+        Switch the alignment backend and refresh previous alignments for every shank.
+
+        Flips the ``use_db`` flag on each shank's existing DocDB alignment loader and uploader
+        (leaving the loaded ephys/geometry/histology untouched) and re-reads the previous
+        alignments so the alignment dropdown reflects the new source.
+
+        Parameters
+        ----------
+        use_docdb : bool
+            Whether to use the DocDB alignment backend (True) or the local one (False).
+        """
+        self.use_docdb = use_docdb
+
+        for shank in self.shanks:
+            for config in self.configs:
+                handler = self.shanks[shank][config]
+                handler.loaders['align'].use_db = use_docdb
+                handler.loaders['upload'].use_db = use_docdb
+
+                align = handler.loaders['align']
+                align.load_previous_alignments()
+                align.get_starting_alignment(align.get_stored_alignment_idx())

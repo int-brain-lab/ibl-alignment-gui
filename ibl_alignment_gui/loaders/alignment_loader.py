@@ -1,15 +1,21 @@
+from __future__ import annotations
+
 import json
 import logging
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from iblutil.util import Bunch
-from one.api import ONE
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ibl_alignment_gui.utils.allen.docdb_api import DocDB
+    from one.api import ONE
 
 
 class AlignmentLoader(ABC):
@@ -105,7 +111,10 @@ class AlignmentLoader(ABC):
         int
             Index of the stored alignment in ``self.alignment_keys``, or 0 if not found.
         """
-        if self.stored_alignment_key is None or self.stored_alignment_key not in self.alignment_keys:
+        if (
+            self.stored_alignment_key is None
+            or self.stored_alignment_key not in self.alignment_keys
+        ):
             return 0
         return self.alignment_keys.index(self.stored_alignment_key)
 
@@ -313,3 +322,77 @@ class AlignmentLoaderLocal(AlignmentLoader):
                 return json.load(f)
 
         return None
+
+
+class AlignmentLoaderDocDB(AlignmentLoaderLocal):
+    """
+    Alignment loader using the Allen Neural Dynamics DocDB.
+
+    Used by the Allen/Code Ocean (anatomical) workflow when the DocDB option is enabled.
+    xyz picks are always read from the local file system (inherited from
+    :class:`AlignmentLoaderLocal`); previous alignments are read from the DocDB QC evaluation
+    for this session/probe/shank, falling back to the local ``prev_alignments.json`` when DocDB
+    has no matching record or is unreachable.
+
+    The session and probe names are derived from ``data_path`` to match how they are written by
+    :class:`~ibl_alignment_gui.loaders.alignment_uploader.AlignmentUploaderDocDB`:
+    ``session = data_path.parent.stem`` and ``probe = data_path.stem``.
+
+    Parameters
+    ----------
+    data_path : Path
+        The path to the local data folder.
+    shank_idx : int
+        Index of the shank (0-based).
+    n_shanks : int
+        Total number of shanks.
+    docdb : DocDB
+        The DocDB client used to read previous alignments (injected, analogous to ``one``).
+    user : str or None
+        Username for tagging alignments.
+    xyz_picks : np.ndarray or None
+        Preloaded xyz picks. If not provided, it will attempt to load from file.
+    """
+
+    def __init__(
+        self,
+        data_path: Path,
+        shank_idx: int,
+        n_shanks: int,
+        docdb: DocDB,
+        user: str | None = None,
+        xyz_picks: np.ndarray | None = None,
+        use_db: bool = True,
+    ):
+        self.docdb: DocDB = docdb
+        self.use_db = use_db
+        super().__init__(data_path, shank_idx, n_shanks, user=user, xyz_picks=xyz_picks)
+
+    def load_alignments(self) -> dict[str, Any] | None:
+        """
+        Load previous alignment data from DocDB, falling back to the local file.
+
+        Returns
+        -------
+        dict or None
+            Dictionary of alignment data from DocDB, the local file if DocDB has no matching
+            record, or None if neither is available.
+        """
+        if self.use_db:
+            session_name = self.data_path.parent.stem
+            probe = self.data_path.stem
+            try:
+                alignments = self.docdb.load_alignments(session_name, probe, self.shank_idx)
+            except ValueError as err:
+                logger.warning(
+                    f'Failed to load previous alignments from docdb ({err}). '
+                    'Falling back to local file.'
+                )
+                alignments = None
+
+            if alignments is None:
+                alignments = super().load_alignments()
+        else:
+            alignments = super().load_alignments()
+
+        return alignments

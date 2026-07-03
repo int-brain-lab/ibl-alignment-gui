@@ -828,12 +828,14 @@ class SelectionWidget(QtWidgets.QWidget):
         self,
         offline: bool = False,
         config: bool = False,
+        allen: bool = False,
         parent: QtWidgets.QMainWindow | None = None,
     ):
         super().__init__(parent)
 
         self.offline: bool = offline
         self.config: bool = config
+        self.allen: bool = allen
         self.dropdowns: dict[str, Bunch] = defaultdict(Bunch)
         self.buttons: dict[str, Bunch] = defaultdict(Bunch)
         self.button_style: dict = {
@@ -899,6 +901,11 @@ class SelectionWidget(QtWidgets.QWidget):
         self.buttons['data']['button'].setFixedWidth(70)
         self.buttons['data']['button'].setStyleSheet(self.button_style['deactivated'])
 
+        # Checkbox to toggle the DocDB alignment backend (Allen/Code Ocean workflow only)
+        if self.allen:
+            self.docdb_checkbox = QtWidgets.QCheckBox('DocDB')
+            self.docdb_checkbox.setChecked(True)
+
     def layout_widgets(self) -> None:
         """Layout the dropdowns and buttons."""
         layout = QtWidgets.QHBoxLayout()
@@ -917,6 +924,8 @@ class SelectionWidget(QtWidgets.QWidget):
             layout.addWidget(self.buttons['folder']['button'])
             layout.addWidget(self.dropdowns['shank']['combobox'])
             layout.addWidget(self.dropdowns['align']['combobox'])
+            if self.allen:
+                layout.addWidget(self.docdb_checkbox)
             layout.addWidget(self.buttons['data']['button'])
             if self.config:
                 layout.addWidget(self.dropdowns['config']['combobox'])

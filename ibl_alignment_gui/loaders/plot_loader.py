@@ -13,7 +13,6 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     average_chns_at_same_depths,
     pad_data_to_full_chn_map,
 )
-from ibl_alignment_gui.utils.optional import require_ibllib
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
 
@@ -41,7 +40,9 @@ def _get_passive() -> ModuleType | None:
         The ``brainbox.task.passive`` module, or None if it is not installed.
     """
     try:
-        return require_ibllib('Passive and receptive-field plots', 'brainbox.task.passive')
+        from brainbox.task import passive  # noqa: PLC0415
+
+        return passive
     except ImportError:
         return None
 

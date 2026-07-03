@@ -22,11 +22,14 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
     config: bool
         Whether multiple configs are to be used
+    allen: bool
+        Whether to run the Allen/Code Ocean (anatomical) workflow, which adds a DocDB checkbox
     """
 
-    def __init__(self, offline: bool = False, config: bool = False):
+    def __init__(self, offline: bool = False, config: bool = False, allen: bool = False):
         super().__init__()
         self.config = config
+        self.allen = allen
 
         self.resize(1600, 800)
         self.setWindowTitle('IBL alignment GUI')
@@ -35,7 +38,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         # Create custom widgets that will be added to the main window
         self.button_widgets = custom_widgets.ButtonWidget(parent=self)
         self.selection_widgets = custom_widgets.SelectionWidget(
-            offline=offline, config=self.config, parent=self
+            offline=offline, config=self.config, allen=self.allen, parent=self
         )
         self.menu_widgets = custom_widgets.MenuWidget(self)
         self.setMenuBar(self.menu_widgets)
@@ -461,6 +464,28 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             action.triggered.connect(lambda _=False, cb=callback: cb())
         button.setMenu(menu)
         button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+    def connect_docdb_checkbox(self, callback: Callable) -> None:
+        """
+        Connect the DocDB checkbox to a callback (Allen workflow only).
+
+        Parameters
+        ----------
+        callback: Callable
+            The callback function to connect to the checkbox ``stateChanged`` signal.
+        """
+        self.selection_widgets.docdb_checkbox.stateChanged.connect(callback)
+
+    def is_docdb_checked(self) -> bool:
+        """
+        Return whether the DocDB checkbox is ticked (Allen workflow only).
+
+        Returns
+        -------
+        bool
+            True if the DocDB checkbox is checked, False otherwise.
+        """
+        return self.selection_widgets.docdb_checkbox.isChecked()
 
     def activate_selection_button(self) -> None:
         """Change the stylesheet of the data button to show it is activated."""

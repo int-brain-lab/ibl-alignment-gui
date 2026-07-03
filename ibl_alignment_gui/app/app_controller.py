@@ -11,6 +11,7 @@ from ibl_alignment_gui.app.app_view import AlignmentGUIView
 from ibl_alignment_gui.app.load_worker import Worker
 from ibl_alignment_gui.app.shank_controller import ShankController
 from ibl_alignment_gui.handlers.probe_handler import (
+    ProbeHandlerAllenYaml,
     ProbeHandlerCSV,
     ProbeHandlerLocal,
     ProbeHandlerLocalYaml,
@@ -34,6 +35,9 @@ class AlignmentGUIController:
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
     csv: Path or str or None
         Path to a CSV file containing local sessions on the filesystem.
+    allen: bool
+        Whether to run the Allen/Code Ocean (anatomical) workflow. Uses a yaml session with a
+        ProbeHandlerAllenYaml model and adds a DocDB checkbox to toggle the DocDB backend.
 
     Attributes
     ----------
@@ -86,24 +90,18 @@ class AlignmentGUIController:
         csv: str | None = None,
         yaml: str | None = None,
         pid: str | None = None,
+        allen: bool = False,
     ):
         self.offline = offline
         self.csv: str | None = csv
         self.yaml: str | None = yaml
         self.pid: str | None = pid
+        self.allen = allen
 
-        if offline:
-            if self.yaml is None:
-                self.model = ProbeHandlerLocal()
-            else:
-                self.model = ProbeHandlerLocalYaml(self.yaml)
-        elif self.csv is None:
-            self.model = ProbeHandlerONE()
-        else:
-            self.model = ProbeHandlerCSV(self.csv)
+        self.model = self._build_model()
 
         self.view: AlignmentGUIView = AlignmentGUIView(
-            offline=self.offline, config=len(self.model.configs) > 1
+            offline=self.offline, config=len(self.model.configs) > 1, allen=self.allen
         )
 
         if not offline:
@@ -168,12 +166,40 @@ class AlignmentGUIController:
         elif self.pid is not None:
             self.load_pid(self.pid)
 
+    def _build_model(
+        self,
+    ) -> ProbeHandlerLocal | ProbeHandlerLocalYaml | ProbeHandlerONE | ProbeHandlerCSV:
+        """
+        Build the data model (ProbeHandler) for the selected mode.
+
+        Returns
+        -------
+        ProbeHandler
+            ``ProbeHandlerAllenYaml`` (offline Allen workflow), ``ProbeHandlerLocalYaml`` /
+            ``ProbeHandlerLocal`` (offline), ``ProbeHandlerCSV`` (online with a csv) or
+            ``ProbeHandlerONE`` (online).
+        """
+        if self.offline:
+            if self.allen:
+                # Allen workflow is yaml-only. Until a yaml is chosen from the source button a
+                # lightweight local handler is used purely as a placeholder for the empty GUI.
+                return ProbeHandlerAllenYaml(self.yaml) if self.yaml else ProbeHandlerLocal()
+            if self.yaml is None:
+                return ProbeHandlerLocal()
+            return ProbeHandlerLocalYaml(self.yaml)
+        if self.csv is None:
+            return ProbeHandlerONE()
+        return ProbeHandlerCSV(self.csv)
+
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
         # Setup connections for selection dropdowns and buttons
         if not self.offline:
             self.view.connect_selection_dropdown('subject', self.on_subject_selected)
             self.view.connect_selection_dropdown('session', self.on_session_selected)
+        elif self.allen:
+            # The Allen workflow is yaml-only: the source button just opens a session yaml.
+            self.view.connect_selection_button('folder', self.on_open_session_yaml)
         else:
             # Offline the source button offers both a data folder and a session yaml; each handler
             # swaps in the matching ProbeHandler, so the sources are interchangeable at runtime.
@@ -189,6 +215,10 @@ class AlignmentGUIController:
         self.view.connect_selection_dropdown('align', self.on_alignment_selected)
         self.view.connect_selection_dropdown('config', self.on_config_selected)
         self.view.connect_selection_button('data', self.data_button_pressed)
+
+        # In the Allen workflow the DocDB checkbox toggles the alignment backend at runtime.
+        if self.allen:
+            self.view.connect_docdb_checkbox(self.on_use_docdb_changed)
 
         # Setup connections for alignment buttons
         self.view.connect_button('fit', self.fit_button_pressed)
@@ -910,6 +940,28 @@ class AlignmentGUIController:
             # Update the plots
             self.update_plots(shanks=[self.model.selected_shank])
 
+    def on_use_docdb_changed(self, _state: int | None = None) -> None:
+        """
+        Toggle the DocDB alignment backend and refresh the alignment dropdown.
+
+        Triggered when the DocDB checkbox is ticked/unticked (Allen workflow only). Switches the
+        backend on the model, then (once data is loaded) reloads the previous alignments for the
+        selected shank so the alignment dropdown and reference lines reflect the new source.
+
+        Parameters
+        ----------
+        _state : int or None
+            The checkbox state emitted by the ``stateChanged`` signal. Unused; the checkbox is
+            queried directly via the view.
+        """
+        # No model backend is active until a yaml session is opened, so ignore early toggles.
+        if not hasattr(self.model, 'set_use_docdb'):
+            return
+        self.model.set_use_docdb(self.view.is_docdb_checked())
+        if self.loaded:
+            self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
+            self.on_alignment_selected(0)
+
     def on_config_selected(self, idx: int, init: bool = False) -> None:
         """
         Triggered when a config is selected from the config dropdown list.
@@ -1010,8 +1062,16 @@ class AlignmentGUIController:
         if yaml_path is None or not yaml_path.is_file():
             return
         self.yaml = str(yaml_path)
-        # Reuse the existing brain atlas so we do not re-download it for the new session.
-        self.model = ProbeHandlerLocalYaml(self.yaml)
+        # In Allen mode use the yaml-based Allen handler so the DocDB backend is used, reusing the
+        # existing DocDB client and honouring the current DocDB checkbox state.
+        if self.allen:
+            self.model = ProbeHandlerAllenYaml(
+                self.yaml,
+                docdb=getattr(self.model, 'docdb', None),
+                use_docdb=self.view.is_docdb_checked(),
+            )
+        else:
+            self.model = ProbeHandlerLocalYaml(self.yaml)
         # The features override is reset for every new session in data_button_pressed.
         self._load_current_session()
 

@@ -2,8 +2,6 @@ from typing import TYPE_CHECKING
 
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.utils.optional import require_ibllib
-
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView
 
@@ -23,7 +21,7 @@ def _get_critical_descriptions() -> list[str]:
         The QC reason descriptions used to populate the dialog checkboxes.
     """
     try:
-        critical_reasons = require_ibllib('QC reason descriptions', 'ibllib.qc.critical_reasons')
+        from ibllib.qc import critical_reasons  # noqa: PLC0415
     except ImportError:
         return []
     return critical_reasons.CriticalInsertionNote.descriptions_gui

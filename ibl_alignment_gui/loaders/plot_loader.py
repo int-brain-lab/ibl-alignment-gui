@@ -1,18 +1,19 @@
 import logging
 from dataclasses import dataclass
 from functools import wraps
+from types import ModuleType
 from typing import Any
 
 import numpy as np
 from matplotlib import cm, colors
 
-from brainbox.task import passive
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
     arrange_channels_into_banks,
     average_chns_at_same_depths,
     pad_data_to_full_chn_map,
 )
+from ibl_alignment_gui.utils.optional import require_ibllib
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
 
@@ -25,6 +26,24 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 np.seterr(divide='ignore', invalid='ignore')
+
+
+def _get_passive() -> ModuleType | None:
+    """Import ``brainbox.task.passive`` lazily.
+
+    Passive-stimulus and receptive-field plots rely on ``brainbox`` (shipped with the optional
+    ``ibllib`` dependency). In offline mode this may not be installed, in which case those plots
+    are skipped rather than raising.
+
+    Returns
+    -------
+    ModuleType or None
+        The ``brainbox.task.passive`` module, or None if it is not installed.
+    """
+    try:
+        return require_ibllib('Passive and receptive-field plots', 'brainbox.task.passive')
+    except ImportError:
+        return None
 
 
 def skip_missing(required_keys):
@@ -974,7 +993,16 @@ class PlotLoader:
         Notes
         -----
         - Will only return data for passive events that are present in the data
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            logger.warning(
+                "Passive event plots require the optional 'ibllib' dependency; skipping. "
+                "Install it with 'pip install ibl_alignment_gui[ibl]'."
+            )
+            return dict()
+
         # Find the list of passive events that are present in the data
         if not self.data['pass_stim']['exists'] and not self.data['gabor']['exists']:
             return dict()
@@ -1398,7 +1426,16 @@ class PlotLoader:
         -----
         - Although this is a probe plot the data is not split into banks as for the case of other
          probe plots.
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            logger.warning(
+                "Receptive field map plots require the optional 'ibllib' dependency; skipping. "
+                "Install it with 'pip install ibl_alignment_gui[ibl]'."
+            )
+            return dict()
+
         # Extract stimulus times and positions
         rf_map_times, rf_map_pos, rf_stim_frames = passive.get_on_off_times_and_positions(
             self.data['rf_map']

@@ -129,6 +129,24 @@ Choose one of the following installation methods based on your preferred virtual
        pip install -e .
 
 
+IBL online mode (optional)
+--------------------------
+
+The commands above install the package for **offline mode**, which works with local data files
+and does not require ``ibllib``.
+
+To additionally use the **IBL online mode** (loading data through ONE/Alyx, streaming raw
+electrophysiology data, uploading alignments and QC, and viewing passive/receptive-field plots),
+install the optional ``ibl`` extra, which pulls in ``ibllib``:
+
+.. code-block:: console
+
+   pip install -e ".[ibl]"
+
+The online GUI is launched with the ``alignment-gui-ibl`` entry point; the offline GUI is
+launched with ``alignment-gui``.
+
+
 Verifying Installation
 ----------------------
 

@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import logging
 import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -13,7 +15,7 @@ import spikeglx
 
 import ibldsp.voltage
 import one.alf.io as alfio
-from brainbox.io.spikeglx import Streamer
+from ibl_alignment_gui.utils.optional import require_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
@@ -26,6 +28,9 @@ try:
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
+
+if TYPE_CHECKING:
+    from brainbox.io.spikeglx import Streamer
 
 logger = logging.getLogger(__name__)
 
@@ -911,7 +916,8 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         Streamer
             A streamer object for AP band.
         """
-        return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
+        spikeglx_io = require_ibllib('Raw AP data streaming', 'brainbox.io.spikeglx')
+        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
 
     def load_lf_data(self):
         """
@@ -922,7 +928,8 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         Streamer
             A streamer object for LF band.
         """
-        return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
+        spikeglx_io = require_ibllib('Raw LF data streaming', 'brainbox.io.spikeglx')
+        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
 
 
 class SpikeGLXLoaderLocal(SpikeGLXLoader):

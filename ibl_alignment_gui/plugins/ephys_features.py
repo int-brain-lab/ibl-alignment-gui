@@ -9,6 +9,7 @@ from qtpy import QtCore, QtGui, QtWidgets
 
 from ibl_alignment_gui.app.shank_view import ShankView
 from ibl_alignment_gui.loaders.geometry_loader import ChannelGeometry, arrange_channels_into_banks
+from ibl_alignment_gui.utils.ephys_alignment import EphysAlignment
 from ibl_alignment_gui.utils.qt.adapted_axis import replace_axis
 from ibl_alignment_gui.utils.qt.custom_widgets import (
     ColorBar,
@@ -17,7 +18,6 @@ from ibl_alignment_gui.utils.qt.custom_widgets import (
     SliderWidget,
     set_axis,
 )
-from ibllib.pipes.ephys_alignment import EphysAlignment
 from iblutil.util import Bunch
 from one.remote import aws
 

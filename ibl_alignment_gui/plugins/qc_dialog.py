@@ -2,12 +2,31 @@ from typing import TYPE_CHECKING
 
 from qtpy import QtWidgets
 
-from ibllib.qc.critical_reasons import CriticalInsertionNote
+from ibl_alignment_gui.utils.optional import require_ibllib
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView
 
 PLUGIN_NAME = 'QC dialog'
+
+
+def _get_critical_descriptions() -> list[str]:
+    """Return the QC reason descriptions, or an empty list if ``ibllib`` is missing.
+
+    The reasons come from ``ibllib`` (the optional ``ibl`` extra). QC is only submitted in online
+    mode, so in offline mode without ``ibllib`` the dialog is still built, simply without reason
+    checkboxes.
+
+    Returns
+    -------
+    list[str]
+        The QC reason descriptions used to populate the dialog checkboxes.
+    """
+    try:
+        critical_reasons = require_ibllib('QC reason descriptions', 'ibllib.qc.critical_reasons')
+    except ImportError:
+        return []
+    return critical_reasons.CriticalInsertionNote.descriptions_gui
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -94,7 +113,7 @@ class QCDialog(QtWidgets.QDialog):
         self.desc_buttons.setExclusive(False)
 
         desc_layout = QtWidgets.QVBoxLayout()
-        for i, label in enumerate(CriticalInsertionNote.descriptions_gui):
+        for i, label in enumerate(_get_critical_descriptions()):
             checkbox = QtWidgets.QCheckBox(label)
             self.desc_buttons.addButton(checkbox, i)
             desc_layout.addWidget(checkbox)

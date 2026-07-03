@@ -1,7 +1,7 @@
 import numpy as np
 
 from iblatlas.atlas import AllenAtlas, BrainAtlas
-from ibllib.pipes.ephys_alignment import EphysAlignment
+from ibl_alignment_gui.utils.ephys_alignment import EphysAlignment
 from iblutil.util import Bunch
 
 

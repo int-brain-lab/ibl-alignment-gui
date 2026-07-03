@@ -6,12 +6,10 @@ from typing import Any
 
 import numpy as np
 
-import ibllib.qc.critical_reasons as critical_note
 from ibl_alignment_gui.loaders.transform_loader import TransformLoader
+from ibl_alignment_gui.utils.optional import require_ibllib
 from iblatlas import atlas
 from iblatlas.atlas import AllenAtlas, BrainAtlas
-from ibllib.pipes import histology
-from ibllib.qc.alignment_qc import AlignmentQC
 from iblutil.util import Bunch
 from one import params
 from one.api import ONE
@@ -140,6 +138,7 @@ class AlignmentUploaderOne(AlignmentUploader):
         if self.resolved and not self.force_resolve:
             return False
 
+        histology = require_ibllib('Alignment upload', 'ibllib.pipes.histology')
         # Create new trajectory and overwrite previous one
         histology.register_aligned_track(
             self.pid,
@@ -247,6 +246,7 @@ class AlignmentUploaderOne(AlignmentUploader):
         self.force_resolve = force_resolve
 
         if ephys_qc.upper() == 'CRITICAL':
+            critical_note = require_ibllib('Critical insertion note', 'ibllib.qc.critical_reasons')
             critical_note.main_gui(self.pid, reasons_selected=ephys_desc, alyx=self.one.alyx)
 
     def upload_qc(self, data: dict[str, Any], alignments: dict[str, Any]) -> bool:
@@ -265,7 +265,8 @@ class AlignmentUploaderOne(AlignmentUploader):
         self.resolved: bool
             Alignment resolved bool
         """
-        align_qc = AlignmentQC(
+        alignment_qc = require_ibllib('Alignment QC', 'ibllib.qc.alignment_qc')
+        align_qc = alignment_qc.AlignmentQC(
             self.pid,
             one=self.one,
             brain_atlas=self.brain_atlas,

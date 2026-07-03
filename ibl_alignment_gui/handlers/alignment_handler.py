@@ -198,6 +198,22 @@ class AlignmentHandler:
         )
 
     @property
+    def tip_location(self) -> np.ndarray:
+        """
+        Return the xyz location of the probe tip estimated using the current alignment.
+
+        The tip sits a fixed distance below the first electrode and is estimated using the
+        same track/feature fit as the channels, evaluated at the current index of the
+        circular buffer, so it moves as the alignment is adjusted.
+
+        Returns
+        -------
+        np.ndarray
+            xyz position of the probe tip in 3D space
+        """
+        return self.ephysalign.get_tip_location(self.features[self.idx], self.tracks[self.idx])
+
+    @property
     def track_lines(self) -> list[np.ndarray]:
         """
         Return the perpendicular vectors (lines) at the position of each track reference line.

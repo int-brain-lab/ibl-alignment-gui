@@ -122,6 +122,7 @@ class ShankView:
         self.slice_plot: pg.ImageItem = None
         self.traj_line: pg.PlotCurveItem | None = None
         self.slice_chns: pg.ScatterPlotItem | None = None
+        self.slice_tip: pg.ScatterPlotItem | None = None
 
         # Plot items for the fit plot
         self.fit_plot: pg.PlotCurveItem | None = None
@@ -498,6 +499,10 @@ class ShankView:
         colours = cbar.cmap.mapToQColor(data.scale_factor)
         cbar.set_levels((0, 1.5), label='Scale')
 
+        # Visible y-bounds (matching set_yaxis_range) used to keep region labels on-screen
+        y_min = self.yrange[0] - self.ylim_extra
+        y_max = self.yrange[1] + self.ylim_extra
+
         for ir, region in enumerate(data.region):
             item = pg.LinearRegionItem(
                 values=region,
@@ -508,6 +513,12 @@ class ShankView:
             self.fig_scale.addItem(item)
             self.fig_scale.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen=colours[ir]))
             self.scale_regions.append(item)
+
+            # Label each region with its scale factor, centred within its visible span
+            text_y = (max(y_min, region[0]) + min(y_max, region[1])) / 2
+            text_item = pg.TextItem(text=f'{data.scale[ir]:.2f}', anchor=(0.5, 0.5), color='black')
+            text_item.setPos(-0.05, text_y)
+            self.fig_scale.addItem(text_item)
 
         # Add additional boundary for final region
         self.fig_scale.addItem(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen=colours[-1]))
@@ -581,6 +592,7 @@ class ShankView:
         """
         self.slice_lines = self.remove_items(fig_slice, self.slice_lines)
         self.slice_chns = self.remove_items(fig_slice, self.slice_chns)
+        self.slice_tip = self.remove_items(fig_slice, self.slice_tip)
 
     def plot_channels(self, fig_slice: pg.ViewBox, data: Bunch, colour: str = 'r') -> None:
         """
@@ -603,6 +615,12 @@ class ShankView:
             x=data['xyz_channels'][:, 0], y=data['xyz_channels'][:, 2], pen=colour, brush=colour
         )
         fig_slice.addItem(self.slice_chns)
+
+        # Mark the probe tip with a larger magenta point to distinguish it from the channels
+        self.slice_tip = pg.ScatterPlotItem(
+            x=[data['tip'][0]], y=[data['tip'][2]], pen='m', brush='m', size=10
+        )
+        fig_slice.addItem(self.slice_tip)
 
         self.slice_lines = []
         for ref_line in data['track_lines']:
@@ -992,6 +1010,8 @@ class ShankView:
         if self.traj_line:
             func(self.traj_line)
         func(self.slice_chns)
+        if self.slice_tip:
+            func(self.slice_tip)
         for line in self.slice_lines:
             func(line)
 

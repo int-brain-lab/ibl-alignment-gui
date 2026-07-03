@@ -1,3 +1,4 @@
+import gc
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -1195,9 +1196,23 @@ class AlignmentGUIController:
             report_progress=True,
         )
 
+    def _teardown_session(self) -> None:
+        """
+        Tear down the previous session before building a new one.
+
+        Closes any plugin-owned popups/windows (e.g. cluster feature popups) tied to the
+        previous session so they do not linger or get reused across sessions. The shank
+        controllers, views and their pyqtgraph figures are dropped when :meth:`create_shanks`
+        replaces ``shank_items`` and :meth:`AlignmentGUIView.reset_view` clears the tabs; the
+        orphaned reference cycles are then collected at the end of :meth:`_on_load_finished`.
+        """
+        self.execute_plugins('teardown', self)
+
     def _on_load_finished(self, _result: object = None) -> None:
         """Assemble the GUI display once background loading has completed (main thread)."""
         self.loaded = True
+        # Tear down the previous session (close its popups) before rebuilding
+        self._teardown_session()
         # Build the shank controllers and run any load-time plugins
         self.create_shanks()
         self.execute_plugins('load_data', self)
@@ -1215,6 +1230,9 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
+        # Reclaim the previous session's figures/data now that its tabs have been cleared and
+        # its shank controllers/views dereferenced (pyqtgraph leaves reference cycles behind)
+        gc.collect()
         print(f'Loading time: {time.time() - self._load_start}')
 
     def setup(self, init=True) -> None:

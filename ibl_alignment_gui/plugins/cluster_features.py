@@ -29,10 +29,13 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller: AlignmentGUIController
         The main application controller.
     """
+    manager = ClusterPopupManager(controller)
     controller.plugins[PLUGIN_NAME] = dict()
-    controller.plugins[PLUGIN_NAME]['loader'] = ClusterPopupManager(controller)
+    controller.plugins[PLUGIN_NAME]['loader'] = manager
     controller.plugins[PLUGIN_NAME]['callback'] = callback
-    controller.plugins[PLUGIN_NAME]['activate'] = True
+    controller.plugins[PLUGIN_NAME]['activated'] = True
+    # Close any open cluster popups when the session changes (see execute_plugins)
+    controller.plugins[PLUGIN_NAME]['teardown'] = manager.teardown
 
     # Add a submenu to the main menu
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
@@ -228,8 +231,19 @@ class ClusterPopupManager:
         popup.raise_()
         popup.activateWindow()
 
-    def reset(self) -> None:
-        """Triggered when the main GUI is closed. Closes all popups and resets the manager."""
+    def teardown(self, _controller: 'AlignmentGUIController') -> None:
+        """
+        Close all cluster popups when the session changes.
+
+        Invoked via ``execute_plugins('teardown', controller)`` at the start of a session
+        rebuild so popups tied to the previous session do not linger or get reused.
+
+        Parameters
+        ----------
+        _controller : AlignmentGUIController
+            The main application controller. Accepted to match the plugin hook signature
+            but unused.
+        """
         self.close_popups()
 
 

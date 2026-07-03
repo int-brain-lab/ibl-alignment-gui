@@ -619,7 +619,7 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
             data = self.loader.load_meta_data()
             self.assertIsNone(data)
 
-    @patch('ibl_alignment_gui.loaders.data_loader.Streamer')
+    @patch('brainbox.io.spikeglx.Streamer')
     def test_load_ap_data(self, mock_streamer):
         """Test the load_ap_data method"""
         self.loader.load_ap_data()

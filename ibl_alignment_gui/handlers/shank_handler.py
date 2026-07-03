@@ -113,6 +113,11 @@ class ShankHandler:
         return self.align_handle.xyz_track
 
     @property
+    def tip_location(self) -> np.ndarray:
+        """See :meth:`AlignmentHandler.tip_location` for details."""
+        return self.align_handle.tip_location
+
+    @property
     def track_lines(self) -> list[np.ndarray]:
         """See :meth:`AlignmentHandler.track_lines` for details."""
         return self.align_handle.track_lines

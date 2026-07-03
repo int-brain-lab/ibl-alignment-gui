@@ -148,6 +148,7 @@ class ShankController:
         data = Bunch()
         data['xyz_channels'] = self.model.xyz_channels
         data['track_lines'] = self.model.track_lines
+        data['tip'] = self.model.tip_location
         self.view.plot_channels(fig_slice, data, colour=colour)
 
     def plot_scatter(self, plot_key: str, levels: list | None = None) -> ColorBar | None:

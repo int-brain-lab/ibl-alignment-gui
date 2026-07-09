@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ibl_alignment_gui.loaders.anatomical_atlas import BrainAtlasAnatomical
+from ibl_alignment_gui.utils.allen.anatomical_atlas import BrainAtlasAnatomical
 from iblatlas.atlas import BrainAtlas
 
 try:

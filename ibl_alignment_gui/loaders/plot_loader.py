@@ -628,7 +628,7 @@ class PlotLoader:
         amps = self.spike_amps[::subsample]
 
         # Amplitude bins (ignore top 10% outliers)
-        amp_range = np.quantile(amps, [0, 0.9])
+        amp_range = np.nanquantile(amps, [0, 0.9])
         amp_bins = np.linspace(amp_range[0], amp_range[1], a_bin)
 
         # Map amplitudes to bin indices
@@ -798,7 +798,7 @@ class PlotLoader:
         """
         xscale = (self.times[-1] - self.times[0]) / self.fr.shape[1]
         yscale = (self.depths[-1] - self.depths[0]) / self.fr.shape[0]
-        levels = np.quantile(np.mean(self.fr.T, axis=0), [0, 1])
+        levels = np.nanquantile(np.mean(self.fr.T, axis=0), [0, 1])
 
         img = ImageData(
             img=self.fr.T,
@@ -900,8 +900,8 @@ class PlotLoader:
         )  # convert to µV
 
         # Median subtract across depths (remove horizontal bands)
-        depth_medians = np.median(img, axis=1, keepdims=True)
-        global_median = np.mean(depth_medians)
+        depth_medians = np.nanmedian(img, axis=1, keepdims=True)
+        global_median = np.nanmean(depth_medians)
         img = img - depth_medians + global_median
 
         # Reconstruct full channel map (handles gaps in channel geometry)
@@ -911,7 +911,7 @@ class PlotLoader:
         timestamps = self.data[f'rms_{band}']['timestamps']
         xscale = (timestamps[-1] - timestamps[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
         cmap = 'plasma' if band == 'AP' else 'inferno'
 
@@ -965,7 +965,7 @@ class PlotLoader:
         # Scaling for plotting
         xscale = (freq_range[-1] - freq_range[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
         img = ImageData(
             img=img_full,
@@ -978,7 +978,6 @@ class PlotLoader:
             xaxis='Frequency (Hz)',
             title='PSD (dB)',
         )
-
         return {'LF spectrum': img}
 
     @skip_missing(['spikes'])
@@ -1350,7 +1349,7 @@ class PlotLoader:
         """
         # Average data across time
         rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
-        levels = np.quantile(rms_avg, [0.1, 0.9])
+        levels = np.nanquantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
         probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
             self.shank_sites, rms_avg, bnk_width=BNK_SIZE
@@ -1396,7 +1395,7 @@ class PlotLoader:
             probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
                 self.shank_sites, lfp_power, bnk_width=BNK_SIZE
             )
-            levels = np.quantile(lfp_power, [0.1, 0.9])
+            levels = np.nanquantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
                 img=probe_img,
@@ -1463,7 +1462,7 @@ class PlotLoader:
         yscale = (self.chn_max - self.chn_min) / img['on'].shape[0]
         xscale = 1
         depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
-        levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
+        levels = np.nanquantile(np.c_[img['on'], img['off']], [0, 1])
 
         data_img = dict()
         sub_type = ['on', 'off']

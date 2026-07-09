@@ -393,7 +393,7 @@ class ProbeHandler(ABC):
         """
         return AllenAtlas()
 
-    def build_atlas(self) -> None:
+    def build_atlas(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """
         Build the brain atlas if not already available, and share it with the shank uploaders.
 
@@ -402,6 +402,10 @@ class ProbeHandler(ABC):
         in ``initialise_shanks`` hold a reference to the atlas; because the atlas may not exist yet
         at that point, this method (re)assigns the freshly built atlas onto each of them.
         """
+
+        if progress_callback is not None:
+            progress_callback('Building atlas…', 0, 0)
+
         if self.brain_atlas is None:
             self.brain_atlas = self._make_atlas()
         for probe in self.shanks:
@@ -425,9 +429,7 @@ class ProbeHandler(ABC):
             Optional callback invoked as ``progress_callback(message, current, total)`` to report
             progress. No-op when None.
         """
-        if progress_callback is not None:
-            progress_callback('Building atlas…', 0, 0)
-        self.build_atlas()
+        self.build_atlas(progress_callback=progress_callback)
         self.load_data(progress_callback=progress_callback)
         self.load_plots(progress_callback=progress_callback)
 
@@ -1069,7 +1071,8 @@ class ProbeHandlerLocal(ProbeHandler):
             loaders['upload'] = AlignmentUploaderLocal(
                 self.data_paths.output, ish, self.n_shanks, self.brain_atlas
             )
-            loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
+            if self.data_paths.raw_ephys is not None:
+                loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
             loaders['plots'] = PlotLoader()
             self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
 
@@ -1092,7 +1095,9 @@ class ProbeHandlerLocalYaml(ProbeHandler):
     """
 
     def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
-        self.configs, self.probes, self.data_paths = load_alignment_yaml(yaml_file)
+        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
+            yaml_file
+        )
         # The atlas (anatomical or Allen, see _make_atlas) is built lazily by build_atlas() on the
         # background loading thread rather than here, so it does not block GUI construction.
         super().__init__(brain_atlas)
@@ -1157,7 +1162,7 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         """Load in the histology slice data."""
         data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
         return make_slice_loader(
-            data_paths.histology, self.brain_atlas, data_paths.histology_space
+            data_paths.histology, self.brain_atlas, self.histology_space
         )
 
     def initialise_shanks(self) -> None:
@@ -1211,7 +1216,7 @@ class ProbeHandlerLocalYaml(ProbeHandler):
             The alignment loader for the shank.
         """
         return AlignmentLoaderLocal(
-            data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
+            data_path.picks or data_path.spike_sorting, ishank, self.n_shanks, histology_space=self.histology_space
         )
 
     def _build_upload_loader(
@@ -1288,9 +1293,9 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
 
     def _make_atlas(self) -> BrainAtlas:
         """Return the appropriate atlas based on the histology space in the YAML config."""
-        first_paths = next(iter(next(iter(self.data_paths.values())).values()))
-        if first_paths.histology_space == 'anatomical' and first_paths.histology:
-            return build_anatomical_atlas(first_paths.histology)
+        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
+        if self.histology_space == 'anatomical' and histology_path:
+            return build_anatomical_atlas(histology_path)
         return AllenAtlas()
 
     def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderDocDB:
@@ -1301,6 +1306,7 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
             self.n_shanks,
             self.docdb,
             use_db=self.use_docdb,
+            histology_space=self.histology_space
         )
 
     def _build_upload_loader(

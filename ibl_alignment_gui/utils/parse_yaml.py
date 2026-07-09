@@ -30,10 +30,6 @@ class DatasetPaths(BaseModel):
         Path to probe trajectory pick files directory
     histology : Path | None
         Path to histology volume directory
-    histology_space : str
-        Coordinate space for histology loading: 'ccf' (default) uses the Allen
-        CCF atlas via NrrdSliceLoader; 'anatomical' uses the original image
-        space via AnatomicalSliceLoader.
     output : Path | None
         Path to alignment output directory
     features : Path | None
@@ -68,10 +64,16 @@ class Datasets(BaseModel):
         Relative or absolute path to the dataset directory
     backend : str | None
         Data format backend (e.g., 'phylib', 'spikeglx')
+    space : {'ccf', 'anatomical'} | None
+        Only meaningful for the ``histology`` entry of the top-level ``defaults`` section: the
+        session-level coordinate space to use for histology slice loading. 'ccf' loads via
+        NrrdSliceLoader using the Allen CCF atlas; 'anatomical' loads via AnatomicalSliceLoader
+        using the original image space produced by the histology registration pipeline.
     """
 
     path: Path | None = None
     backend: str | None = None
+    space: Literal['ccf', 'anatomical'] | None = None
 
 
 class Probe(BaseModel):
@@ -106,22 +108,6 @@ class Configuration(BaseModel):
     path: Path | None = None  # Config-level root
 
 
-class HistologyConfig(BaseModel):
-    """
-    Top-level histology settings applied to all probes in the session.
-
-    Attributes
-    ----------
-    space : {'ccf', 'anatomical'}
-        Which coordinate space to use for histology slice loading.
-        'ccf' (default) loads via NrrdSliceLoader using the Allen CCF atlas.
-        'anatomical' loads via AnatomicalSliceLoader using the original image
-        space produced by the histology registration pipeline.
-    """
-
-    space: Literal['ccf', 'anatomical'] = 'ccf'
-
-
 class AlignmentYAML(BaseModel):
     """
     Root-level YAML configuration structure.
@@ -132,15 +118,12 @@ class AlignmentYAML(BaseModel):
         Default dataset configurations applied to all probes
     configurations : dict[str, Configuration]
         Dictionary mapping configuration names to their configurations
-    histology : HistologyConfig | None
-        Session-level histology settings (space selection)
     path : Path | None
         Global root path for resolving all relative paths
     """
 
     defaults: dict[str, Datasets] | None = None
     configurations: dict[str, Configuration]
-    histology: HistologyConfig | None = None
     path: Path | None = None  # Global root
 
 
@@ -209,7 +192,7 @@ def resolve_path(
 
 def load_alignment_yaml(
     yaml_file: str,
-) -> tuple[list[str], list[str], dict[str, dict[str, DatasetPaths]]]:
+) -> tuple[list[str], list[str], dict[str, dict[str, DatasetPaths]], str]:
     """
     Load and parse alignment configuration YAML file.
 
@@ -230,6 +213,10 @@ def load_alignment_yaml(
     data_paths : A dict of dicts of DatasetPaths
         Nested dictionary of resolved paths:
         data_paths[config_name][probe_name] -> DatasetPaths
+    histology_space : str
+        Session-level histology coordinate space, read from the ``space`` field of the
+        ``defaults`` histology entry ('ccf' if unspecified). 'ccf' loads histology via the Allen
+        CCF atlas; 'anatomical' loads the original image space from the registration pipeline.
 
     Notes
     -----
@@ -253,7 +240,11 @@ def load_alignment_yaml(
 
     alignment = AlignmentYAML(**data)
     global_path = alignment.path
-    histology_space = alignment.histology.space if alignment.histology else 'ccf'
+
+    # Histology space is a session-level setting read from the ``defaults`` histology entry and
+    # shared by every probe/config ('ccf' when unspecified).
+    default_histology = alignment.defaults.get('histology') if alignment.defaults else None
+    histology_space = (default_histology.space if default_histology else None) or 'ccf'
 
     data_paths = defaultdict(dict)
     configs = []
@@ -300,10 +291,12 @@ def load_alignment_yaml(
                 )
                 setattr(resolved_paths, dataset_name, resolved_path)
 
-            resolved_paths.histology_space = histology_space
-
             if resolved_paths.processed_ephys is None:
                 resolved_paths.processed_ephys = resolved_paths.raw_ephys
+
+            if resolved_paths.raw_ephys is None:
+                resolved_paths.processed_ephys = resolved_paths.spike_sorting
+                resolved_paths.raw_ephys = resolved_paths.spike_sorting
 
             if resolved_paths.output is None:
                 resolved_paths.output = resolved_paths.spike_sorting
@@ -316,4 +309,4 @@ def load_alignment_yaml(
         'More than two configurations found in YAML, alignment GUI supports up to two.'
     )
 
-    return configs, list(set(probes)), data_paths
+    return configs, list(set(probes)), data_paths, histology_space

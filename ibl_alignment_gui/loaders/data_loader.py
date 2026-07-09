@@ -337,10 +337,36 @@ class DataLoader(ABC):
                 continue
             if data[key].ndim == 1:
                 continue
-
-            data[key] = data[key][:, self.shank_sites['raw_ind']]
+            # data[key] = data[key][:, self.shank_sites['raw_ind']]
+            data[key] = self._safe_take(data[key], self.shank_sites['raw_ind'])
 
         return data
+
+    @staticmethod
+    def _safe_take(arr, indices, axis=1):
+        """np.take along ``axis`` that fills out-of-bounds positions with NaN.
+
+        Channel indices can exceed the data array (e.g. main-block RMS has fewer
+        channels than the combined channel set). In-bounds indices are taken
+        normally; out-of-bounds positions are returned as NaN.
+        """
+        indices = np.asarray(indices)
+        max_idx = arr.shape[axis] - 1
+        oob = indices > max_idx
+
+        if not np.any(oob):
+            return np.take(arr, indices, axis=axis)
+
+        logger.warning(
+            f'Channel indices exceed data size (max_idx={max_idx}, '
+            f'max_chn_ind={indices.max()}). Filling {oob.sum()} channels with NaN.'
+        )
+        result = np.take(arr, np.clip(indices, 0, max_idx), axis=axis).astype(float)
+        # Build a slicer that targets the OOB positions along `axis`.
+        oob_slice = [slice(None)] * result.ndim
+        oob_slice[axis] = oob
+        result[tuple(oob_slice)] = np.nan
+        return result
 
     @staticmethod
     def filter_spikes_by_fr(

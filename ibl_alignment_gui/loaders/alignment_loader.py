@@ -253,10 +253,12 @@ class AlignmentLoaderLocal(AlignmentLoader):
         n_shanks: int,
         user: str | None = None,
         xyz_picks: np.ndarray | None = None,
+        histology_space : str = 'ccf',
     ):
         self.data_path: Path = data_path
         self.shank_idx: int = shank_idx
         self.n_shanks: int = n_shanks
+        self.histology_space: str = histology_space
 
         super().__init__(user=user, xyz_picks=xyz_picks)
 
@@ -269,10 +271,11 @@ class AlignmentLoaderLocal(AlignmentLoader):
         np.ndarray or None
             The xyz picks as a (N, 3) array in m, or None if not found.
         """
+        space = '_image_space' if self.histology_space != 'ccf' else ''
         xyz_name = (
-            '*xyz_picks_image_space.json'
+            f'*xyz_picks{space}.json'
             if self.n_shanks == 1
-            else f'*xyz_picks_shank{self.shank_idx + 1}.json'
+            else f'*xyz_picks{space}_shank{self.shank_idx + 1}.json'
         )
 
         xyz_file = sorted(self.data_path.glob(xyz_name))
@@ -363,10 +366,11 @@ class AlignmentLoaderDocDB(AlignmentLoaderLocal):
         user: str | None = None,
         xyz_picks: np.ndarray | None = None,
         use_db: bool = True,
+        histology_space: str = 'ccf'
     ):
         self.docdb: DocDB = docdb
         self.use_db = use_db
-        super().__init__(data_path, shank_idx, n_shanks, user=user, xyz_picks=xyz_picks)
+        super().__init__(data_path, shank_idx, n_shanks, user=user, xyz_picks=xyz_picks, histology_space=histology_space)
 
     def load_alignments(self) -> dict[str, Any] | None:
         """

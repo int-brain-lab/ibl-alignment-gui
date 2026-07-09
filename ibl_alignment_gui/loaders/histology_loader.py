@@ -10,7 +10,7 @@ import requests
 import SimpleITK as sitk  # noqa: N813
 
 from iblatlas.atlas import AllenAtlas, BrainAtlas
-from ibl_alignment_gui.loaders.anatomical_atlas import BrainAtlasAnatomical, _BLESSED_DIRECTION
+from ibl_alignment_gui.utils.allen.anatomical_atlas import BrainAtlasAnatomical, _BLESSED_DIRECTION
 from iblutil.util import Bunch
 from one import params
 from one.webclient import http_download_file

@@ -415,6 +415,8 @@ class GeometryLoaderLocal(GeometryLoader):
         dict or None
             A dict containing the spikeglx AP band metadata, or None if not found.
         """
+        if self.meta_path is None:
+            return None
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
         return spikeglx.read_meta_data(meta_file) if meta_file else None
 
@@ -529,7 +531,7 @@ def average_chns_at_same_depths(shank_geom: Bunch[str, Any], data: np.ndarray) -
     chn_depth_eq[np.where(chn_count == 2)] += 1
 
     # Average pairs of channels at the same depth
-    averaged_data = np.mean(
+    averaged_data = np.nanmean(
         np.stack([data[:, chn_depth], data[:, chn_depth_eq]], axis=-1),
         axis=-1,
     )

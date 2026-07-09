@@ -4,14 +4,14 @@ import numpy as np
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
+from ibl_alignment_gui.app.widgets.adapted_axis import replace_axis
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar, set_axis
 from ibl_alignment_gui.loaders.plot_loader import (
     ImageData,
     LineData,
     ProbeData,
     ScatterData,
 )
-from ibl_alignment_gui.utils.qt.adapted_axis import replace_axis
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar, set_axis
 from iblutil.util import Bunch
 
 

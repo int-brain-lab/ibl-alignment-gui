@@ -120,7 +120,7 @@ source-exclude = [
 [tool.ruff]
 line-length = 99
 include = ["pyproject.toml", "ibl_alignment_gui/**/*.py", "tests/**/*.py", "docs/source/**/*.py"]
-exclude = ["ibl_alignment_gui/utils/qt/adapted_axis.py", "ibl_alignment_gui/utils/qt/qrange_slider.py"]
+exclude = ["ibl_alignment_gui/app/widgets/adapted_axis.py", "ibl_alignment_gui/app/widgets/qrange_slider.py"]
 
 [tool.ruff.format]
 quote-style = "single"

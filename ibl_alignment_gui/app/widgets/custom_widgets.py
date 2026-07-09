@@ -9,7 +9,7 @@ import pyqtgraph as pg
 from pyqtgraph.functions import makeARGB
 from qtpy import QtCore, QtGui, QtWidgets
 
-from ibl_alignment_gui.utils.qt.qrange_slider import QRangeSlider
+from ibl_alignment_gui.app.widgets.qrange_slider import QRangeSlider
 from iblutil.util import Bunch
 
 

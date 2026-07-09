@@ -50,7 +50,7 @@ from one.api import ONE
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ibl_alignment_gui.utils.allen.docdb_api import DocDB
+    from ibl_alignment_gui.backends.allen.docdb_api import DocDB
 
 try:
     import ephysatlas.data
@@ -1245,7 +1245,7 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
 
     Extends :class:`ProbeHandlerLocalYaml` (so all the yaml/anatomical/data/geometry/histology/
     transform wiring is reused) and, mirroring how :class:`ProbeHandlerONE` owns a ``one``
-    instance, owns a :class:`~ibl_alignment_gui.utils.allen.docdb_api.DocDB` instance that is
+    instance, owns a :class:`~ibl_alignment_gui.backends.allen.docdb_api.DocDB` instance that is
     injected into the DocDB alignment loader and uploader (overriding the local factory hooks
     :meth:`ProbeHandler._build_align_loader` / :meth:`ProbeHandler._build_upload_loader`).
 
@@ -1275,7 +1275,7 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
     ):
         # Imported lazily so the base install (offline / IBL modes) does not require the allen
         # extra; the alignment-gui-allen launcher checks the extra is installed up front.
-        from ibl_alignment_gui.utils.allen.docdb_api import DocDB  # noqa: PLC0415
+        from ibl_alignment_gui.backends.allen.docdb_api import DocDB  # noqa: PLC0415
 
         self.docdb: DocDB = docdb or DocDB()
         self.use_docdb: bool = use_docdb

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ibl_alignment_gui.utils.allen.docdb_api import DocDB
+    from ibl_alignment_gui.backends.allen.docdb_api import DocDB
     from one.api import ONE
 
 

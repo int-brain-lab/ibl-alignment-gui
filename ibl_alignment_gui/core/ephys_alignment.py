@@ -21,10 +21,11 @@ Superior) -- expressed in metres.
 
 import logging
 
-import iblatlas.atlas as atlas
 import numpy as np
 import pandas as pd
 import scipy
+
+import iblatlas.atlas as atlas
 from iblatlas.atlas import BrainAtlas
 from iblutil.util import Bunch
 

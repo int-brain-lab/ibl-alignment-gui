@@ -9,9 +9,9 @@ import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.app.app_view import AlignmentGUIView
-from ibl_alignment_gui.loaders import plot_loader
 from ibl_alignment_gui.app.load_worker import Worker
 from ibl_alignment_gui.app.shank_controller import ShankController
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerAllenYaml,
     ProbeHandlerCSV,
@@ -19,10 +19,10 @@ from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerLocalYaml,
     ProbeHandlerONE,
 )
+from ibl_alignment_gui.loaders import plot_loader
 from ibl_alignment_gui.plugins.add_plugins import Plugins
 from ibl_alignment_gui.plugins.qc_dialog import display as display_qc_dialog
 from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_dialog
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
 

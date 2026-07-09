@@ -4,7 +4,7 @@ import numpy as np
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
-from ibl_alignment_gui.utils.qt.custom_widgets import PopupWindow, set_axis
+from ibl_alignment_gui.app.widgets.custom_widgets import PopupWindow, set_axis
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView

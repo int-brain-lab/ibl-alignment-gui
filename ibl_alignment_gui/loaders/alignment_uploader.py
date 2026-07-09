@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ibl_alignment_gui.backends.allen.docdb_api import DocDB
     from ibl_alignment_gui.loaders.transform_loader import TransformLoader
-    from ibl_alignment_gui.utils.allen.docdb_api import DocDB
     from iblatlas.atlas import BrainAtlas
     from iblutil.util import Bunch
     from one.api import ONE
@@ -606,7 +606,7 @@ class AlignmentUploaderDocDB(AlignmentUploaderLocal):
     alignments and, when a transform loader is available, the CCF channel locations) are always
     written. When ``use_db`` is True a QC evaluation holding the channel results, previous
     alignments and CCF channel results is additionally posted to DocDB via the injected
-    :class:`~ibl_alignment_gui.utils.allen.docdb_api.DocDB` client; when False only the local
+    :class:`~ibl_alignment_gui.backends.allen.docdb_api.DocDB` client; when False only the local
     files are written and the uploader behaves like :class:`AlignmentUploaderLocal`.
 
     Parameters

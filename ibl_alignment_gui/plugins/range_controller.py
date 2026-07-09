@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.utils.qt.custom_widgets import CheckBoxGroup, PopupWindow, SliderWidget
+from ibl_alignment_gui.app.widgets.custom_widgets import CheckBoxGroup, PopupWindow, SliderWidget
 from ibl_alignment_gui.utils.utils import shank_loop
 from iblutil.util import Bunch
 

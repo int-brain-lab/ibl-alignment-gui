@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.utils.qt.custom_widgets import CheckBoxGroup
+from ibl_alignment_gui.app.widgets.custom_widgets import CheckBoxGroup
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.app_controller import AlignmentGUIController

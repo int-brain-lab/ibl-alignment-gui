@@ -2,8 +2,8 @@ import numpy as np
 import pyqtgraph as pg
 
 from ibl_alignment_gui.app.shank_view import ShankView
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
 from iblutil.util import Bunch
 
 

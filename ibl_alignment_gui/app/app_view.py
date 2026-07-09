@@ -5,7 +5,7 @@ import numpy as np
 import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
-from ibl_alignment_gui.utils.qt import custom_widgets
+from ibl_alignment_gui.app.widgets import custom_widgets
 from iblutil.util import Bunch
 
 pg.setConfigOption('background', 'w')

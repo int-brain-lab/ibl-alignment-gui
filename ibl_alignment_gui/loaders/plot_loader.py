@@ -6,7 +6,7 @@ from types import ModuleType
 from typing import Any
 
 import numpy as np
-from matplotlib import cm, colors
+from matplotlib import colormaps, colors
 
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
@@ -647,7 +647,7 @@ class PlotLoader:
 
         # Build colormap
         colour_bin = np.linspace(0.0, 1.0, a_bin + 1)
-        colormap = cm.get_cmap('BuPu')(colour_bin)[..., :3]
+        colormap = colormaps['BuPu'](colour_bin)[..., :3]
 
         # Initialize colours and sizes
         spikes_colours = np.array(['#000000'] * amps.size)

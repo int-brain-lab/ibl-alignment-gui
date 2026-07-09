@@ -351,7 +351,7 @@ class ColorBar(pg.GraphicsWidget):
         grad : QtGui.QLinearGradient
             Gradient object for rendering the bar.
         """
-        mpl_cmap = mpl.cm.get_cmap(cmap_name)
+        mpl_cmap = mpl.colormaps[cmap_name]
         if isinstance(mpl_cmap, mpl.colors.LinearSegmentedColormap):
             cbins = np.linspace(0.0, 1.0, cbin)
             colors = (mpl_cmap(cbins)[np.newaxis, :, :3][0]).tolist()

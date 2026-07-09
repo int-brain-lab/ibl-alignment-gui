@@ -19,6 +19,7 @@ from iblutil.util import Bunch
 
 try:
     import ephysatlas.features
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -882,7 +883,7 @@ class PlotLoader:
         """
         return self._image_rms('rms_LF')
 
-    def _image_rms(self, alf_object: str, plot_key: str | None = None ) -> dict[str, Any]:
+    def _image_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for an image plot of the RMS for the specified frequency band (AP or LF).
 
@@ -930,7 +931,6 @@ class PlotLoader:
         band = 'AP' if 'AP' in alf_object else 'LF'
         key = plot_key or f'rms {band}'
 
-
         img = ImageData(
             img=img_full,
             scale=np.array([xscale, yscale]),
@@ -940,7 +940,7 @@ class PlotLoader:
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
             xaxis=self.data[alf_object]['xaxis'],
-            title=f'{band} RMS (uV)'
+            title=f'{band} RMS (uV)',
         )
 
         return {key: img}
@@ -1345,7 +1345,7 @@ class PlotLoader:
         """
         return self._probe_rms('rms_LF')
 
-    def _probe_rms(self, alf_object: str, plot_key: str | None=None) -> dict[str, Any]:
+    def _probe_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for a probe plot of the RMS for the specified frequency band (AP or LF).
 

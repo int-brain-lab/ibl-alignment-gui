@@ -253,7 +253,7 @@ class AlignmentLoaderLocal(AlignmentLoader):
         n_shanks: int,
         user: str | None = None,
         xyz_picks: np.ndarray | None = None,
-        histology_space : str = 'ccf',
+        histology_space: str = 'ccf',
     ):
         self.data_path: Path = data_path
         self.shank_idx: int = shank_idx
@@ -366,11 +366,18 @@ class AlignmentLoaderDocDB(AlignmentLoaderLocal):
         user: str | None = None,
         xyz_picks: np.ndarray | None = None,
         use_db: bool = True,
-        histology_space: str = 'ccf'
+        histology_space: str = 'ccf',
     ):
         self.docdb: DocDB = docdb
         self.use_db = use_db
-        super().__init__(data_path, shank_idx, n_shanks, user=user, xyz_picks=xyz_picks, histology_space=histology_space)
+        super().__init__(
+            data_path,
+            shank_idx,
+            n_shanks,
+            user=user,
+            xyz_picks=xyz_picks,
+            histology_space=histology_space,
+        )
 
     def load_alignments(self) -> dict[str, Any] | None:
         """

@@ -334,7 +334,9 @@ class AlignmentGUIController:
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys
         )
-        filter_keys = ['All', 'KS good', 'KS mua', 'IBL good'] +  list(plot_loader.CUSTOM_FILTERS.keys())
+        filter_keys = ['All', 'KS good', 'KS mua', 'IBL good'] + list(
+            plot_loader.CUSTOM_FILTERS.keys()
+        )
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
         )

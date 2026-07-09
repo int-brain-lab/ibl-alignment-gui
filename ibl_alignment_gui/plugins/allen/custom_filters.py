@@ -51,12 +51,14 @@ def add_filters(controller: 'AlignmentGUIController') -> None:
     plot_loader.CUSTOM_FILTERS['unitrefine_sua'] = filter_unit_refine_sua
     plot_loader.CUSTOM_FILTERS['unitrefine_label'] = filter_unit_refine_neural
 
+
 def filter_aind_qc(metrics: pd.DataFrame) -> np.ndarray:
     return metrics['default_qc'].values
 
+
 def filter_unit_refine_sua(metrics: pd.DataFrame) -> np.ndarray:
-    return metrics["unitrefine_label"] == "sua"
+    return metrics['unitrefine_label'] == 'sua'
+
 
 def filter_unit_refine_neural(metrics: pd.DataFrame) -> np.ndarray:
-    return metrics["unitrefine_label"] != "noise"
-
+    return metrics['unitrefine_label'] != 'noise'

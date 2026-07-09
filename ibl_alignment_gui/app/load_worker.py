@@ -49,9 +49,7 @@ class Worker(QtCore.QObject):
     finished = QtCore.Signal(object)
     error = QtCore.Signal(str)
 
-    def __init__(
-        self, func: Callable, *args: Any, report_progress: bool = False, **kwargs: Any
-    ):
+    def __init__(self, func: Callable, *args: Any, report_progress: bool = False, **kwargs: Any):
         super().__init__()
         self._func: Callable = func
         self._args: tuple = args

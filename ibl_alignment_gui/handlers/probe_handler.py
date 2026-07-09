@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
 try:
     import ephysatlas.data
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -393,7 +394,9 @@ class ProbeHandler(ABC):
         """
         return AllenAtlas()
 
-    def build_atlas(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+    def build_atlas(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
         """
         Build the brain atlas if not already available, and share it with the shank uploaders.
 
@@ -414,9 +417,7 @@ class ProbeHandler(ABC):
                 if upload is not None:
                     upload.brain_atlas = self.brain_atlas
 
-    def load_all(
-        self, progress_callback: Callable[[str, int, int], None] | None = None
-    ) -> None:
+    def load_all(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """
         Build the atlas, then load all data and plots for the session.
 
@@ -432,9 +433,7 @@ class ProbeHandler(ABC):
         self.build_atlas(progress_callback=progress_callback)
         self.load_data(progress_callback=progress_callback)
 
-    def load_data(
-        self, progress_callback: Callable[[str, int, int], None] | None = None
-    ) -> None:
+    def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """
         Download and load data for all configs and shanks.
 
@@ -458,9 +457,7 @@ class ProbeHandler(ABC):
                 self.shanks[probe][config].load_data()
                 idx += 1
 
-    def load_plots(
-        self, progress_callback: Callable[[str, int, int], None] | None = None
-    ) -> None:
+    def load_plots(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """
         Load plots for all configs and shanks.
 
@@ -712,9 +709,7 @@ class ProbeHandlerONE(ProbeHandler):
         subject = ins['session_info']['subject']
         subj_match = np.where(self.subjects == subject)[0]
         if len(subj_match) == 0:
-            raise ValueError(
-                f'Subject {subject} for pid {pid} has no spikesorted insertions'
-            )
+            raise ValueError(f'Subject {subject} for pid {pid} has no spikesorted insertions')
         subj_idx = int(subj_match[0])
 
         sessions = self.get_sessions(subj_idx)
@@ -789,9 +784,7 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
-    def load_data(
-        self, progress_callback: Callable[[str, int, int], None] | None = None
-    ) -> None:
+    def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """Load data for all configs and shanks."""
         print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
         super().load_data(progress_callback=progress_callback)
@@ -1160,9 +1153,7 @@ class ProbeHandlerLocalYaml(ProbeHandler):
     def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
         data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
-        return make_slice_loader(
-            data_paths.histology, self.brain_atlas, self.histology_space
-        )
+        return make_slice_loader(data_paths.histology, self.brain_atlas, self.histology_space)
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
@@ -1215,12 +1206,13 @@ class ProbeHandlerLocalYaml(ProbeHandler):
             The alignment loader for the shank.
         """
         return AlignmentLoaderLocal(
-            data_path.picks or data_path.spike_sorting, ishank, self.n_shanks, histology_space=self.histology_space
+            data_path.picks or data_path.spike_sorting,
+            ishank,
+            self.n_shanks,
+            histology_space=self.histology_space,
         )
 
-    def _build_upload_loader(
-        self, data_path: DatasetPaths, ishank: int
-    ) -> AlignmentUploaderLocal:
+    def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderLocal:
         """
         Build the alignment uploader for a shank.
 
@@ -1305,12 +1297,10 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
             self.n_shanks,
             self.docdb,
             use_db=self.use_docdb,
-            histology_space=self.histology_space
+            histology_space=self.histology_space,
         )
 
-    def _build_upload_loader(
-        self, data_path: DatasetPaths, ishank: int
-    ) -> AlignmentUploaderDocDB:
+    def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderDocDB:
         """Build a DocDB alignment uploader (falling back to local when ``use_docdb`` is False)."""
         return AlignmentUploaderDocDB(
             data_path.output,

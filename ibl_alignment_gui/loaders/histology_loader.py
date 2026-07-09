@@ -114,10 +114,12 @@ class SliceLoader(ABC):
         index = self.brain_atlas.bc.xyz2i(xyz)[:, self.brain_atlas.xyz2dims]
         width = [self.brain_atlas.bc.i2x(0), self.brain_atlas.bc.i2x(self.brain_atlas.bc.nx - 1)]
         height = [self.brain_atlas.bc.i2z(index[0, 2]), self.brain_atlas.bc.i2z(index[-1, 2])]
-        scale = np.array([
-            (width[1] - width[0]) / self.brain_atlas.bc.nx,
-            (height[1] - height[0]) / len(xyz),
-        ])
+        scale = np.array(
+            [
+                (width[1] - width[0]) / self.brain_atlas.bc.nx,
+                (height[1] - height[0]) / len(xyz),
+            ]
+        )
         offset = np.array([width[0], height[0]])
 
         ann = self._make_slice_bunch(self.brain_atlas.label, index, scale, offset, annotation=True)
@@ -136,6 +138,7 @@ class SliceLoader(ABC):
                 except Exception as e:
                     logger.error(f'Failed to load {vol_path}: {e}')
                     return None
+
             return _load
 
         lazy = {key: _make_callback(path) for key, path in self.hist_paths.items()}
@@ -230,6 +233,7 @@ class ImageSpacePaths:
 
         Raises StopIteration if any required file is missing.
         """
+
         def _glob_first(pattern: str) -> Path:
             return next(input_path.glob(pattern))
 
@@ -316,9 +320,7 @@ def build_anatomical_atlas(histology_path: Path) -> BrainAtlasAnatomical:
     )
 
 
-def make_slice_loader(
-    file_path: Path, brain_atlas: BrainAtlas, space: str = 'ccf'
-) -> SliceLoader:
+def make_slice_loader(file_path: Path, brain_atlas: BrainAtlas, space: str = 'ccf') -> SliceLoader:
     """
     Return the appropriate SliceLoader for the given folder.
 
@@ -370,7 +372,6 @@ def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader
     if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
         return TiffSliceLoader(hist_path, brain_atlas)
     return NrrdSliceLoader(hist_path, brain_atlas)
-
 
 
 class TiffSliceLoader(SliceLoader):

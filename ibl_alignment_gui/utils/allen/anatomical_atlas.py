@@ -8,7 +8,7 @@ from iblutil.numerical import ismember
 
 _logger = logging.getLogger(__name__)
 
-_BLESSED_DIRECTION: str = "IRP"
+_BLESSED_DIRECTION: str = 'IRP'
 
 
 class BrainAtlasAnatomical(BrainAtlas):
@@ -58,24 +58,22 @@ class BrainAtlasAnatomical(BrainAtlas):
 
         # Validate that intensity and label images have the same shape and physical space
         methods_to_check = [
-            "GetOrigin",
-            "GetSpacing",
-            "GetSize",
-            "GetDirection",
+            'GetOrigin',
+            'GetSpacing',
+            'GetSize',
+            'GetDirection',
         ]
         for m in methods_to_check:
             intensity_val = np.array(getattr(intensity_img, m)())
             label_val = np.array(getattr(label_img, m)())
             if not np.allclose(intensity_val, label_val):
                 raise ValueError(
-                    f"Intensity and label {m}() mismatch: {intensity_val} != {label_val}"
+                    f'Intensity and label {m}() mismatch: {intensity_val} != {label_val}'
                 )
 
         # Reorient to _BLESSED_DIRECTION if needed
-        orientation_code = (
-            sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(
-                intensity_img.GetDirection()
-            )
+        orientation_code = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(
+            intensity_img.GetDirection()
         )
         if orientation_code == _BLESSED_DIRECTION:
             intensity_img_blessed = intensity_img
@@ -83,8 +81,8 @@ class BrainAtlasAnatomical(BrainAtlas):
             pipeline_img_blessed = pipeline_img
         else:
             _logger.info(
-                f"Reorienting volume from {orientation_code} to {_BLESSED_DIRECTION} "
-                "for consistency with IBL convention."
+                f'Reorienting volume from {orientation_code} to {_BLESSED_DIRECTION} '
+                'for consistency with IBL convention.'
             )
             intensity_img_blessed = sitk.DICOMOrient(intensity_img, _BLESSED_DIRECTION)
             label_img_blessed = sitk.DICOMOrient(label_img, _BLESSED_DIRECTION)
@@ -104,9 +102,9 @@ class BrainAtlasAnatomical(BrainAtlas):
             ),
         ):
             raise ValueError(
-                f"After reorientation to blessed direction {_BLESSED_DIRECTION}, "
-                f"image direction cosines {cosine_dir_mat} are not as expected for "
-                "IS, LR, AP DICOM arrangement. Is the blessed orientation wrong?"
+                f'After reorientation to blessed direction {_BLESSED_DIRECTION}, '
+                f'image direction cosines {cosine_dir_mat} are not as expected for '
+                'IS, LR, AP DICOM arrangement. Is the blessed orientation wrong?'
             )
 
         # SimpleITK uses fortran order, but when converting to numpy the
@@ -191,7 +189,7 @@ class BrainAtlasAnatomical(BrainAtlas):
         np.ndarray
             An (N, 3) array of voxel indices in this atlas.
         """
-        return self.bc.xyz2i(channel_ndxs, round=round, mode="clip")[:, self.xyz2dims]
+        return self.bc.xyz2i(channel_ndxs, round=round, mode='clip')[:, self.xyz2dims]
 
     def indices_to_physical_points(self, channel_ndxs: np.ndarray) -> np.ndarray:
         """

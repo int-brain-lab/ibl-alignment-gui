@@ -687,4 +687,3 @@ class AlignmentUploaderDocDB(AlignmentUploaderLocal):
             )
 
         return 'Channels locations saved'
-

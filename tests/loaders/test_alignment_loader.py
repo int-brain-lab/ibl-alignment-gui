@@ -103,7 +103,10 @@ class TestAlignmentLoaderOne(unittest.TestCase):
 
     def test_stored_alignment_key_from_insertion(self):
         """Test stored_alignment_key is read from insertion extended_qc on construction."""
-        ins = {'id': uuid.uuid4(), 'json': {'extended_qc': {'alignment_stored': '2025-06-10_user2'}}}
+        ins = {
+            'id': uuid.uuid4(),
+            'json': {'extended_qc': {'alignment_stored': '2025-06-10_user2'}},
+        }
         loader = AlignmentLoaderOne(ins, self.one_mock)
         self.assertEqual(loader.stored_alignment_key, '2025-06-10_user2')
 

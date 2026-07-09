@@ -18,6 +18,7 @@ Coordinate convention
 All ``xyz`` coordinates are in the atlas RAS frame -- (x, y, z) = (Right, Anterior,
 Superior) -- expressed in metres.
 """
+
 import logging
 
 import iblatlas.atlas as atlas
@@ -130,7 +131,8 @@ class EphysAlignment:
 
         # xyz coordinates are RAS (Right, Anterior, Superior), in metres
         self.xyz_track, self.track_extent, self.cumulative_dist = self.get_insertion_track(
-            xyz_picks, speedy=speedy,
+            xyz_picks,
+            speedy=speedy,
         )
 
         self.chn_depths = chn_depths
@@ -158,10 +160,13 @@ class EphysAlignment:
         if isinstance(self.brain_atlas, atlas.AllenAtlas):
             # Allen atlas: fixed 10 um spacing along the track
             self.sampling_trk = np.arange(
-                self.track_extent[0], self.track_extent[-1] - 10 * 1e-6, 10 * 1e-6,
+                self.track_extent[0],
+                self.track_extent[-1] - 10 * 1e-6,
+                10 * 1e-6,
             )
             self.xyz_samples = interpolate_along_track(
-                self.xyz_track, self.sampling_trk - self.sampling_trk[0],
+                self.xyz_track,
+                self.sampling_trk - self.sampling_trk[0],
             )
         else:
             # Other atlases: sample once per voxel in the DV (z) direction, so the
@@ -192,12 +197,14 @@ class EphysAlignment:
         self.xyz_samples = self.xyz_samples[rem]
         self.sampling_trk = self.sampling_trk[rem]
 
-        self.region, self.region_label, self.region_colour, self.region_id = self.get_histology_regions(
-            self.xyz_samples, self.sampling_trk, self.brain_atlas
+        self.region, self.region_label, self.region_colour, self.region_id = (
+            self.get_histology_regions(self.xyz_samples, self.sampling_trk, self.brain_atlas)
         )
 
     def get_insertion_track(
-        self, xyz_picks: np.ndarray, speedy: bool = False,
+        self,
+        xyz_picks: np.ndarray,
+        speedy: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extend the probe trajectory from the bottom of the brain to the top of the atlas.
@@ -276,7 +283,9 @@ class EphysAlignment:
 
     @staticmethod
     def feature2track(
-        feature_new: np.ndarray, feature_ref: np.ndarray, track_ref: np.ndarray,
+        feature_new: np.ndarray,
+        feature_ref: np.ndarray,
+        track_ref: np.ndarray,
     ) -> np.ndarray:
         """
         Convert feature-space points to track space via the reference-line fit.
@@ -303,7 +312,9 @@ class EphysAlignment:
 
     @staticmethod
     def track2feature(
-        track_new: np.ndarray, feature_ref: np.ndarray, track_ref: np.ndarray,
+        track_new: np.ndarray,
+        feature_ref: np.ndarray,
+        track_ref: np.ndarray,
     ) -> np.ndarray:
         """
         Convert track-space points to feature space via the reference-line fit.
@@ -330,7 +341,9 @@ class EphysAlignment:
 
     @staticmethod
     def feature2track_lin(
-        feature_new: np.ndarray, feature_ref: np.ndarray, track_ref: np.ndarray,
+        feature_new: np.ndarray,
+        feature_ref: np.ndarray,
+        track_ref: np.ndarray,
     ) -> np.ndarray | int:
         """
         Linear-fit version of feature2track, used for the extreme reference points.
@@ -387,7 +400,10 @@ class EphysAlignment:
         return track
 
     def adjust_extremes_linear(
-        self, feature: np.ndarray, track: np.ndarray, extend_feature: float = 1,
+        self,
+        feature: np.ndarray,
+        track: np.ndarray,
+        extend_feature: float = 1,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Adjust the outermost reference points with a linear fit.
@@ -452,9 +468,13 @@ class EphysAlignment:
             Label positions (um) and acronyms.
         """
         region = np.copy(region) if region is not None else np.copy(self.region)
-        region_label = np.copy(region_label) if region_label is not None else np.copy(self.region_label)
+        region_label = (
+            np.copy(region_label) if region_label is not None else np.copy(self.region_label)
+        )
         region = self.track2feature(region, feature, track) * 1e6
-        region_label[:, 0] = self.track2feature(np.float64(region_label[:, 0]), feature, track) * 1e6
+        region_label[:, 0] = (
+            self.track2feature(np.float64(region_label[:, 0]), feature, track) * 1e6
+        )
         return region, region_label
 
     @staticmethod
@@ -591,8 +611,12 @@ class EphysAlignment:
 
         for iP, point in enumerate(xyz_coords):
             d = np.dot(vector, point)
-            x_vals = np.r_[np.linspace(point[0] - extent / 1e6, point[0] + extent / 1e6, steps), point[0]]
-            y_vals = np.r_[np.linspace(point[1] - extent / 1e6, point[1] + extent / 1e6, steps), point[1]]
+            x_vals = np.r_[
+                np.linspace(point[0] - extent / 1e6, point[0] + extent / 1e6, steps), point[0]
+            ]
+            y_vals = np.r_[
+                np.linspace(point[1] - extent / 1e6, point[1] + extent / 1e6, steps), point[1]
+            ]
 
             X, Y = np.meshgrid(x_vals, y_vals)
             Z = (d - vector[0] * X - vector[1] * Y) / vector[2]
@@ -608,7 +632,9 @@ class EphysAlignment:
             dist_sorted = np.argsort(dist)
             brain_id_sorted = brain_id[dist_sorted]
             nearest_bound['id'][iP] = brain_id_sorted[0]
-            nearest_bound['col'].append(allen['color_hex_triplet'][np.where(allen['id'] == brain_id_sorted[0])[0][0]])
+            nearest_bound['col'].append(
+                allen['color_hex_triplet'][np.where(allen['id'] == brain_id_sorted[0])[0][0]]
+            )
             bound_idx = np.where(brain_id_sorted != brain_id_sorted[0])[0]
             if np.any(bound_idx):
                 nearest_bound['dist'][iP] = dist[dist_sorted[bound_idx[0]]] * 1e6
@@ -619,13 +645,18 @@ class EphysAlignment:
 
             if parent:
                 # Now compute for the parents
-                brain_parent = np.array([
-                    allen['parent_structure_id'][np.where(allen['id'] == br)[0][0]] for br in brain_id_sorted
-                ])
+                brain_parent = np.array(
+                    [
+                        allen['parent_structure_id'][np.where(allen['id'] == br)[0][0]]
+                        for br in brain_id_sorted
+                    ]
+                )
                 brain_parent[np.isnan(brain_parent)] = 0
 
                 nearest_bound['parent_id'][iP] = brain_parent[0]
-                nearest_bound['parent_col'].append(allen['color_hex_triplet'][np.where(allen['id'] == brain_parent[0])[0][0]])
+                nearest_bound['parent_col'].append(
+                    allen['color_hex_triplet'][np.where(allen['id'] == brain_parent[0])[0][0]]
+                )
 
                 parent_idx = np.where(brain_parent != brain_parent[0])[0]
                 if np.any(parent_idx):
@@ -690,7 +721,9 @@ class EphysAlignment:
         return all_x, all_y, all_colour
 
     def get_scale_factor(
-        self, region: np.ndarray, region_orig: np.ndarray | None = None,
+        self,
+        region: np.ndarray,
+        region_orig: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Find how much each brain region has been scaled by the alignment.
@@ -731,14 +764,19 @@ class EphysAlignment:
                     _scaled_region = np.array([region[boundaries[bound - 1]][1], region[-1][1]])
                     _scale_factor = scale[-1]
                 else:
-                    _scaled_region = np.array([region[boundaries[bound - 1]][1], region[boundaries[bound]][1]])
+                    _scaled_region = np.array(
+                        [region[boundaries[bound - 1]][1], region[boundaries[bound]][1]]
+                    )
                     _scale_factor = scale[boundaries[bound]]
                 scaled_region[bound, :] = _scaled_region
                 scale_factor = np.r_[scale_factor, _scale_factor]
         return scaled_region, scale_factor
 
     def get_channel_locations(
-        self, feature: np.ndarray, track: np.ndarray, depths: np.ndarray | None = None,
+        self,
+        feature: np.ndarray,
+        track: np.ndarray,
+        depths: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Get the 3D xyz coordinates of points along the ephys feature axis.
@@ -839,7 +877,9 @@ class EphysAlignment:
             vector = np.diff(xyz, axis=0)[0]
             point = xyz[0, :]
             vector_perp = np.array([1, 0, -1 * vector[0] / vector[2]])
-            xyz_per = np.r_[[point + (-1 * extent * vector_perp)], [point + (extent * vector_perp)]]
+            xyz_per = np.r_[
+                [point + (-1 * extent * vector_perp)], [point + (extent * vector_perp)]
+            ]
             slice_lines.append(xyz_per)
 
         return slice_lines

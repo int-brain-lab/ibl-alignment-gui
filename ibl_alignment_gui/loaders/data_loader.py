@@ -24,6 +24,7 @@ from one.remote import aws
 
 try:
     import ephysatlas.data
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -1037,7 +1038,6 @@ class FeatureLoaderOne(FeatureLoader):
     """
 
     def __init__(self, insertion: dict, one: ONE, feature_version: str, multi_area: bool = False):
-
         self.one: ONE = one
         self.pid: str = insertion['id']
         self.feature_version: str = feature_version
@@ -1086,7 +1086,6 @@ class FeatureLoaderOne(FeatureLoader):
         ephysatlas.data.download_tables(save_path, label=feature, project=project, one=self.one)
 
     def load_dataframe(self, project: str, feature: str, save_path: Path) -> pd.DataFrame:
-
         model_path = save_path.joinpath(project, feature)
 
         if not model_path.exists():
@@ -1123,7 +1122,6 @@ class FeatureLoaderLocal(FeatureLoader):
     """
 
     def __init__(self, features_path: Path):
-
         self.features_path: Path = Path(features_path)
 
     def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:

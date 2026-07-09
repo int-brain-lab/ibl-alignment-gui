@@ -44,10 +44,11 @@ def add_plots(_, items: 'ShankController', **kwargs) -> None:
     """
     # Add the additional data that may be required for the plots
     items.model.raw_data['rms_AP_main'] = items.model.loaders['data'].get_rms_data(
-        'ephysTimeRmsAPMain')
+        'ephysTimeRmsAPMain'
+    )
     items.model.raw_data['rms_LF_main'] = items.model.loaders['data'].get_rms_data(
-        'ephysTimeRmsLFMain')
-
+        'ephysTimeRmsLFMain'
+    )
 
     items.model.loaders['plots'].image_rms_ap_main = MethodType(
         image_rms_ap_main, items.model.loaders['plots']
@@ -69,6 +70,7 @@ def add_plots(_, items: 'ShankController', **kwargs) -> None:
 @skip_missing(['rms_AP_main'])
 def image_rms_ap_main(self) -> dict[str, Any]:
     return self._image_rms('rms_AP_main', plot_key='rms AP Main')
+
 
 @skip_missing(['rms_LF_main'])
 def image_rms_lf_main(self) -> dict[str, Any]:

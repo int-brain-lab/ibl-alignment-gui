@@ -11,6 +11,7 @@ from iblatlas.atlas import BrainAtlas
 
 try:
     import ants
+
     ANTS = True
 except ImportError:
     ANTS = False
@@ -93,7 +94,11 @@ class AntsTransformChainFiles:
             logger.warning(
                 'Incomplete ANTs transform chain in %s; CCF channel locations will not be '
                 'written. Found ls_affine=%s, ls_warp=%s, ccf_affine=%s, ccf_warp=%s',
-                transforms_path, ls_affine, ls_warp, ccf_affine, ccf_warp,
+                transforms_path,
+                ls_affine,
+                ls_warp,
+                ccf_affine,
+                ccf_warp,
             )
             return None
 
@@ -204,8 +209,7 @@ class TransformLoaderAllen(TransformLoader):
             raise RuntimeError('No ANTs transform chain loaded; cannot transform to CCF')
         if not isinstance(atlas, BrainAtlasAnatomical):
             raise TypeError(
-                'TransformLoaderAllen requires a BrainAtlasAnatomical, '
-                f'got {type(atlas).__name__}'
+                f'TransformLoaderAllen requires a BrainAtlasAnatomical, got {type(atlas).__name__}'
             )
 
         intensity_img = atlas.intensity_sitk_image

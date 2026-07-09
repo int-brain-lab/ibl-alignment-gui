@@ -532,7 +532,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The selected yaml file path, or None if the dialog was cancelled.
         """
         selected, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, 'Select session YAML', filter='YAML (*.yaml *.yml)')
+            self, 'Select session YAML', filter='YAML (*.yaml *.yml)'
+        )
         return Path(selected) if selected else None
 
     # --------------------------------------------------------------------------------------------

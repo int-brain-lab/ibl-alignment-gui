@@ -18,25 +18,24 @@ import numpy as np
 import yaml
 from qtpy import QtWidgets
 
-from one.api import ONE
-
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    _get_features_df,
     clear_predictions,
     has_features,
     has_one_connection,
     needs_reload,
     plugin_state,
     s3_cache_root,
-    _get_features_df,
 )
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.numerical import ismember
+from one.api import ONE
 
 if TYPE_CHECKING:
     import pandas as pd
 
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 logger = logging.getLogger(__name__)
 

@@ -10,9 +10,9 @@ from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas._common import is_model_loaded
-from ibl_alignment_gui.utils.utils import shank_loop
-from iblutil.util import Bunch
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblatlas.atlas import AllenAtlas
+from iblutil.util import Bunch
 
 # NB: ``spatial_encoder`` (torch) and ``inference`` (ephysatlas) are imported lazily inside the
 # compute functions below so this plugin can be set up in offline mode without those heavy/optional
@@ -21,8 +21,8 @@ from iblatlas.atlas import AllenAtlas
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 PLUGIN_NAME = 'Channel Prediction'
 

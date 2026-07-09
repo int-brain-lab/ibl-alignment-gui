@@ -2,7 +2,7 @@ import argparse
 
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 from ibl_alignment_gui.utils.optional import (
     ALLEN_EXTRA_HINT,
     IBL_EXTRA_HINT,

@@ -2,11 +2,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+
 from ibl_alignment_gui.loaders import plot_loader
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 
 
 PLUGIN_NAME = 'Custom Filters'

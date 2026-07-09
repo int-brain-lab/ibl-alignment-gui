@@ -19,9 +19,6 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import pandas as pd
 import torch
-from qtpy import QtWidgets
-from torch.utils.data import DataLoader
-
 from ephysatlas.spatial_encoder.model import (
     NeighborInpaintingModel,
     ProbeConfidenceTrainConfig,
@@ -29,32 +26,34 @@ from ephysatlas.spatial_encoder.model import (
     predict_probe_confidence_classes,
 )
 from ephysatlas.spatial_encoder.utils import (
+    FEATURE_LIST,
     AtlasPCAConfig,
     ContextAtlasManager,
-    FEATURE_LIST,
     GridDS,
     LoadInsertionData,
     NeighborCollate,
     build_channels_plus_emptyvoxels_with_neighbors,
     region_ids_from_xyz,
 )
-from iblatlas.atlas import AllenAtlas
-from one.api import ONE
+from qtpy import QtWidgets
+from torch.utils.data import DataLoader
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    _get_features_df,
     clear_predictions,
     has_features,
     has_one_connection,
     needs_reload,
     plugin_state,
     s3_cache_root,
-    _get_features_df,
 )
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
+from iblatlas.atlas import AllenAtlas
+from one.api import ONE
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 logger = logging.getLogger(__name__)
 

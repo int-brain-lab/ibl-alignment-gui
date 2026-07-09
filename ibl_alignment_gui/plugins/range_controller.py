@@ -4,12 +4,12 @@ import numpy as np
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.app.widgets.custom_widgets import CheckBoxGroup, PopupWindow, SliderWidget
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 PLUGIN_NAME = 'Range Controller'
 

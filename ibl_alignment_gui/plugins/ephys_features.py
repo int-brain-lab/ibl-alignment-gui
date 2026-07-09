@@ -7,7 +7,7 @@ import pandas as pd
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
-from ibl_alignment_gui.app.shank_view import ShankView
+from ibl_alignment_gui.app.views.shank_view import ShankView
 from ibl_alignment_gui.app.widgets.adapted_axis import replace_axis
 from ibl_alignment_gui.app.widgets.custom_widgets import (
     ColorBar,
@@ -22,7 +22,7 @@ from ibl_alignment_gui.loaders.geometry_loader import ChannelGeometry, arrange_c
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 
 _logger = logging.getLogger(__name__)
 

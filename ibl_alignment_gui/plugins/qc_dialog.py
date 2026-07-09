@@ -3,7 +3,10 @@ from typing import TYPE_CHECKING
 from qtpy import QtWidgets
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView
+    from ibl_alignment_gui.app.controllers.app_controller import (
+        AlignmentGUIController,
+        AlignmentGUIView,
+    )
 
 PLUGIN_NAME = 'QC dialog'
 

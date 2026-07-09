@@ -7,8 +7,11 @@ from qtpy import QtCore, QtGui, QtWidgets
 from ibl_alignment_gui.app.widgets.custom_widgets import PopupWindow, set_axis
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import (
+        AlignmentGUIController,
+        AlignmentGUIView,
+    )
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
     from ibl_alignment_gui.loaders.plot_loader import PlotLoader
 
 PLUGIN_NAME = 'Cluster Features'

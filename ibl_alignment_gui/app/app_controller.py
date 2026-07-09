@@ -9,6 +9,7 @@ import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.app.app_view import AlignmentGUIView
+from ibl_alignment_gui.loaders import plot_loader
 from ibl_alignment_gui.app.load_worker import Worker
 from ibl_alignment_gui.app.shank_controller import ShankController
 from ibl_alignment_gui.handlers.probe_handler import (
@@ -333,7 +334,7 @@ class AlignmentGUIController:
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys
         )
-        filter_keys = ['All', 'KS good', 'KS mua', 'IBL good']
+        filter_keys = ['All', 'KS good', 'KS mua', 'IBL good'] +  list(plot_loader.CUSTOM_FILTERS.keys())
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
         )
@@ -1216,6 +1217,8 @@ class AlignmentGUIController:
         # Build the shank controllers and run any load-time plugins
         self.create_shanks()
         self.execute_plugins('load_data', self)
+        # Load the plots
+        self.model.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
         # If csv add the config options

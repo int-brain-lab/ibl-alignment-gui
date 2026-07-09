@@ -72,11 +72,11 @@ class DataLoader(ABC):
         # Load in spike sorting data
         data['spikes'], data['clusters'], data['channels'] = self.get_spikes_data()
         # Load in rms AP data
-        data['rms_AP'] = self.get_rms_data(band='AP')
+        data['rms_AP'] = self.get_rms_data('ephysTimeRmsAP')
         # Load in rms LF data
-        data['rms_LF'] = self.get_rms_data(band='LF')
+        data['rms_LF'] = self.get_rms_data('ephysTimeRmsLF')
         # Load in psd LF data
-        data['psd_LF'] = self.get_psd_data(band='LF')
+        data['psd_LF'] = self.get_psd_data('ephysSpectralDensityLF')
         # Load in passive data
         # TODO this data should be shared across probes
         data['rf_map'], data['pass_stim'], data['gabor'] = self.get_passive_data()
@@ -199,7 +199,7 @@ class DataLoader(ABC):
     def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
         """Abstract method to load ephys data."""
 
-    def get_rms_data(self, band: str = 'AP') -> Bunch[str, Any]:
+    def get_rms_data(self, alf_object: str) -> Bunch[str, Any]:
         """
         Load RMS data for specified band.
 
@@ -207,15 +207,15 @@ class DataLoader(ABC):
 
         Parameters
         ----------
-        band : str
-            Band type ('AP' or 'LF').
+        alf_object : str
+            The alf object to load
 
         Returns
         -------
         rms_data : Bunch
             RMS data
         """
-        rms_data = self.load_ephys_data(f'ephysTimeRms{band}')
+        rms_data = self.load_ephys_data(alf_object)
         rms_data = self.filter_raw_by_chns(rms_data)
 
         if rms_data['exists']:
@@ -229,7 +229,7 @@ class DataLoader(ABC):
 
         return rms_data
 
-    def get_psd_data(self, band: str = 'LF') -> Bunch[str, Any]:
+    def get_psd_data(self, alf_object: str) -> Bunch[str, Any]:
         """
         Load power spectral density data for specified band.
 
@@ -237,15 +237,15 @@ class DataLoader(ABC):
 
         Parameters
         ----------
-        band : str
-            Band type ('AP' or 'LF').
+        alf_object : str
+            The alf object to load
 
         Returns
         -------
         psd_data: Bunch
             PSD data
         """
-        psd_data = self.load_ephys_data(f'ephysSpectralDensity{band}')
+        psd_data = self.load_ephys_data(alf_object)
         psd_data = self.filter_raw_by_chns(psd_data)
 
         if psd_data['exists'] and 'amps' in psd_data:

@@ -431,7 +431,6 @@ class ProbeHandler(ABC):
         """
         self.build_atlas(progress_callback=progress_callback)
         self.load_data(progress_callback=progress_callback)
-        self.load_plots(progress_callback=progress_callback)
 
     def load_data(
         self, progress_callback: Callable[[str, int, int], None] | None = None

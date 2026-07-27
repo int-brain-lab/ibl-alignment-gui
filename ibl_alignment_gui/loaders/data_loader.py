@@ -779,7 +779,8 @@ class SpikeGLXLoader(ABC):
 
         # Detect bad channels and destripe
         channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, sr.fs, **kwargs)
-        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels)
+        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels,
+                                      k_filter=False)
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))

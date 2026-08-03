@@ -72,7 +72,7 @@ def callback(controller: 'AlignmentGUIController') -> None:
 
 
 
-class TestViewer(PopupWindow):
+class Viewer3D(PopupWindow):
 
     def __init__(self, title: str, controller: 'AlignmentGUIController'):
         self.controller: AlignmentGUIController = controller
@@ -177,7 +177,7 @@ class Features3D:
     def setup(self):
         """Launch the 3D Urchin viewer and display the initial probe channels."""
 
-        self.view = TestViewer(PLUGIN_NAME, self.controller)
+        self.view = Viewer3D(PLUGIN_NAME, self.controller)
         self.view.closed.connect(self.on_close)
         self.view.slider.sliderReleased.connect(lambda s=self.view.slider: self.on_point_size_changed(s))
         self.view.regions.clicked.connect(lambda: self.toggle_regions(self.view.regions.isChecked()))

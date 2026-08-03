@@ -21,6 +21,7 @@ from ibl_alignment_gui.handlers.probe_handler import (
 )
 from ibl_alignment_gui.loaders import plot_loader
 from ibl_alignment_gui.plugins.add_plugins import Plugins
+from ibl_alignment_gui.plugins.qc_dialog import apply_to_shanks as apply_qc_to_shanks
 from ibl_alignment_gui.plugins.qc_dialog import display as display_qc_dialog
 from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_dialog
 from ibl_alignment_gui.utils.helpers import shank_loop
@@ -1352,15 +1353,22 @@ class AlignmentGUIController:
         # confirms the upload; offline there is no QC step so a simple upload prompt is used
         # instead. Only one of the two is ever shown per shank.
         approved: list[str] = []
-        for shank in shanks_to_upload:
+        for idx, shank in enumerate(shanks_to_upload):
             self.model.selected_shank = shank
             self.model.current_shank = shank
 
             if not self.offline:
+                # The shanks that haven't been asked about yet
+                remaining = shanks_to_upload[idx + 1 :]
                 # Cancelling the QC dialog aborts the whole upload.
-                if display_qc_dialog(self, shank) == 0:
+                if display_qc_dialog(self, shank, allow_apply_all=len(remaining) > 0) == 0:
                     break
                 approved.append(shank)
+                # Give the remaining shanks the same assessment instead of asking again
+                if self.qc_dialog.apply_to_all:
+                    apply_qc_to_shanks(self, remaining)
+                    approved.extend(remaining)
+                    break
             elif self.view.upload_prompt(shank):
                 approved.append(shank)
             else:

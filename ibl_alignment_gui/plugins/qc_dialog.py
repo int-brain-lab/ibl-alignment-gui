@@ -43,7 +43,9 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.qc_dialog.accepted.connect(lambda: callback(controller))
 
 
-def display(controller: 'AlignmentGUIController', shank: str) -> int:
+def display(
+    controller: 'AlignmentGUIController', shank: str, allow_apply_all: bool = False
+) -> int:
     """
     Show the QC dialog.
 
@@ -53,12 +55,17 @@ def display(controller: 'AlignmentGUIController', shank: str) -> int:
         The main application controller.
     shank: str
         The shank identifier for which the QC dialog is displayed.
+    allow_apply_all: bool, default=False
+        Whether to offer the option to apply the QC information to all the other shanks.
 
     Returns
     -------
         int
             The result of the dialog execution (Accepted or Rejected).
     """
+    # The dialog is reused, so the option must be reset each time it is shown
+    controller.qc_dialog.apply_all.setChecked(False)
+    controller.qc_dialog.apply_all.setVisible(allow_apply_all)
     controller.qc_dialog.setWindowTitle(f'QC assessment {shank}')
     return controller.qc_dialog.exec_()
 
@@ -72,12 +79,28 @@ def callback(controller: 'AlignmentGUIController'):
     controller: AlignmentController
         The main application controller.
     """
-    # Get the uploader for the selected shank and default configuration
-    upload = controller.model.get_selected_shank()[controller.model.default_config].loaders[
-        'upload'
-    ]
-    # Pass in the QC information from the dialog
-    upload.set_user_qc(*controller.qc_dialog.get_qc())
+    apply_to_shanks(controller, [controller.model.selected_shank])
+
+
+def apply_to_shanks(controller: 'AlignmentGUIController', shanks: list[str]) -> None:
+    """
+    Update the upload loaders of the given shanks with the QC information from the dialog.
+
+    Parameters
+    ----------
+    controller: AlignmentController
+        The main application controller.
+    shanks: list of str
+        The shanks to apply the QC information to.
+    """
+    qc = controller.qc_dialog.get_qc()
+    for shank in shanks:
+        # Get the uploader for the shank and default configuration
+        upload = controller.model.get_current_shank(
+            shank, controller.model.default_config
+        ).loaders['upload']
+        # Pass in the QC information from the dialog
+        upload.set_user_qc(*qc)
 
 
 class QCDialog(QtWidgets.QDialog):
@@ -96,6 +119,11 @@ class QCDialog(QtWidgets.QDialog):
         self.setWindowTitle('QC assessment')
         self.resize(300, 150)
         self.setup()
+
+    @property
+    def apply_to_all(self) -> bool:
+        """Whether the assessment should be applied to all the shanks being uploaded."""
+        return self.apply_all.isChecked()
 
     def setup(self) -> None:
         """Set up the dialog layout and widgets."""
@@ -130,6 +158,12 @@ class QCDialog(QtWidgets.QDialog):
         self.resolve.addItem('No', False)
         self.resolve.addItem('Yes', True)
 
+        # Option to give all the other shanks the same assessment, rather than being asked
+        # about each of them in turn. Only shown when there is more than one shank to assess.
+        self.apply_all = QtWidgets.QCheckBox('Apply to all shanks')
+        self.apply_all.setChecked(False)
+        self.apply_all.setVisible(False)
+
         # Dialog buttons
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -146,6 +180,7 @@ class QCDialog(QtWidgets.QDialog):
         dialog_layout.addWidget(desc_group)
         dialog_layout.addWidget(resolve_label)
         dialog_layout.addWidget(self.resolve)
+        dialog_layout.addWidget(self.apply_all)
         dialog_layout.addWidget(button_box)
         self.setLayout(dialog_layout)
 

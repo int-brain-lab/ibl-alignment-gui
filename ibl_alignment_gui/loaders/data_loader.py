@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import logging
 import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -13,7 +15,6 @@ import spikeglx
 
 import ibldsp.voltage
 import one.alf.io as alfio
-from brainbox.io.spikeglx import Streamer
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
@@ -23,9 +24,13 @@ from one.remote import aws
 
 try:
     import ephysatlas.data
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
+
+if TYPE_CHECKING:
+    from brainbox.io.spikeglx import Streamer
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +73,11 @@ class DataLoader(ABC):
         # Load in spike sorting data
         data['spikes'], data['clusters'], data['channels'] = self.get_spikes_data()
         # Load in rms AP data
-        data['rms_AP'] = self.get_rms_data(band='AP')
+        data['rms_AP'] = self.get_rms_data('ephysTimeRmsAP')
         # Load in rms LF data
-        data['rms_LF'] = self.get_rms_data(band='LF')
+        data['rms_LF'] = self.get_rms_data('ephysTimeRmsLF')
         # Load in psd LF data
-        data['psd_LF'] = self.get_psd_data(band='LF')
+        data['psd_LF'] = self.get_psd_data('ephysSpectralDensityLF')
         # Load in passive data
         # TODO this data should be shared across probes
         data['rf_map'], data['pass_stim'], data['gabor'] = self.get_passive_data()
@@ -195,7 +200,7 @@ class DataLoader(ABC):
     def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
         """Abstract method to load ephys data."""
 
-    def get_rms_data(self, band: str = 'AP') -> Bunch[str, Any]:
+    def get_rms_data(self, alf_object: str) -> Bunch[str, Any]:
         """
         Load RMS data for specified band.
 
@@ -203,15 +208,15 @@ class DataLoader(ABC):
 
         Parameters
         ----------
-        band : str
-            Band type ('AP' or 'LF').
+        alf_object : str
+            The alf object to load
 
         Returns
         -------
         rms_data : Bunch
             RMS data
         """
-        rms_data = self.load_ephys_data(f'ephysTimeRms{band}')
+        rms_data = self.load_ephys_data(alf_object)
         rms_data = self.filter_raw_by_chns(rms_data)
 
         if rms_data['exists']:
@@ -225,7 +230,7 @@ class DataLoader(ABC):
 
         return rms_data
 
-    def get_psd_data(self, band: str = 'LF') -> Bunch[str, Any]:
+    def get_psd_data(self, alf_object: str) -> Bunch[str, Any]:
         """
         Load power spectral density data for specified band.
 
@@ -233,15 +238,15 @@ class DataLoader(ABC):
 
         Parameters
         ----------
-        band : str
-            Band type ('AP' or 'LF').
+        alf_object : str
+            The alf object to load
 
         Returns
         -------
         psd_data: Bunch
             PSD data
         """
-        psd_data = self.load_ephys_data(f'ephysSpectralDensity{band}')
+        psd_data = self.load_ephys_data(alf_object)
         psd_data = self.filter_raw_by_chns(psd_data)
 
         if psd_data['exists'] and 'amps' in psd_data:
@@ -333,10 +338,36 @@ class DataLoader(ABC):
                 continue
             if data[key].ndim == 1:
                 continue
-
-            data[key] = data[key][:, self.shank_sites['raw_ind']]
+            # data[key] = data[key][:, self.shank_sites['raw_ind']]
+            data[key] = self._safe_take(data[key], self.shank_sites['raw_ind'])
 
         return data
+
+    @staticmethod
+    def _safe_take(arr, indices, axis=1):
+        """np.take along ``axis`` that fills out-of-bounds positions with NaN.
+
+        Channel indices can exceed the data array (e.g. main-block RMS has fewer
+        channels than the combined channel set). In-bounds indices are taken
+        normally; out-of-bounds positions are returned as NaN.
+        """
+        indices = np.asarray(indices)
+        max_idx = arr.shape[axis] - 1
+        oob = indices > max_idx
+
+        if not np.any(oob):
+            return np.take(arr, indices, axis=axis)
+
+        logger.warning(
+            f'Channel indices exceed data size (max_idx={max_idx}, '
+            f'max_chn_ind={indices.max()}). Filling {oob.sum()} channels with NaN.'
+        )
+        result = np.take(arr, np.clip(indices, 0, max_idx), axis=axis).astype(float)
+        # Build a slicer that targets the OOB positions along `axis`.
+        oob_slice = [slice(None)] * result.ndim
+        oob_slice[axis] = oob
+        result[tuple(oob_slice)] = np.nan
+        return result
 
     @staticmethod
     def filter_spikes_by_fr(
@@ -912,7 +943,9 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         Streamer
             A streamer object for AP band.
         """
-        return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
+        import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
+
+        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
 
     def load_lf_data(self):
         """
@@ -923,7 +956,9 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         Streamer
             A streamer object for LF band.
         """
-        return Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
+        import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
+
+        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
 
 
 class SpikeGLXLoaderLocal(SpikeGLXLoader):
@@ -1004,7 +1039,6 @@ class FeatureLoaderOne(FeatureLoader):
     """
 
     def __init__(self, insertion: dict, one: ONE, feature_version: str, multi_area: bool = False):
-
         self.one: ONE = one
         self.pid: str = insertion['id']
         self.feature_version: str = feature_version
@@ -1127,7 +1161,6 @@ class FeatureLoaderLocal(FeatureLoader):
     """
 
     def __init__(self, features_path: Path):
-
         self.features_path: Path = Path(features_path)
 
     def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:

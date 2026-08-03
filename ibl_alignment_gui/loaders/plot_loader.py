@@ -1,12 +1,13 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
+from types import ModuleType
 from typing import Any
 
 import numpy as np
 from matplotlib import colormaps, colors
 
-from brainbox.task import passive
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
     arrange_channels_into_banks,
@@ -18,6 +19,7 @@ from iblutil.util import Bunch
 
 try:
     import ephysatlas.features
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -25,6 +27,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 np.seterr(divide='ignore', invalid='ignore')
+
+
+def _get_passive() -> ModuleType | None:
+    """Import ``brainbox.task.passive`` lazily.
+
+    Passive-stimulus and receptive-field plots rely on ``brainbox`` (shipped with the optional
+    ``ibllib`` dependency). In offline mode this may not be installed, in which case those plots
+    are skipped rather than raising.
+
+    Returns
+    -------
+    ModuleType or None
+        The ``brainbox.task.passive`` module, or None if it is not installed.
+    """
+    try:
+        from brainbox.task import passive  # noqa: PLC0415
+
+        return passive
+    except ImportError:
+        return None
 
 
 def skip_missing(required_keys):
@@ -220,6 +242,9 @@ FILTER_MATCH = {
     'KS good': ('ks2_label', 'good'),
     'KS mua': ('ks2_label', 'mua'),
 }
+
+# Custom filters that can be added as through plugins
+CUSTOM_FILTERS: dict[str, Callable[[Any], np.ndarray]] = {}
 
 TBIN = 0.05
 DBIN = 5
@@ -565,6 +590,12 @@ class PlotLoader:
             if filter_type == 'All':
                 self.cluster_idx = np.arange(self.data['clusters'].channels.size)
                 self.spike_idx = np.arange(self.data['spikes']['clusters'].size)
+            elif filter_type in CUSTOM_FILTERS:
+                mask = np.asarray(CUSTOM_FILTERS[filter_type](self.data['clusters'].metrics))
+                self.cluster_idx = np.where(mask)[0]
+                self.spike_idx = np.where(
+                    np.isin(self.data['spikes']['clusters'], self.cluster_idx)
+                )[0]
             else:
                 column, condition = FILTER_MATCH[filter_type]
                 self.cluster_idx = np.where(self.data['clusters'].metrics[column] == condition)[0]
@@ -608,7 +639,7 @@ class PlotLoader:
         amps = self.spike_amps[::subsample]
 
         # Amplitude bins (ignore top 10% outliers)
-        amp_range = np.quantile(amps, [0, 0.9])
+        amp_range = np.nanquantile(amps, [0, 0.9])
         amp_bins = np.linspace(amp_range[0], amp_range[1], a_bin)
 
         # Map amplitudes to bin indices
@@ -778,7 +809,7 @@ class PlotLoader:
         """
         xscale = (self.times[-1] - self.times[0]) / self.fr.shape[1]
         yscale = (self.depths[-1] - self.depths[0]) / self.fr.shape[0]
-        levels = np.quantile(np.mean(self.fr.T, axis=0), [0, 1])
+        levels = np.nanquantile(np.mean(self.fr.T, axis=0), [0, 1])
 
         img = ImageData(
             img=self.fr.T,
@@ -838,7 +869,7 @@ class PlotLoader:
         Dict
             A dict containing a ImageData object with key 'rms_AP'.
         """
-        return self._image_rms('AP')
+        return self._image_rms('rms_AP')
 
     @skip_missing(['rms_LF'])
     def image_rms_lf(self) -> dict[str, Any]:
@@ -850,16 +881,18 @@ class PlotLoader:
         Dict
             A bunch containing a ImageData object with key 'rms_LF'.
         """
-        return self._image_rms('LF')
+        return self._image_rms('rms_LF')
 
-    def _image_rms(self, band: str) -> dict[str, Any]:
+    def _image_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for an image plot of the RMS for the specified frequency band (AP or LF).
 
         Parameters
         ----------
-        band: str
-            The frequency band to process (AP or LF).
+        alf_object: str
+            The alf object name of the frequency band to process (AP or LF).
+        plot_key: str | None
+            The key to give the plot
 
         Returns
         -------
@@ -875,25 +908,28 @@ class PlotLoader:
           to align with the full channel map.
         """
         # Identify channels at the same depth
+
         img = (
-            average_chns_at_same_depths(self.shank_sites, self.data[f'rms_{band}']['rms']) * 1e6
+            average_chns_at_same_depths(self.shank_sites, self.data[alf_object]['rms']) * 1e6
         )  # convert to µV
 
         # Median subtract across depths (remove horizontal bands)
-        depth_medians = np.median(img, axis=1, keepdims=True)
-        global_median = np.mean(depth_medians)
+        depth_medians = np.nanmedian(img, axis=1, keepdims=True)
+        global_median = np.nanmean(depth_medians)
         img = img - depth_medians + global_median
 
         # Reconstruct full channel map (handles gaps in channel geometry)
         img_full = pad_data_to_full_chn_map(self.shank_sites, img)
 
         # Scaling for plotting
-        timestamps = self.data[f'rms_{band}']['timestamps']
+        timestamps = self.data[alf_object]['timestamps']
         xscale = (timestamps[-1] - timestamps[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
-        cmap = 'plasma' if band == 'AP' else 'inferno'
+        cmap = 'plasma' if 'AP' in alf_object else 'inferno'
+        band = 'AP' if 'AP' in alf_object else 'LF'
+        key = plot_key or f'rms {band}'
 
         img = ImageData(
             img=img_full,
@@ -903,11 +939,11 @@ class PlotLoader:
             offset=np.array([0, self.chn_min]),
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
-            xaxis=self.data[f'rms_{band}']['xaxis'],
+            xaxis=self.data[alf_object]['xaxis'],
             title=f'{band} RMS (uV)',
         )
 
-        return {f'rms {band}': img}
+        return {key: img}
 
     @skip_missing(['psd_LF'])
     def image_lfp_spectrum(self) -> dict[str, Any]:
@@ -945,7 +981,7 @@ class PlotLoader:
         # Scaling for plotting
         xscale = (freq_range[-1] - freq_range[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
         img = ImageData(
             img=img_full,
@@ -958,7 +994,6 @@ class PlotLoader:
             xaxis='Frequency (Hz)',
             title='PSD (dB)',
         )
-
         return {'LF spectrum': img}
 
     @skip_missing(['spikes'])
@@ -974,7 +1009,12 @@ class PlotLoader:
         Notes
         -----
         - Will only return data for passive events that are present in the data
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            return dict()
+
         # Find the list of passive events that are present in the data
         if not self.data['pass_stim']['exists'] and not self.data['gabor']['exists']:
             return dict()
@@ -1291,7 +1331,7 @@ class PlotLoader:
         Dict
             A dict containing a ProbeData object with key 'rms_AP'.
         """
-        return self._probe_rms('AP')
+        return self._probe_rms('rms_AP')
 
     @skip_missing(['rms_LF'])
     def probe_rms_lf(self) -> dict[str, Any]:
@@ -1303,16 +1343,18 @@ class PlotLoader:
         Dict
             A dict containing a ProbeData object with key 'rms_LF'.
         """
-        return self._probe_rms('LF')
+        return self._probe_rms('rms_LF')
 
-    def _probe_rms(self, band: str) -> dict[str, Any]:
+    def _probe_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for a probe plot of the RMS for the specified frequency band (AP or LF).
 
         Parameters
         ----------
-        band: str
-            The frequency band to process (AP or LF).
+        alf_object: str
+            The alf object containing the frequency band to process (AP or LF).
+        plot_key: str | None
+            The key to use for the returned dict. If None, defaults to 'rms_{alf_object}'.
 
         Returns
         -------
@@ -1320,14 +1362,16 @@ class PlotLoader:
             A dict containing a ProbeData object with key 'rms_{band}'.
         """
         # Average data across time
-        rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
-        levels = np.quantile(rms_avg, [0.1, 0.9])
+        rms_avg = np.mean(self.data[alf_object]['rms'], axis=0) * 1e6
+        levels = np.nanquantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
         probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
             self.shank_sites, rms_avg, bnk_width=BNK_SIZE
         )
 
-        cmap = 'plasma' if band == 'AP' else 'inferno'
+        cmap = 'plasma' if 'AP' in alf_object else 'inferno'
+        band = 'AP' if 'AP' in alf_object else 'LF'
+        key = plot_key or f'rms {band}'
 
         probe = ProbeData(
             img=probe_img,
@@ -1341,7 +1385,7 @@ class PlotLoader:
             data=rms_avg,
         )
 
-        return {f'rms {band}': probe}
+        return {key: probe}
 
     @skip_missing(['psd_LF'])
     def probe_lfp_spectrum(self) -> dict[str, Any]:
@@ -1367,7 +1411,7 @@ class PlotLoader:
             probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
                 self.shank_sites, lfp_power, bnk_width=BNK_SIZE
             )
-            levels = np.quantile(lfp_power, [0.1, 0.9])
+            levels = np.nanquantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
                 img=probe_img,
@@ -1398,7 +1442,16 @@ class PlotLoader:
         -----
         - Although this is a probe plot the data is not split into banks as for the case of other
          probe plots.
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            logger.warning(
+                "Receptive field map plots require the optional 'ibllib' dependency; skipping. "
+                "Install it with 'pip install ibl_alignment_gui[ibl]'."
+            )
+            return dict()
+
         # Extract stimulus times and positions
         rf_map_times, rf_map_pos, rf_stim_frames = passive.get_on_off_times_and_positions(
             self.data['rf_map']
@@ -1425,7 +1478,7 @@ class PlotLoader:
         yscale = (self.chn_max - self.chn_min) / img['on'].shape[0]
         xscale = 1
         depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
-        levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
+        levels = np.nanquantile(np.c_[img['on'], img['off']], [0, 1])
 
         data_img = dict()
         sub_type = ['on', 'off']

@@ -1,19 +1,23 @@
+from __future__ import annotations
+
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
 from ibl_alignment_gui.loaders.alignment_loader import (
+    AlignmentLoaderDocDB,
     AlignmentLoaderLocal,
     AlignmentLoaderOne,
 )
 from ibl_alignment_gui.loaders.alignment_uploader import (
+    AlignmentUploaderDocDB,
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
 )
@@ -30,20 +34,27 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     GeometryLoaderOne,
 )
 from ibl_alignment_gui.loaders.histology_loader import (
-    NrrdSliceLoader,
     SliceLoader,
-    TiffSliceLoader,
+    build_anatomical_atlas,
     download_histology_data,
+    make_slice_loader,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
+from ibl_alignment_gui.loaders.transform_loader import TransformLoaderAllen
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
-from iblatlas.atlas import AllenAtlas
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
 from one.api import ONE
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ibl_alignment_gui.backends.allen.docdb_api import DocDB
+
 try:
     import ephysatlas.data
+
     EPHYS_ATLAS = True
 except ImportError:
     EPHYS_ATLAS = False
@@ -62,12 +73,15 @@ class ProbeHandler(ABC):
 
     Parameters
     ----------
-    brain_atlas: AllenAtlas
-        An AllenAtlas instance.
+    brain_atlas: BrainAtlas or None
+        A pre-built BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical). If None, the atlas
+        is built lazily by :meth:`build_atlas` (run on a background thread as part of
+        :meth:`load_all`), so that the slow atlas construction does not block the GUI.
     """
 
-    def __init__(self, brain_atlas: AllenAtlas):
-        self.brain_atlas: AllenAtlas = brain_atlas or AllenAtlas()
+    def __init__(self, brain_atlas: BrainAtlas | None = None):
+        # Built lazily by build_atlas() (off the GUI thread) when not supplied up front.
+        self.brain_atlas: BrainAtlas | None = brain_atlas
         self.shanks: dict[str, Bunch] = defaultdict(Bunch)
 
         # Configuration state
@@ -366,19 +380,101 @@ class ProbeHandler(ABC):
     # -------------------------------------------------------------------------
     # Data loading & upload
     # -------------------------------------------------------------------------
-    def load_data(self) -> None:
-        """Download and load data for all configs and shanks."""
-        slice_loader = self.download_histology()
+    def _make_atlas(self) -> BrainAtlas:
+        """
+        Build the brain atlas to use for this probe handler.
+
+        The base implementation returns an Allen CCF atlas; subclasses override this to select a
+        different atlas (e.g. an anatomical atlas built from the session histology).
+
+        Returns
+        -------
+        BrainAtlas
+            The brain atlas instance.
+        """
+        return AllenAtlas()
+
+    def build_atlas(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
+        """
+        Build the brain atlas if not already available, and share it with the shank uploaders.
+
+        Building the atlas (downloading/reading volumes) is slow, so this is called from
+        :meth:`load_all` on a background thread rather than in ``__init__``. The uploaders created
+        in ``initialise_shanks`` hold a reference to the atlas; because the atlas may not exist yet
+        at that point, this method (re)assigns the freshly built atlas onto each of them.
+        """
+
+        if progress_callback is not None:
+            progress_callback('Building atlas…', 0, 0)
+
+        if self.brain_atlas is None:
+            self.brain_atlas = self._make_atlas()
         for probe in self.shanks:
             for config in self.configs:
+                upload = self.shanks[probe][config].loaders.get('upload')
+                if upload is not None:
+                    upload.brain_atlas = self.brain_atlas
+
+    def load_all(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+        """
+        Build the atlas, then load all data and plots for the session.
+
+        This is the single entry point run on the background loading thread, so the slow atlas
+        construction, data loading and plot building all happen off the GUI thread.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` to report
+            progress. No-op when None.
+        """
+        self.build_atlas(progress_callback=progress_callback)
+        self.load_data(progress_callback=progress_callback)
+
+    def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+        """
+        Download and load data for all configs and shanks.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before
+            each loading step to report progress (e.g. to a GUI progress dialog). No-op when
+            None, so headless callers are unaffected.
+        """
+        total = len(self.shanks) * len(self.configs) + 1
+        if progress_callback is not None:
+            progress_callback('Downloading histology…', 0, total)
+        slice_loader = self.download_histology()
+        idx = 1
+        for probe in self.shanks:
+            for config in self.configs:
+                if progress_callback is not None:
+                    progress_callback(f'Loading {probe} ({config})…', idx, total)
                 self.shanks[probe][config].loaders['hist'] = slice_loader
                 self.shanks[probe][config].load_data()
+                idx += 1
 
-    def load_plots(self):
-        """Load plots for all configs and shanks."""
+    def load_plots(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+        """
+        Load plots for all configs and shanks.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before
+            each loading step to report progress. No-op when None.
+        """
+        total = len(self.shanks) * len(self.configs)
+        idx = 0
         for probe in self.shanks:
             for config in self.configs:
+                if progress_callback is not None:
+                    progress_callback(f'Computing plots {probe} ({config})…', idx, total)
                 self.shanks[probe][config].load_plots()
+                idx += 1
 
     def upload_data(self) -> str:
         """
@@ -395,6 +491,41 @@ class ProbeHandler(ABC):
         for config in self.configs:
             info[config] = self.get_selected_shank()[config].upload_data()
         return info[self.default_config]
+
+    def upload_shanks(
+        self,
+        shanks: list[str],
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, str]:
+        """
+        Upload data for several shanks in turn.
+
+        Saving channels and alignments (and, online, registering tracks, running alignment QC and
+        writing to flatiron) is slow, so this is run on a background thread. Any per-shank user
+        input (QC, upload confirmation) must be gathered on the main thread beforehand; this method
+        only performs the saving.
+
+        Parameters
+        ----------
+        shanks : list of str
+            The shanks to upload, in order.
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before each
+            shank is uploaded. No-op when None.
+
+        Returns
+        -------
+        dict[str, str]
+            A mapping of shank label to the upload result message for that shank.
+        """
+        info: dict[str, str] = {}
+        total = len(shanks)
+        for idx, shank in enumerate(shanks):
+            if progress_callback is not None:
+                progress_callback(f'Saving {shank}…', idx, total)
+            self.selected_shank = shank
+            info[shank] = self.upload_data()
+        return info
 
     # -------------------------------------------------------------------------
     # Utility
@@ -459,7 +590,7 @@ class ProbeHandlerONE(ProbeHandler):
     def __init__(
         self,
         one: ONE = None,
-        brain_atlas: AllenAtlas | None = None,
+        brain_atlas: BrainAtlas | None = None,
         spike_collection: str | None = None,
     ):
         self.one = one or ONE()
@@ -578,9 +709,7 @@ class ProbeHandlerONE(ProbeHandler):
         subject = ins['session_info']['subject']
         subj_match = np.where(self.subjects == subject)[0]
         if len(subj_match) == 0:
-            raise ValueError(
-                f'Subject {subject} for pid {pid} has no spikesorted insertions'
-            )
+            raise ValueError(f'Subject {subject} for pid {pid} has no spikesorted insertions')
         subj_idx = int(subj_match[0])
 
         sessions = self.get_sessions(subj_idx)
@@ -630,10 +759,10 @@ class ProbeHandlerONE(ProbeHandler):
         self.lab = self.shank_labels[idx]['session_info']['lab']
         self.pid = self.shank_labels[idx]['id']
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Download and load in the histology slice data."""
         _, hist_path = download_histology_data(self.subj, self.lab)
-        return NrrdSliceLoader(hist_path, self.brain_atlas)
+        return make_slice_loader(hist_path, self.brain_atlas, 'ccf')
 
     def initialise_shanks(self):
         """Initialise each shank with the loaders."""
@@ -655,10 +784,10 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
-    def load_data(self) -> None:
+    def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """Load data for all configs and shanks."""
         print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
-        super().load_data()
+        super().load_data(progress_callback=progress_callback)
 
 
 class ProbeHandlerCSV(ProbeHandler):
@@ -671,7 +800,7 @@ class ProbeHandlerCSV(ProbeHandler):
     """
 
     def __init__(
-        self, csv_file: str | Path, one: ONE = None, brain_atlas: AllenAtlas | None = None
+        self, csv_file: str | Path, one: ONE = None, brain_atlas: BrainAtlas | None = None
     ):
         super().__init__(brain_atlas)
 
@@ -763,10 +892,10 @@ class ProbeHandlerCSV(ProbeHandler):
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Download and load in the histology slice data."""
         _, hist_path = download_histology_data(self.subj, self.lab)
-        return NrrdSliceLoader(hist_path, self.brain_atlas)
+        return make_slice_loader(hist_path, self.brain_atlas, 'ccf')
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with the selected loaders."""
@@ -864,7 +993,7 @@ class ProbeHandlerLocal(ProbeHandler):
     For this ProbeHandler, all ephys and alignment data must be stored in a single folder on disk.
     """
 
-    def __init__(self, brain_atlas: AllenAtlas | None = None):
+    def __init__(self, brain_atlas: BrainAtlas | None = None):
         super().__init__(brain_atlas)
 
     def get_shanks(self, folder_path: Path) -> list[str]:
@@ -917,8 +1046,10 @@ class ProbeHandlerLocal(ProbeHandler):
         self.selected_idx = idx
 
     def download_histology(self) -> SliceLoader:
-        """Load in the histology slice data, auto-detecting TIFF vs NRRD."""
-        return _build_slice_loader(self.data_paths.histology, self.brain_atlas)
+        """Load in the histology slice data."""
+        return make_slice_loader(
+            self.data_paths.histology, self.brain_atlas, self.data_paths.histology_space
+        )
 
     def initialise_shanks(self) -> None:
         """Initialise each shank with the loaders."""
@@ -932,35 +1063,10 @@ class ProbeHandlerLocal(ProbeHandler):
             loaders['upload'] = AlignmentUploaderLocal(
                 self.data_paths.output, ish, self.n_shanks, self.brain_atlas
             )
-            loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
+            if self.data_paths.raw_ephys is not None:
+                loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
             loaders['plots'] = PlotLoader()
             self.shanks[f'shank_{ishank}'][self.default_config] = ShankHandler(loaders, ish)
-
-
-def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader:
-    """
-    Pick the right SliceLoader by inspecting the histology directory.
-
-    Used by the offline ProbeHandlers (:class:`ProbeHandlerLocal` and
-    :class:`ProbeHandlerLocalYaml`). If the directory contains any ``.tif`` / ``.tiff`` files
-    (e.g. brainreg outputs), return a :class:`TiffSliceLoader`. Otherwise default to the existing
-    :class:`NrrdSliceLoader` so all current NRRD workflows keep working.
-
-    Parameters
-    ----------
-    hist_path : Path
-        Directory containing the histology volumes.
-    brain_atlas : AllenAtlas
-        Brain atlas for alignment.
-
-    Returns
-    -------
-    SliceLoader
-        A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
-    """
-    if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
-        return TiffSliceLoader(hist_path, brain_atlas)
-    return NrrdSliceLoader(hist_path, brain_atlas)
 
 
 class ProbeHandlerLocalYaml(ProbeHandler):
@@ -980,9 +1086,13 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         An AllenAtlas instance (created if None).
     """
 
-    def __init__(self, yaml_file: str | Path, brain_atlas: AllenAtlas | None = None):
+    def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
+        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
+            yaml_file
+        )
+        # The atlas (anatomical or Allen, see _make_atlas) is built lazily by build_atlas() on the
+        # background loading thread rather than here, so it does not block GUI construction.
         super().__init__(brain_atlas)
-        self.configs, self.probes, self.data_paths = load_alignment_yaml(yaml_file)
 
         # The base sets a single 'default' config; mirror it to the yaml config name and, when the
         # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.
@@ -1041,9 +1151,9 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         self.selected_idx = idx
 
     def download_histology(self) -> SliceLoader:
-        """Load in the histology slice data, auto-detecting TIFF (e.g. brainreg) vs NRRD."""
-        data_path = self.data_paths[self.selected_config][self.probes[0]]
-        return _build_slice_loader(data_path.histology, self.brain_atlas)
+        """Load in the histology slice data."""
+        data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
+        return make_slice_loader(data_paths.histology, self.brain_atlas, self.histology_space)
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
@@ -1064,12 +1174,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                 loaders = Bunch()
                 loaders['geom'] = GeometryLoaderLocal(data_path)
                 loaders['data'] = DataLoaderLocal(data_path)
-                loaders['align'] = AlignmentLoaderLocal(
-                    data_path.picks or data_path.spike_sorting, ishank, self.n_shanks
-                )
-                loaders['upload'] = AlignmentUploaderLocal(
-                    data_path.output, ishank, self.n_shanks, self.brain_atlas
-                )
+                loaders['align'] = self._build_align_loader(data_path, ishank)
+                loaders['upload'] = self._build_upload_loader(data_path, ishank)
                 loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
                 # Per-session features (if the yaml specifies them) load via the existing
                 # shank_handler.load_data -> loaders['features'] path, so the session is
@@ -1079,3 +1185,163 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                     loaders['features'] = FeatureLoaderLocal(data_path.features)
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank][config] = ShankHandler(loaders, ishank)
+
+    def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderLocal:
+        """
+        Build the alignment loader for a shank.
+
+        Reads xyz picks and previous alignments from the local file system;
+        :class:`ProbeHandlerAllenYaml` overrides it to use the DocDB backend.
+
+        Parameters
+        ----------
+        data_path : DatasetPaths
+            The resolved dataset paths for the probe/config.
+        ishank : int
+            Index of the shank (0-based).
+
+        Returns
+        -------
+        AlignmentLoaderLocal
+            The alignment loader for the shank.
+        """
+        return AlignmentLoaderLocal(
+            data_path.picks or data_path.spike_sorting,
+            ishank,
+            self.n_shanks,
+            histology_space=self.histology_space,
+        )
+
+    def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderLocal:
+        """
+        Build the alignment uploader for a shank.
+
+        Writes channel locations and alignments to the local file system;
+        :class:`ProbeHandlerAllenYaml` overrides it to additionally post the results to DocDB.
+
+        Parameters
+        ----------
+        data_path : DatasetPaths
+            The resolved dataset paths for the probe/config.
+        ishank : int
+            Index of the shank (0-based).
+
+        Returns
+        -------
+        AlignmentUploaderLocal
+            The alignment uploader for the shank.
+        """
+        return AlignmentUploaderLocal(
+            data_path.output,
+            ishank,
+            self.n_shanks,
+            self.brain_atlas,
+        )
+
+
+class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
+    """
+    Probe handler for the Allen/Code Ocean (anatomical) workflow with DocDB support.
+
+    Extends :class:`ProbeHandlerLocalYaml` (so all the yaml/anatomical/data/geometry/histology/
+    transform wiring is reused) and, mirroring how :class:`ProbeHandlerONE` owns a ``one``
+    instance, owns a :class:`~ibl_alignment_gui.backends.allen.docdb_api.DocDB` instance that is
+    injected into the DocDB alignment loader and uploader (overriding the local factory hooks
+    :meth:`ProbeHandler._build_align_loader` / :meth:`ProbeHandler._build_upload_loader`).
+
+    The ``use_docdb`` flag selects the alignment backend: when True the DocDB-backed loader and
+    uploader are used (previous alignments read from DocDB with a local fallback; results written
+    locally and posted to DocDB); when False the plain local variants are used. It can be flipped
+    at runtime with :meth:`set_use_docdb` (e.g. from the DocDB checkbox).
+
+    Parameters
+    ----------
+    yaml_file : str or Path
+        Path to the session yaml configuration file.
+    brain_atlas : BrainAtlas or None
+        A pre-built brain atlas. If None, it is built lazily (anatomical or Allen, per the yaml).
+    docdb : DocDB or None
+        The DocDB client to inject. A default :class:`DocDB` is created if None.
+    use_docdb : bool
+        Whether to use the DocDB alignment backend (True) or the local one (False).
+    """
+
+    def __init__(
+        self,
+        yaml_file: str | Path,
+        brain_atlas: BrainAtlas | None = None,
+        docdb: DocDB | None = None,
+        use_docdb: bool = True,
+    ):
+        # Imported lazily so the base install (offline / IBL modes) does not require the allen
+        # extra; the alignment-gui-allen launcher checks the extra is installed up front.
+        from ibl_alignment_gui.backends.allen.docdb_api import DocDB  # noqa: PLC0415
+
+        self.docdb: DocDB = docdb or DocDB()
+        self.use_docdb: bool = use_docdb
+
+        super().__init__(yaml_file, brain_atlas=brain_atlas)
+
+    def _make_atlas(self) -> BrainAtlas:
+        """Return the appropriate atlas based on the histology space in the YAML config."""
+        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
+        if self.histology_space == 'anatomical' and histology_path:
+            return build_anatomical_atlas(histology_path)
+        return AllenAtlas()
+
+    def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderDocDB:
+        """Build a DocDB alignment loader (falling back to local when ``use_docdb`` is False)."""
+        return AlignmentLoaderDocDB(
+            data_path.picks or data_path.spike_sorting,
+            ishank,
+            self.n_shanks,
+            self.docdb,
+            use_db=self.use_docdb,
+            histology_space=self.histology_space,
+        )
+
+    def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderDocDB:
+        """Build a DocDB alignment uploader (falling back to local when ``use_docdb`` is False)."""
+        return AlignmentUploaderDocDB(
+            data_path.output,
+            ishank,
+            self.n_shanks,
+            self.brain_atlas,
+            self.docdb,
+            transform_loader=self._build_transform_loader(data_path),
+            use_db=self.use_docdb,
+        )
+
+    @staticmethod
+    def _build_transform_loader(data_path: DatasetPaths) -> TransformLoaderAllen | None:
+        """Return a SmartSPIM -> CCF transform loader for the probe, or None if not configured."""
+        return (
+            TransformLoaderAllen(data_path.transforms)
+            if data_path.transforms is not None
+            else None
+        )
+
+    def set_use_docdb(self, use_docdb: bool) -> None:
+        """
+        Switch the alignment backend and refresh previous alignments for every shank.
+
+        Flips the ``use_db`` flag on each shank's existing DocDB alignment loader and uploader
+        (leaving the loaded ephys/geometry/histology untouched) and re-reads the previous
+        alignments so the alignment dropdown reflects the new source.
+
+        Parameters
+        ----------
+        use_docdb : bool
+            Whether to use the DocDB alignment backend (True) or the local one (False).
+        """
+        self.use_docdb = use_docdb
+
+        for shank in self.shanks:
+            for config in self.configs:
+                handler = self.shanks[shank][config]
+                handler.loaders['align'].use_db = use_docdb
+                handler.loaders['upload'].use_db = use_docdb
+
+                align = handler.loaders['align']
+                align.load_previous_alignments()
+                align.get_starting_alignment(align.get_stored_alignment_idx())

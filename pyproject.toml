@@ -16,7 +16,6 @@ dependencies = [
   "ONE-api>=3.0.0",
   "iblutil>=1.20.0",
   "ibl-neuropixel>=1.9.0",
-  "ibllib",
   "iblatlas",
   "matplotlib",
   "simpleitk",
@@ -28,6 +27,23 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+# IBL online mode (ONE/Alyx): raw-data streaming, alignment upload/QC and passive/RF plots.
+# Installs ibllib (which also provides brainbox). Not required for offline mode.
+ibl = ["ibllib"]
+# Allen/Code Ocean (anatomical) mode: read/write alignments to the Allen DocDB and warp channel
+# locations into the Allen CCF. Not required for the local anatomical workflow.
+allen = [
+  "aind-data-schema<2.0",
+  "aind-data-access-api",
+  "aind-data-schema-models",
+  "aind-qcportal-schema",
+  "aws-requests-auth",
+  "boto3",
+  "requests",
+  "antspyx",
+]
+
 [project.urls]
 Changelog = "https://github.com/int-brain-lab/ibl-alignment-gui/blob/main/CHANGELOG.md"
 Documentation = "https://int-brain-lab.github.io/ibl-alignment-gui/"
@@ -38,6 +54,7 @@ Repository = "https://github.com/int-brain-lab/ibl-alignment-gui.git"
 [project.scripts]
 alignment-gui = "ibl_alignment_gui.app.main:launch_app"
 alignment-gui-ibl = "ibl_alignment_gui.app.main:launch_app_ibl"
+alignment-gui-allen = "ibl_alignment_gui.app.main:launch_app_allen"
 
 
 [dependency-groups]
@@ -104,7 +121,7 @@ source-exclude = [
 [tool.ruff]
 line-length = 99
 include = ["pyproject.toml", "ibl_alignment_gui/**/*.py", "tests/**/*.py", "docs/source/**/*.py"]
-exclude = ["ibl_alignment_gui/utils/qt/adapted_axis.py", "ibl_alignment_gui/utils/qt/qrange_slider.py"]
+exclude = ["ibl_alignment_gui/app/widgets/adapted_axis.py", "ibl_alignment_gui/app/widgets/qrange_slider.py"]
 
 [tool.ruff.format]
 quote-style = "single"

@@ -1,5 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -34,6 +35,10 @@ class DatasetPaths(BaseModel):
     features : Path | None
         Path to a per-channel ephys-features parquet file (used by the local channel-prediction
         plugin so the features travel with the session config).
+    transforms : Path | None
+        Path to a folder of registration transforms used to warp channel locations into the
+        Allen CCF (anatomical workflow only). When set, channel locations are additionally
+        saved in CCF coordinates.
     """
 
     spike_sorting: Path | None = None
@@ -43,8 +48,10 @@ class DatasetPaths(BaseModel):
     raw_task: Path | None = None
     picks: Path | None = None
     histology: Path | None = None
+    histology_space: str = 'ccf'
     output: Path | None = None
     features: Path | None = None
+    transforms: Path | None = None
 
 
 class Datasets(BaseModel):
@@ -57,10 +64,16 @@ class Datasets(BaseModel):
         Relative or absolute path to the dataset directory
     backend : str | None
         Data format backend (e.g., 'phylib', 'spikeglx')
+    space : {'ccf', 'anatomical'} | None
+        Only meaningful for the ``histology`` entry of the top-level ``defaults`` section: the
+        session-level coordinate space to use for histology slice loading. 'ccf' loads via
+        NrrdSliceLoader using the Allen CCF atlas; 'anatomical' loads via AnatomicalSliceLoader
+        using the original image space produced by the histology registration pipeline.
     """
 
     path: Path | None = None
     backend: str | None = None
+    space: Literal['ccf', 'anatomical'] | None = None
 
 
 class Probe(BaseModel):
@@ -179,7 +192,7 @@ def resolve_path(
 
 def load_alignment_yaml(
     yaml_file: str,
-) -> tuple[list[str], list[str], dict[str, dict[str, DatasetPaths]]]:
+) -> tuple[list[str], list[str], dict[str, dict[str, DatasetPaths]], str]:
     """
     Load and parse alignment configuration YAML file.
 
@@ -200,6 +213,10 @@ def load_alignment_yaml(
     data_paths : A dict of dicts of DatasetPaths
         Nested dictionary of resolved paths:
         data_paths[config_name][probe_name] -> DatasetPaths
+    histology_space : str
+        Session-level histology coordinate space, read from the ``space`` field of the
+        ``defaults`` histology entry ('ccf' if unspecified). 'ccf' loads histology via the Allen
+        CCF atlas; 'anatomical' loads the original image space from the registration pipeline.
 
     Notes
     -----
@@ -223,6 +240,11 @@ def load_alignment_yaml(
 
     alignment = AlignmentYAML(**data)
     global_path = alignment.path
+
+    # Histology space is a session-level setting read from the ``defaults`` histology entry and
+    # shared by every probe/config ('ccf' when unspecified).
+    default_histology = alignment.defaults.get('histology') if alignment.defaults else None
+    histology_space = (default_histology.space if default_histology else None) or 'ccf'
 
     data_paths = defaultdict(dict)
     configs = []
@@ -260,6 +282,7 @@ def load_alignment_yaml(
                 'histology',
                 'output',
                 'features',
+                'transforms',
             ]:
                 path_value = get_path(dataset_name)
                 default_value = get_default_path(dataset_name)
@@ -270,6 +293,10 @@ def load_alignment_yaml(
 
             if resolved_paths.processed_ephys is None:
                 resolved_paths.processed_ephys = resolved_paths.raw_ephys
+
+            if resolved_paths.raw_ephys is None:
+                resolved_paths.processed_ephys = resolved_paths.spike_sorting
+                resolved_paths.raw_ephys = resolved_paths.spike_sorting
 
             if resolved_paths.output is None:
                 resolved_paths.output = resolved_paths.spike_sorting
@@ -282,4 +309,4 @@ def load_alignment_yaml(
         'More than two configurations found in YAML, alignment GUI supports up to two.'
     )
 
-    return configs, list(set(probes)), data_paths
+    return configs, list(set(probes)), data_paths, histology_space

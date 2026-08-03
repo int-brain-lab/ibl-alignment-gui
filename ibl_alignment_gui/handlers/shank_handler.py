@@ -27,7 +27,9 @@ class ShankHandler:
         self.shank_idx: int = shank_idx
         self.loaders: Bunch = loaders
         self.loaders['align'].load_previous_alignments()
-        self.loaders['align'].get_starting_alignment(self.loaders['align'].get_stored_alignment_idx())
+        self.loaders['align'].get_starting_alignment(
+            self.loaders['align'].get_stored_alignment_idx()
+        )
         self.align_exists: bool = True
         self.data_loaded: bool = False
         self.align_handle = None
@@ -111,6 +113,11 @@ class ShankHandler:
     def xyz_track(self) -> np.ndarray:
         """See :meth:`AlignmentHandler.xyz_track` for details."""
         return self.align_handle.xyz_track
+
+    @property
+    def tip_location(self) -> np.ndarray:
+        """See :meth:`AlignmentHandler.tip_location` for details."""
+        return self.align_handle.tip_location
 
     @property
     def track_lines(self) -> list[np.ndarray]:

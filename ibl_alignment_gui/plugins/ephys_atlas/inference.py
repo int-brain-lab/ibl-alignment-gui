@@ -18,25 +18,24 @@ import numpy as np
 import yaml
 from qtpy import QtWidgets
 
-from one.api import ONE
-
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    _get_features_df,
     clear_predictions,
     has_features,
     has_one_connection,
     needs_reload,
     plugin_state,
     s3_cache_root,
-    _get_features_df
 )
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.numerical import ismember
+from one.api import ONE
 
 if TYPE_CHECKING:
     import pandas as pd
 
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +76,10 @@ class InferenceModel:
     n_folds: int
 
 
-
 # -----------------------------------------------------------------------------
 # GUI interaction
 # -----------------------------------------------------------------------------
+
 
 class _InferenceModelDialog(QtWidgets.QDialog):
     """Inference-model selection dialog with optional dropdown and a local-folder picker.
@@ -153,7 +152,8 @@ class _InferenceModelDialog(QtWidgets.QDialog):
             self._combo.activated.connect(self._clear_dir)
 
         bb = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
@@ -161,14 +161,17 @@ class _InferenceModelDialog(QtWidgets.QDialog):
     def _browse_model(self) -> None:
         """Pick the inference model dir, validating its folds/FOLD00 structure."""
         chosen_path = QtWidgets.QFileDialog.getExistingDirectory(
-            self, 'Select model directory (containing folds/FOLD00/)')
+            self, 'Select model directory (containing folds/FOLD00/)'
+        )
         if not chosen_path:
             return
         chosen_path = Path(chosen_path)
         if not validate_model_folder(chosen_path):
             QtWidgets.QMessageBox.warning(
-                self, 'Inference model',
-                f'No "folds/FOLD00" (or "FOLD00") found under:\n{chosen_path}')
+                self,
+                'Inference model',
+                f'No "folds/FOLD00" (or "FOLD00") found under:\n{chosen_path}',
+            )
             return
         self._local_dir = chosen_path
         self._dir_edit.setText(str(chosen_path))
@@ -249,22 +252,31 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         # nothing to predict on, so steer the user to load it before choosing a model.
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
-                controller.view, 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
+                controller.view,
+                'Channel Prediction',
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+            )
             return False
         dialog = _InferenceModelDialog(
-            controller.view, 'Load Inference Model', current_dir=current_dir)
+            controller.view, 'Load Inference Model', current_dir=current_dir
+        )
     else:
         # Online the model loads without a local features file, so check here that the insertion
         # actually has features to predict on before letting the user pick a model.
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
-                controller.view, 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
+                controller.view,
+                'Channel Prediction',
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+            )
             return False
         dialog = _InferenceModelDialog(
-            controller.view, 'Load Inference Model', S3_MODEL_NAMES,
-            current_model['model_name'] or MODEL_VINTAGE, current_dir)
+            controller.view,
+            'Load Inference Model',
+            S3_MODEL_NAMES,
+            current_model['model_name'] or MODEL_VINTAGE,
+            current_dir,
+        )
 
     if dialog.exec() != QtWidgets.QDialog.Accepted:
         return False
@@ -282,8 +294,10 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     # TODO put this into _on_accept
     if not has_one:
         QtWidgets.QMessageBox.warning(
-            controller.view, 'Channel Prediction',
-            'Offline mode needs a local inference model dir.')
+            controller.view,
+            'Channel Prediction',
+            'Offline mode needs a local inference model dir.',
+        )
         # No dropdown offline: OK without a folder selection means nothing to load.
         return False
 
@@ -318,6 +332,7 @@ def invalidate_predictions(
 # -----------------------------------------------------------------------------
 # Loading utils
 # -----------------------------------------------------------------------------
+
 
 def is_model_loaded(controller: AlignmentGUIController) -> bool:
     """Return whether an inference model is cached on the plugin.
@@ -377,7 +392,7 @@ def load_inference_model(
     controller: AlignmentGUIController,
     model_dir: str | Path | None = None,
     model_name: str | None = None,
-    one: ONE | None = None
+    one: ONE | None = None,
 ) -> None:
     """Load the region-classifier model from a local directory or download it from S3.
 
@@ -422,7 +437,8 @@ def load_inference_model(
     if folds_path is None:
         raise RuntimeError(
             'Could not resolve an inference model: the S3 download needs a ONE/Alyx connection. '
-            'Set a local model directory instead.')
+            'Set a local model directory instead.'
+        )
 
     # Validation contract: confirm all folds agree and extract FEATURES / CLASSES.
     features, classes, n_folds = validate_model(folds_path)
@@ -487,6 +503,7 @@ def _get_model_path_from_s3(one: ONE, model_name: str) -> Path | None:
 # -----------------------------------------------------------------------------
 # Model validation
 # -----------------------------------------------------------------------------
+
 
 def validate_model(
     folds_path: str | Path, max_folds: int = MAX_FOLDS
@@ -600,14 +617,13 @@ def validate_model_folder(model_dir: Path) -> bool:
     bool
         True if ``model_dir`` contains ``folds/FOLD00`` or ``FOLD00`` directly, else False.
     """
-    return (
-        model_dir.joinpath('folds', 'FOLD00').is_dir()
-        or model_dir.joinpath('FOLD00').is_dir()
-    )
+    return model_dir.joinpath('folds', 'FOLD00').is_dir() or model_dir.joinpath('FOLD00').is_dir()
+
 
 # -----------------------------------------------------------------------------
 # Model prediction
 # -----------------------------------------------------------------------------
+
 
 def _fold_mean_probas(
     controller: AlignmentGUIController, items: ShankController
@@ -646,14 +662,17 @@ def _fold_mean_probas(
         # has_one, _ = has_one_connection(controller)
         # if has_one:
         QtWidgets.QMessageBox.warning(
-            controller.view, 'Channel Prediction',
+            controller.view,
+            'Channel Prediction',
             'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
         )
         return None
 
     df = validate_features(df, model.features)
     predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(
-        df, path_model=model.model_path, n_folds=model.n_folds,
+        df,
+        path_model=model.model_path,
+        n_folds=model.n_folds,
     )
     mean_probas = np.mean(predicted_probas, axis=0)
     depths = df['axial_um'].values

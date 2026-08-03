@@ -10,9 +10,9 @@ from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas._common import is_model_loaded
-from ibl_alignment_gui.utils.utils import shank_loop
-from iblutil.util import Bunch
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblatlas.atlas import AllenAtlas
+from iblutil.util import Bunch
 
 # NB: ``spatial_encoder`` (torch) and ``inference`` (ephysatlas) are imported lazily inside the
 # compute functions below so this plugin can be set up in offline mode without those heavy/optional
@@ -21,8 +21,8 @@ from iblatlas.atlas import AllenAtlas
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 PLUGIN_NAME = 'Channel Prediction'
 
@@ -72,16 +72,17 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)
 
-    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = partial(
-        _on_data_loaded, controller
-    )
+    controller.plugins[PLUGIN_NAME]['data_button_pressed'] = partial(_on_data_loaded, controller)
+
 
 def _set_local_features(controller: 'AlignmentGUIController') -> None:
     """Prompt for a per-channel features parquet and use it for inference."""
     import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+
     parent = controller.view
     chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
-        parent, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)')
+        parent, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+    )
     if not chosen:
         return
 
@@ -109,6 +110,7 @@ def _set_local_features(controller: 'AlignmentGUIController') -> None:
 def _load_inference_model(controller: 'AlignmentGUIController') -> None:
     """Load inference model via GUI dialog; reveal its region options and refresh on success."""
     import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+
     if inference.load_model_dialog(controller):
         # Reveal the now-loaded model's region options (offline only adds them once loaded).
         _refresh_model_options(controller)
@@ -118,6 +120,7 @@ def _load_inference_model(controller: 'AlignmentGUIController') -> None:
 def _load_spatial_model(controller: 'AlignmentGUIController') -> None:
     """Load the spatial model via dialog; reveal its region option and refresh on success."""
     import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
+
     if spatial.load_model_dialog(controller):
         # Reveal the now-loaded model's region option (offline only adds it once loaded).
         _refresh_model_options(controller)

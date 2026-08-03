@@ -71,7 +71,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
         with self.subTest('No changes'):
             self.assertIn('No changes made', self.uploader.get_upload_info(False, False))
 
-    @patch('ibl_alignment_gui.loaders.alignment_uploader.histology.register_aligned_track')
+    @patch('ibllib.pipes.histology.register_aligned_track')
     def test_upload_channels(self, mock_register):
         """Test the upload_channels method"""
         data = {
@@ -152,7 +152,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
         self.uploader.save_alignments({})
         self.assertEqual(self.mock_one.alyx.rest.call_count, 2)
 
-    @patch('ibl_alignment_gui.loaders.alignment_uploader.critical_note.main_gui')
+    @patch('ibllib.qc.critical_reasons.main_gui')
     def test_set_user_qc(self, mock_note):
         """Test the set_user_qc method"""
         with self.subTest('QC pass no reasons'):
@@ -180,7 +180,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
             self.uploader.set_user_qc('High', 'Pass', [], True)
             self.assertTrue(self.uploader.force_resolve)
 
-    @patch('ibl_alignment_gui.loaders.alignment_uploader.AlignmentQC')
+    @patch('ibllib.qc.alignment_qc.AlignmentQC')
     def test_upload_qc(self, mock_align_qc_class):
         """Test the upload_qc method"""
         mock_align_qc = mock_align_qc_class.return_value

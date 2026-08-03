@@ -167,6 +167,7 @@ class TestAlignmentHandler(unittest.TestCase):
         self.mock_ephysalign.xyz_samples = np.array([[4, 5, 6]])
         self.mock_ephysalign.get_channel_locations.return_value = np.array([7, 8, 9])
         self.mock_ephysalign.get_perp_vector.return_value = np.array([10, 11, 12])
+        self.mock_ephysalign.get_tip_location.return_value = np.array([13, 14, 15])
         self.mock_ephysalign.track_init = np.array([1, 2, 3])
         self.mock_ephysalign.feature_init = np.array([4, 5, 6])
         self.mock_ephysalign.track_extent = np.array([0, 1, 2])
@@ -209,6 +210,7 @@ class TestAlignmentHandler(unittest.TestCase):
         )
         np.testing.assert_array_equal(self.align_handler.xyz_channels, np.array([7, 8, 9]))
         np.testing.assert_array_equal(self.align_handler.track_lines, np.array([10, 11, 12]))
+        np.testing.assert_array_equal(self.align_handler.tip_location, np.array([13, 14, 15]))
 
     def test_buffer_properties_and_methods(self):
         self.assertEqual(self.align_handler.current_idx, 0)

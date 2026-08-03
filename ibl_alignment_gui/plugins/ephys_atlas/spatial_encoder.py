@@ -19,9 +19,6 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import pandas as pd
 import torch
-from qtpy import QtWidgets
-from torch.utils.data import DataLoader
-
 from ephysatlas.spatial_encoder.model import (
     NeighborInpaintingModel,
     ProbeConfidenceTrainConfig,
@@ -29,32 +26,34 @@ from ephysatlas.spatial_encoder.model import (
     predict_probe_confidence_classes,
 )
 from ephysatlas.spatial_encoder.utils import (
+    FEATURE_LIST,
     AtlasPCAConfig,
     ContextAtlasManager,
-    FEATURE_LIST,
     GridDS,
     LoadInsertionData,
     NeighborCollate,
     build_channels_plus_emptyvoxels_with_neighbors,
     region_ids_from_xyz,
 )
-from iblatlas.atlas import AllenAtlas
-from one.api import ONE
+from qtpy import QtWidgets
+from torch.utils.data import DataLoader
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    _get_features_df,
     clear_predictions,
     has_features,
     has_one_connection,
     needs_reload,
     plugin_state,
     s3_cache_root,
-    _get_features_df
 )
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
+from iblatlas.atlas import AllenAtlas
+from one.api import ONE
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +64,7 @@ PREDICTION_KEY = 'Spatial Encoder'  # per-shank cache key for the spatial-encode
 S3_MODEL_NAMES = [
     f'encoding_models/{MODEL_VINTAGE}',
 ]
+
 
 # -----------------------------------------------------------------------------
 # GUI interaction
@@ -140,7 +140,9 @@ class _SpatialModelDialog(QtWidgets.QDialog):
         # Row 2 — local feature dir.
         self._data_edit = QtWidgets.QLineEdit()
         self._data_edit.setReadOnly(True)
-        self._data_edit.setPlaceholderText('directory containing feature data raw_ephys_features*.pqt')
+        self._data_edit.setPlaceholderText(
+            'directory containing feature data raw_ephys_features*.pqt'
+        )
         if self.enc_data is not None:
             self._data_edit.setText(str(self.enc_data))
         browse2 = QtWidgets.QPushButton('Browse…')
@@ -158,7 +160,8 @@ class _SpatialModelDialog(QtWidgets.QDialog):
             self._combo.activated.connect(self._clear_local)
 
         bb = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
         bb.accepted.connect(self._on_accept)
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
@@ -166,13 +169,15 @@ class _SpatialModelDialog(QtWidgets.QDialog):
     def _browse_model(self) -> None:
         """Pick the encoder model dir, requiring at least one SE_model_*.pt inside."""
         chosen_path = QtWidgets.QFileDialog.getExistingDirectory(
-            self, 'Select Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy)')
+            self, 'Select Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy)'
+        )
         if not chosen_path:
             return
         chosen_path = Path(chosen_path)
         if not validate_encoder_folder(chosen_path):
             QtWidgets.QMessageBox.warning(
-                self, 'Channel Prediction', f'No "SE_model_*.pt" found under:\n{chosen_path}')
+                self, 'Channel Prediction', f'No "SE_model_*.pt" found under:\n{chosen_path}'
+            )
             return
         self.enc_dir = chosen_path
         self.enc_model = chosen_path.name
@@ -181,14 +186,17 @@ class _SpatialModelDialog(QtWidgets.QDialog):
     def _browse_data(self) -> None:
         """Pick the features table dir, requiring the vintage feature tables inside."""
         chosen_path = QtWidgets.QFileDialog.getExistingDirectory(
-            self, 'Select Spatial Encoder features')
+            self, 'Select Spatial Encoder features'
+        )
         if not chosen_path:
             return
         chosen_path = Path(chosen_path)
         if not validate_feature_folder(chosen_path):
             QtWidgets.QMessageBox.warning(
-                self, 'Channel Prediction',
-                f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) found under:\n{chosen_path}')
+                self,
+                'Channel Prediction',
+                f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) found under:\n{chosen_path}',
+            )
             return
         self.enc_data = chosen_path
         self._data_edit.setText(str(chosen_path))
@@ -261,23 +269,35 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         # nothing to predict on, so steer the user to load it before choosing a model.
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
-                controller.view, 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
+                controller.view,
+                'Channel Prediction',
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+            )
             return False
         dialog = _SpatialModelDialog(
-            controller.view, 'Load Spatial Model',
-            current_dir=current_dir, current_data=current_data)
+            controller.view,
+            'Load Spatial Model',
+            current_dir=current_dir,
+            current_data=current_data,
+        )
     else:
         # Online the model loads without a local features file, so check here that the insertion
         # actually has features to predict on before letting the user pick a model.
         if not has_features(controller):
             QtWidgets.QMessageBox.warning(
-                controller.view, 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...')
+                controller.view,
+                'Channel Prediction',
+                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+            )
             return False
         dialog = _SpatialModelDialog(
-            controller.view, 'Load Spatial Model', options=S3_MODEL_NAMES, current=MODEL_VINTAGE,
-            current_dir=current_dir, current_data=current_data)
+            controller.view,
+            'Load Spatial Model',
+            options=S3_MODEL_NAMES,
+            current=MODEL_VINTAGE,
+            current_dir=current_dir,
+            current_data=current_data,
+        )
 
     if dialog.exec() != QtWidgets.QDialog.Accepted:
         return False
@@ -293,7 +313,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         ):
             return True
         load_alignment_engine(
-            controller, model_path=dialog.enc_dir, data_path=dialog.enc_data, one=one)
+            controller, model_path=dialog.enc_dir, data_path=dialog.enc_data, one=one
+        )
         invalidate_predictions(controller)
         return True
 
@@ -304,6 +325,7 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     load_alignment_engine(controller, model_name=model_name, one=one)
     invalidate_predictions(controller)
     return True
+
 
 # -----------------------------------------------------------------------------
 # Validation utils
@@ -375,7 +397,7 @@ def _selection_error(
 
 
 def _get_date_from_vintage(model_name: str) -> str:
-    """ Get the date from the model vintage string
+    """Get the date from the model vintage string
 
     which is expected to be in the format '<vintage>_SE_Model'. or xxxx/<vintage>
 
@@ -403,6 +425,7 @@ def invalidate_predictions(
         The shank whose cached prediction is cleared.
     """
     clear_predictions(items, PREDICTION_KEY)
+
 
 # -----------------------------------------------------------------------------
 # Loading utils
@@ -568,13 +591,14 @@ def _get_encoder_data_from_s3(one: ONE, feature_vintage: str = MODEL_VINTAGE) ->
     """
     cache_root = s3_cache_root(one)
     try:
-        from ephysatlas.data import download_tables # noqa: PLC0415
+        from ephysatlas.data import download_tables  # noqa: PLC0415
 
         data_path = download_tables(cache_root, feature_vintage, one=one)
     except Exception as exc:
         logger.warning('download_tables skipped/failed: %s', exc)
         return None
     return data_path
+
 
 def load_alignment_engine(
     controller: AlignmentGUIController,
@@ -619,28 +643,31 @@ def load_alignment_engine(
 
     if one is None and (data_path is None or model_path is None):
         raise RuntimeError(
-            'No ONE connection found, must specify both local encoder and local feature directories')
+            'No ONE connection found, must specify both local encoder and local feature directories'
+        )
 
     if data_path is not None and model_path is not None:
         # TODO do we need this validation here given that we have done it before?
         if not validate_encoder_folder(model_path):
-            raise RuntimeError(f'No "SE_model_*.pt" found under the given model path: {model_path}')
+            raise RuntimeError(
+                f'No "SE_model_*.pt" found under the given model path: {model_path}'
+            )
 
         if not validate_feature_folder(data_path):
-            raise RuntimeError(f'No features table (raw_ephys_features*.pqt) found under the given data path: {data_path}')
+            raise RuntimeError(
+                f'No features table (raw_ephys_features*.pqt) found under the given data path: {data_path}'
+            )
 
         plugin['local_encoder_dir'] = model_path
         plugin['local_encoder_data'] = data_path
         plugin['model_name'] = None
     else:
-
         data_path = _get_encoder_data_from_s3(one, _get_date_from_vintage(model_name))
         model_path = _get_encoder_path_from_s3(one, model_name)
 
         plugin['local_encoder_dir'] = model_path
         plugin['local_encoder_data'] = data_path
         plugin['model_name'] = model_name
-
 
     optimization_features = np.arange(len(FEATURE_LIST), dtype=int)
 
@@ -749,8 +776,10 @@ def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
         return get_model(controller)
 
     if plugin.get('model', None) is None:
-        if (plugin.get('local_encoder_dir', None) is not None
-                and plugin.get('local_encoder_data', None) is not None):
+        if (
+            plugin.get('local_encoder_dir', None) is not None
+            and plugin.get('local_encoder_data', None) is not None
+        ):
             load_alignment_engine(
                 controller,
                 model_path=plugin['local_encoder_dir'],
@@ -761,6 +790,7 @@ def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
         return get_model(controller)
 
     return plugin['model']
+
 
 # -----------------------------------------------------------------------------
 # Feature & geometry utils
@@ -787,10 +817,8 @@ def _get_current_pid(controller, items) -> str:
     return 'unknown_pid'
 
 
-def _depths_for_extended_trace_fixed(
-        *, df, sampling_trk, j_start, j_end, trace_len
-):
-    depth_probe = df["axial_um"].to_numpy(dtype=float) / 1e6
+def _depths_for_extended_trace_fixed(*, df, sampling_trk, j_start, j_end, trace_len):
+    depth_probe = df['axial_um'].to_numpy(dtype=float) / 1e6
     trk = np.asarray(sampling_trk, dtype=float)
 
     if trk.shape[0] != trace_len:
@@ -803,7 +831,7 @@ def _depths_for_extended_trace_fixed(
     depths_before = depth_probe[0] - (trk[j_start] - trk[:j_start])
 
     # Extension after aligned probe: should continue after depth_probe[-1]
-    depths_after = depth_probe[-1] + (trk[j_end + 1:] - trk[j_end])
+    depths_after = depth_probe[-1] + (trk[j_end + 1 :] - trk[j_end])
 
     depth_samples = np.concatenate(
         [
@@ -1519,7 +1547,8 @@ def predict(controller, items):
     recorded_full_gui_order, df = _extract_recorded_features(items)
     if df is None:
         QtWidgets.QMessageBox.warning(
-            controller.view, 'Channel Prediction',
+            controller.view,
+            'Channel Prediction',
             'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
         )
         return None

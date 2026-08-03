@@ -1,7 +1,7 @@
 import numpy as np
 
-from iblatlas.atlas import AllenAtlas
-from ibllib.pipes.ephys_alignment import EphysAlignment
+from ibl_alignment_gui.core.ephys_alignment import EphysAlignment
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 
 
@@ -142,9 +142,9 @@ class AlignmentHandler:
         probe at a specific alignment step
     """
 
-    def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: AllenAtlas):
+    def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: BrainAtlas):
         self.buffer: CircularIndexTracker = CircularIndexTracker(10)
-        self.brain_atlas: AllenAtlas = brain_atlas
+        self.brain_atlas: BrainAtlas = brain_atlas
         self.ephysalign: EphysAlignment = EphysAlignment(
             xyz_picks, chn_depths, brain_atlas=self.brain_atlas
         )
@@ -196,6 +196,22 @@ class AlignmentHandler:
         return self.ephysalign.get_channel_locations(
             self.features[self.idx], self.tracks[self.idx]
         )
+
+    @property
+    def tip_location(self) -> np.ndarray:
+        """
+        Return the xyz location of the probe tip estimated using the current alignment.
+
+        The tip sits a fixed distance below the first electrode and is estimated using the
+        same track/feature fit as the channels, evaluated at the current index of the
+        circular buffer, so it moves as the alignment is adjusted.
+
+        Returns
+        -------
+        np.ndarray
+            xyz position of the probe tip in 3D space
+        """
+        return self.ephysalign.get_tip_location(self.features[self.idx], self.tracks[self.idx])
 
     @property
     def track_lines(self) -> list[np.ndarray]:

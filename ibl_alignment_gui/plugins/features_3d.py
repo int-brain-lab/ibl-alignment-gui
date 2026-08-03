@@ -12,11 +12,11 @@ from qtpy import QtCore, QtWidgets
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
     from iblatlas.atlas import AllenAtlas
 
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
 
 PLUGIN_NAME = '3D features'
 

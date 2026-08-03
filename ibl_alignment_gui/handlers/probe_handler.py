@@ -1101,7 +1101,9 @@ class ProbeHandlerLocal(ProbeHandler):
             loaders = Bunch()
             loaders['geom'] = self.geom
             loaders['data'] = DataLoaderLocal(self.data_paths)
-            loaders['align'] = AlignmentLoaderLocal(self.data_paths.picks, ish, self.n_shanks)
+            loaders['align'] = AlignmentLoaderLocal(
+                self.data_paths.output, ish, self.n_shanks, picks_path=self.data_paths.picks
+            )
             loaders['upload'] = AlignmentUploaderLocal(
                 self.data_paths.output, ish, self.n_shanks, self.brain_atlas
             )
@@ -1235,6 +1237,9 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         Reads xyz picks and previous alignments from the local file system;
         :class:`ProbeHandlerAllenYaml` overrides it to use the DocDB backend.
 
+        The previous alignments are read from the output path, which is where the uploader writes
+        them to, while the xyz picks are read from the picks path.
+
         Parameters
         ----------
         data_path : DatasetPaths
@@ -1248,10 +1253,11 @@ class ProbeHandlerLocalYaml(ProbeHandler):
             The alignment loader for the shank.
         """
         return AlignmentLoaderLocal(
-            data_path.picks or data_path.spike_sorting,
+            data_path.output,
             ishank,
             self.n_shanks,
             histology_space=self.histology_space,
+            picks_path=data_path.picks or data_path.spike_sorting,
         )
 
     def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderLocal:
@@ -1333,13 +1339,16 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
 
     def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderDocDB:
         """Build a DocDB alignment loader (falling back to local when ``use_docdb`` is False)."""
+        # The output path is used, as the docdb record and the local prev_alignments file are both
+        # written relative to it by the uploader
         return AlignmentLoaderDocDB(
-            data_path.picks or data_path.spike_sorting,
+            data_path.output,
             ishank,
             self.n_shanks,
             self.docdb,
             use_db=self.use_docdb,
             histology_space=self.histology_space,
+            picks_path=data_path.picks or data_path.spike_sorting,
         )
 
     def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderDocDB:

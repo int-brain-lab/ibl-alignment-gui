@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from ibl_alignment_gui.loaders.alignment_loader import AlignmentLoaderLocal
 from ibl_alignment_gui.loaders.alignment_uploader import (
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
@@ -420,3 +421,60 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
         with open(file_path) as f:
             data = json.load(f)
         self.assertEqual(data, json_data)
+
+
+class TestUploaderLoaderPaths(unittest.TestCase):
+    """Test that the uploader writes the files that the loader reads back in.
+
+    The filenames are built separately in the loader and the uploader, and the two can be given
+    different folders, so a full round trip is checked here.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        self.alignments = {'2025-07-03_user1': [[0.5, 0, 0.5], [0.2, 0, 0.2]]}
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_round_trip_separate_picks_and_output(self):
+        """Test the round trip when the picks and the results are in different folders"""
+        # The layout documented for multi shank yaml sessions, picks and output kept apart
+        picks = self.temp_path.joinpath('picks')
+        output = self.temp_path.joinpath('output')
+        picks.mkdir()
+        output.mkdir()
+        with open(picks.joinpath('xyz_picks_shank1.json'), 'w') as f:
+            json.dump({'xyz_picks': [[1000, 2000, 3000]]}, f)
+
+        loader = AlignmentLoaderLocal(output, 0, 4, picks_path=picks)
+        uploader = AlignmentUploaderLocal(output, 0, 4, MagicMock())
+
+        # The picks are an input, so they are read from the picks folder
+        self.assertIsNotNone(loader.xyz_picks)
+
+        # The alignments and the progress are results, so they are read from the output folder
+        uploader.save_alignments(self.alignments)
+        self.assertEqual(loader.load_alignments(), self.alignments)
+
+        uploader.save_progress([-0.1, 0, 0.1], [-0.3, 0, 0.2])
+        loader.load_progress()
+        self.assertIsNotNone(loader.recovered_key)
+        self.assertEqual(loader.alignments[loader.recovered_key], [[-0.1, 0, 0.1], [-0.3, 0, 0.2]])
+
+    def test_round_trip_one_folder(self):
+        """Test the round trip when everything sits in a single folder"""
+        for n_shanks, shank_idx in [(1, 0), (4, 2)]:
+            with self.subTest(f'{n_shanks} shanks, shank index {shank_idx}'):
+                loader = AlignmentLoaderLocal(self.temp_path, shank_idx, n_shanks, xyz_picks=[])
+                uploader = AlignmentUploaderLocal(self.temp_path, shank_idx, n_shanks, MagicMock())
+                # The picks default to being read from the same folder as the results
+                self.assertEqual(loader.picks_path, loader.data_path)
+
+                uploader.save_alignments(self.alignments)
+                self.assertEqual(loader.load_alignments(), self.alignments)
+
+                uploader.save_progress([-0.1, 0, 0.1], [-0.3, 0, 0.2])
+                loader.load_progress()
+                self.assertIsNotNone(loader.recovered_key)

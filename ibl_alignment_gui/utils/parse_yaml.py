@@ -222,7 +222,7 @@ def load_alignment_yaml(
     -----
     - If no 'configurations' section exists, creates a 'default' configuration
     - Falls back to raw_ephys path if processed_ephys is not specified
-    - Falls back to spike_sorting path if output path is not specified
+    - Falls back to the spike_sorting path, and then the picks path, if output is not specified
     - Creates output directories automatically with parents
     """
     yaml_file = Path(yaml_file)
@@ -298,8 +298,10 @@ def load_alignment_yaml(
                 resolved_paths.processed_ephys = resolved_paths.spike_sorting
                 resolved_paths.raw_ephys = resolved_paths.spike_sorting
 
+            # If no output is given the alignment results are written alongside the spike sorting,
+            # falling back to the picks for sessions that have no spike sorting path
             if resolved_paths.output is None:
-                resolved_paths.output = resolved_paths.spike_sorting
+                resolved_paths.output = resolved_paths.spike_sorting or resolved_paths.picks
 
             # resolved_paths.output.mkdir(parents=True, exist_ok=True)
 

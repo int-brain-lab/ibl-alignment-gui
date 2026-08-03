@@ -362,7 +362,9 @@ class AlignmentLoaderLocal(AlignmentLoader):
     """
     Alignment loader using local file system.
 
-    xyz picks and previous alignments are loaded from files on disk.
+    xyz picks and previous alignments are loaded from files on disk. The previous alignments are
+    read from the folder that the uploader writes them to, which is not necessarily the folder
+    that the xyz picks are read from.
 
     For single-shank data, expected filenames:
         - *xyz_picks.json
@@ -375,7 +377,8 @@ class AlignmentLoaderLocal(AlignmentLoader):
     Parameters
     ----------
     data_path : Path
-        The path to the local data folder.
+        The path to the folder that the alignment results are written to, and so the folder that
+        previous alignments and saved progress are read from.
     shank_idx : int
         Index of the shank (0-based).
     n_shanks : int
@@ -384,6 +387,9 @@ class AlignmentLoaderLocal(AlignmentLoader):
         Username for tagging alignments.
     xyz_picks : np.ndarray or None
         Preloaded xyz picks. If not provided, it will attempt to load from file.
+    picks_path : Path or None
+        The path to the folder that the xyz picks are read from. Defaults to `data_path` when the
+        picks sit alongside the alignment results.
     """
 
     def __init__(
@@ -394,8 +400,11 @@ class AlignmentLoaderLocal(AlignmentLoader):
         user: str | None = None,
         xyz_picks: np.ndarray | None = None,
         histology_space: str = 'ccf',
+        picks_path: Path | None = None,
     ):
         self.histology_space: str = histology_space
+        # Set before the xyz picks are loaded in the base class
+        self.picks_path: Path = picks_path if picks_path is not None else data_path
 
         super().__init__(
             user=user,
@@ -421,7 +430,7 @@ class AlignmentLoaderLocal(AlignmentLoader):
             else f'*xyz_picks{space}_shank{self.shank_idx + 1}.json'
         )
 
-        xyz_file = sorted(self.data_path.glob(xyz_name))
+        xyz_file = sorted(self.picks_path.glob(xyz_name))
 
         if len(xyz_file) == 0:
             return
@@ -461,12 +470,14 @@ class AlignmentLoaderDocDB(AlignmentLoaderLocal):
 
     The session and probe names are derived from ``data_path`` to match how they are written by
     :class:`~ibl_alignment_gui.loaders.alignment_uploader.AlignmentUploaderDocDB`:
-    ``session = data_path.parent.stem`` and ``probe = data_path.stem``.
+    ``session = data_path.parent.stem`` and ``probe = data_path.stem``. Both are therefore derived
+    from the folder that the alignment results are written to, so that the record written on upload
+    is the one read back.
 
     Parameters
     ----------
     data_path : Path
-        The path to the local data folder.
+        The path to the folder that the alignment results are written to.
     shank_idx : int
         Index of the shank (0-based).
     n_shanks : int
@@ -477,6 +488,8 @@ class AlignmentLoaderDocDB(AlignmentLoaderLocal):
         Username for tagging alignments.
     xyz_picks : np.ndarray or None
         Preloaded xyz picks. If not provided, it will attempt to load from file.
+    picks_path : Path or None
+        The path to the folder that the xyz picks are read from. Defaults to `data_path`.
     """
 
     def __init__(
@@ -489,6 +502,7 @@ class AlignmentLoaderDocDB(AlignmentLoaderLocal):
         xyz_picks: np.ndarray | None = None,
         use_db: bool = True,
         histology_space: str = 'ccf',
+        picks_path: Path | None = None,
     ):
         self.docdb: DocDB = docdb
         self.use_db = use_db
@@ -499,6 +513,7 @@ class AlignmentLoaderDocDB(AlignmentLoaderLocal):
             user=user,
             xyz_picks=xyz_picks,
             histology_space=histology_space,
+            picks_path=picks_path,
         )
 
     def load_alignments(self) -> dict[str, Any] | None:

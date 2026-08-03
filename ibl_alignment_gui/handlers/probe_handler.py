@@ -1,26 +1,30 @@
+from __future__ import annotations
+
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
 from ibl_alignment_gui.loaders.alignment_loader import (
+    AlignmentLoaderDocDB,
     AlignmentLoaderLocal,
     AlignmentLoaderOne,
 )
 from ibl_alignment_gui.loaders.alignment_uploader import (
+    AlignmentUploaderDocDB,
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
 )
 from ibl_alignment_gui.loaders.data_loader import (
-    CollectionData,
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderLocal,
     FeatureLoaderOne,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
@@ -30,14 +34,30 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     GeometryLoaderOne,
 )
 from ibl_alignment_gui.loaders.histology_loader import (
-    NrrdSliceLoader,
+    SliceLoader,
+    build_anatomical_atlas,
     download_histology_data,
+    make_slice_loader,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
-from iblatlas.atlas import AllenAtlas
+from ibl_alignment_gui.loaders.transform_loader import TransformLoaderAllen
+from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
 from one.api import ONE
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ibl_alignment_gui.backends.allen.docdb_api import DocDB
+
+try:
+    import ephysatlas.data
+
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
 
 
 class ProbeHandler(ABC):
@@ -53,13 +73,15 @@ class ProbeHandler(ABC):
 
     Parameters
     ----------
-    brain_atlas: AllenAtlas
-        An AllenAtlas instance.
+    brain_atlas: BrainAtlas or None
+        A pre-built BrainAtlas instance (AllenAtlas or BrainAtlasAnatomical). If None, the atlas
+        is built lazily by :meth:`build_atlas` (run on a background thread as part of
+        :meth:`load_all`), so that the slow atlas construction does not block the GUI.
     """
 
-    def __init__(self, brain_atlas: AllenAtlas):
-
-        self.brain_atlas: AllenAtlas = brain_atlas or AllenAtlas()
+    def __init__(self, brain_atlas: BrainAtlas | None = None):
+        # Built lazily by build_atlas() (off the GUI thread) when not supplied up front.
+        self.brain_atlas: BrainAtlas | None = brain_atlas
         self.shanks: dict[str, Bunch] = defaultdict(Bunch)
 
         # Configuration state
@@ -115,11 +137,18 @@ class ProbeHandler(ABC):
         # one (if it exists)
         if self.non_default_config is not None:
             self.get_selected_shank()[self.non_default_config].loaders['align'].alignments = (
-                self.get_selected_shank()[self.default_config].loaders['align'].alignments)
+                self.get_selected_shank()[self.default_config].loaders['align'].alignments
+            )
 
-            self.get_selected_shank()[self.non_default_config].loaders['align'].get_previous_alignments()
+            self.get_selected_shank()[self.non_default_config].loaders[
+                'align'
+            ].get_previous_alignments()
 
-        return self.get_selected_shank()[self.default_config].loaders['align'].get_previous_alignments()
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_previous_alignments()
+        )
 
     def get_previous_alignments(self) -> dict:
         """
@@ -132,8 +161,11 @@ class ProbeHandler(ABC):
         dict
             Previous alignments for the selected shank
         """
-        return (self.get_selected_shank()[self.default_config].loaders['align']
-                .get_previous_alignments())
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_previous_alignments()
+        )
 
     def get_starting_alignment(self, idx: int) -> None:
         """
@@ -146,6 +178,23 @@ class ProbeHandler(ABC):
         """
         for config in self.configs:
             self.get_selected_shank()[config].loaders['align'].get_starting_alignment(idx)
+
+    def get_stored_alignment_idx(self) -> int:
+        """
+        Return the index of the stored (resolved) alignment for the selected shank.
+
+        Delegates to the default configuration's alignment loader.
+
+        Returns
+        -------
+        int
+            Index of the stored alignment in the alignment keys list, or 0 if not found.
+        """
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_stored_alignment_idx()
+        )
 
     def set_init_alignment(self) -> None:
         """Initialise the alignment for the selected shank and each configuration."""
@@ -191,7 +240,10 @@ class ProbeHandler(ABC):
         int
             The index of the current alignment
         """
-        return self.get_selected_shank()[self.default_config].align_handle.current_idx
+        try:
+            return self.get_selected_shank()[self.default_config].align_handle.current_idx
+        except AttributeError:
+            return 0
 
     @property
     def total_idx(self) -> int:
@@ -203,7 +255,10 @@ class ProbeHandler(ABC):
         int
             The total number of alignments stored in the circular buffer
         """
-        return self.get_selected_shank()[self.default_config].align_handle.total_idx
+        try:
+            return self.get_selected_shank()[self.default_config].align_handle.total_idx
+        except AttributeError:
+            return 0
 
     def get_plot(self, shank: str, plot: str, key: str, config: str | None = None) -> Any:
         """
@@ -325,19 +380,101 @@ class ProbeHandler(ABC):
     # -------------------------------------------------------------------------
     # Data loading & upload
     # -------------------------------------------------------------------------
-    def load_data(self) -> None:
-        """Download and load data for all configs and shanks."""
-        slice_loader = self.download_histology()
+    def _make_atlas(self) -> BrainAtlas:
+        """
+        Build the brain atlas to use for this probe handler.
+
+        The base implementation returns an Allen CCF atlas; subclasses override this to select a
+        different atlas (e.g. an anatomical atlas built from the session histology).
+
+        Returns
+        -------
+        BrainAtlas
+            The brain atlas instance.
+        """
+        return AllenAtlas()
+
+    def build_atlas(
+        self, progress_callback: Callable[[str, int, int], None] | None = None
+    ) -> None:
+        """
+        Build the brain atlas if not already available, and share it with the shank uploaders.
+
+        Building the atlas (downloading/reading volumes) is slow, so this is called from
+        :meth:`load_all` on a background thread rather than in ``__init__``. The uploaders created
+        in ``initialise_shanks`` hold a reference to the atlas; because the atlas may not exist yet
+        at that point, this method (re)assigns the freshly built atlas onto each of them.
+        """
+
+        if progress_callback is not None:
+            progress_callback('Building atlas…', 0, 0)
+
+        if self.brain_atlas is None:
+            self.brain_atlas = self._make_atlas()
         for probe in self.shanks:
             for config in self.configs:
+                upload = self.shanks[probe][config].loaders.get('upload')
+                if upload is not None:
+                    upload.brain_atlas = self.brain_atlas
+
+    def load_all(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+        """
+        Build the atlas, then load all data and plots for the session.
+
+        This is the single entry point run on the background loading thread, so the slow atlas
+        construction, data loading and plot building all happen off the GUI thread.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` to report
+            progress. No-op when None.
+        """
+        self.build_atlas(progress_callback=progress_callback)
+        self.load_data(progress_callback=progress_callback)
+
+    def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+        """
+        Download and load data for all configs and shanks.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before
+            each loading step to report progress (e.g. to a GUI progress dialog). No-op when
+            None, so headless callers are unaffected.
+        """
+        total = len(self.shanks) * len(self.configs) + 1
+        if progress_callback is not None:
+            progress_callback('Downloading histology…', 0, total)
+        slice_loader = self.download_histology()
+        idx = 1
+        for probe in self.shanks:
+            for config in self.configs:
+                if progress_callback is not None:
+                    progress_callback(f'Loading {probe} ({config})…', idx, total)
                 self.shanks[probe][config].loaders['hist'] = slice_loader
                 self.shanks[probe][config].load_data()
+                idx += 1
 
-    def load_plots(self):
-        """Load plots for all configs and shanks."""
+    def load_plots(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
+        """
+        Load plots for all configs and shanks.
+
+        Parameters
+        ----------
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before
+            each loading step to report progress. No-op when None.
+        """
+        total = len(self.shanks) * len(self.configs)
+        idx = 0
         for probe in self.shanks:
             for config in self.configs:
+                if progress_callback is not None:
+                    progress_callback(f'Computing plots {probe} ({config})…', idx, total)
                 self.shanks[probe][config].load_plots()
+                idx += 1
 
     def upload_data(self) -> str:
         """
@@ -354,6 +491,41 @@ class ProbeHandler(ABC):
         for config in self.configs:
             info[config] = self.get_selected_shank()[config].upload_data()
         return info[self.default_config]
+
+    def upload_shanks(
+        self,
+        shanks: list[str],
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, str]:
+        """
+        Upload data for several shanks in turn.
+
+        Saving channels and alignments (and, online, registering tracks, running alignment QC and
+        writing to flatiron) is slow, so this is run on a background thread. Any per-shank user
+        input (QC, upload confirmation) must be gathered on the main thread beforehand; this method
+        only performs the saving.
+
+        Parameters
+        ----------
+        shanks : list of str
+            The shanks to upload, in order.
+        progress_callback : Callable or None
+            Optional callback invoked as ``progress_callback(message, current, total)`` before each
+            shank is uploaded. No-op when None.
+
+        Returns
+        -------
+        dict[str, str]
+            A mapping of shank label to the upload result message for that shank.
+        """
+        info: dict[str, str] = {}
+        total = len(shanks)
+        for idx, shank in enumerate(shanks):
+            if progress_callback is not None:
+                progress_callback(f'Saving {shank}…', idx, total)
+            self.selected_shank = shank
+            info[shank] = self.upload_data()
+        return info
 
     # -------------------------------------------------------------------------
     # Utility
@@ -416,13 +588,18 @@ class ProbeHandlerONE(ProbeHandler):
     """
 
     def __init__(
-            self,
-            one: ONE = None,
-            brain_atlas: AllenAtlas | None = None,
-            spike_collection: str | None = None):
-
+        self,
+        one: ONE = None,
+        brain_atlas: BrainAtlas | None = None,
+        spike_collection: str | None = None,
+    ):
         self.one = one or ONE()
         self.spike_collection = spike_collection
+        if EPHYS_ATLAS:
+            self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        else:
+            self.ea_model = None
+
         super().__init__(brain_atlas)
 
     def get_subjects(self) -> np.ndarray:
@@ -434,8 +611,9 @@ class ProbeHandlerONE(ProbeHandler):
         np.ndarray
             An array of subject names
         """
-        self.sess_ins = self.one.alyx.rest('insertions', 'list', dataset_type='spikes.times',
-                                           expires=timedelta(days=1))
+        self.sess_ins = self.one.alyx.rest(
+            'insertions', 'list', dataset_types='spikes.times', expires=timedelta(days=1)
+        )
         self.subj_ins = [sess['session_info']['subject'] for sess in self.sess_ins]
         self.subjects = np.unique(self.subj_ins)
 
@@ -482,17 +660,65 @@ class ProbeHandlerONE(ProbeHandler):
         """
         self.chosen_probe = self.sessions[idx]
 
-        sess_idx = [i for i, e in enumerate(self.sess) if
-                    self.get_session_probe_name(e) == self.chosen_probe]
+        sess_idx = [
+            i
+            for i, e in enumerate(self.sess)
+            if self.get_session_probe_name(e) == self.chosen_probe
+        ]
         self.shank_labels = [self.sess[idx] for idx in sess_idx]
         shanks = [s['name'] for s in self.shank_labels]
         idx = np.argsort(shanks)
         self.shank_labels = np.array(self.shank_labels)[idx]
         shanks = np.array(shanks)[idx]
 
+        self.lab = self.shank_labels[0]['session_info']['lab']
+
         self.initialise_shanks()
 
         return list(shanks)
+
+    def resolve_pid(self, pid: str) -> tuple[int, int, int]:
+        """
+        Resolve a probe insertion id to subject, session and shank dropdown indices.
+
+        The internal session and shank state is populated as a side effect (via
+        :meth:`get_sessions` and :meth:`get_shanks`) so that the dropdowns can be
+        configured to point at the requested insertion.
+
+        Parameters
+        ----------
+        pid : str
+            The probe insertion id (UUID) to resolve.
+
+        Returns
+        -------
+        tuple[int, int, int]
+            The subject, session and shank dropdown indices for the insertion.
+
+        Raises
+        ------
+        ValueError
+            If no insertion exists for `pid`, or its subject has no spikesorted
+            insertions (and so is absent from the subject dropdown).
+        """
+        ins = self.one.alyx.rest('insertions', 'list', id=pid)
+        if len(ins) == 0:
+            raise ValueError(f'No probe insertion found for pid {pid}')
+        ins = ins[0]
+
+        subject = ins['session_info']['subject']
+        subj_match = np.where(self.subjects == subject)[0]
+        if len(subj_match) == 0:
+            raise ValueError(f'Subject {subject} for pid {pid} has no spikesorted insertions')
+        subj_idx = int(subj_match[0])
+
+        sessions = self.get_sessions(subj_idx)
+        sess_idx = int(np.where(sessions == self.get_session_probe_name(ins))[0][0])
+
+        shanks = self.get_shanks(sess_idx)
+        shank_idx = shanks.index(ins['name'])
+
+        return subj_idx, sess_idx, shank_idx
 
     def get_session_probe_name(self, ins: dict) -> str:
         """
@@ -510,9 +736,13 @@ class ProbeHandlerONE(ProbeHandler):
         str:
             A string with the session info and probe name
         """
-        return (ins['session_info']['start_time'][:10] + ' ' +
-                f"{ins['session_info']['number']:03}" + ' ' +
-                self.normalize_shank_label(ins['name']))
+        return (
+            ins['session_info']['start_time'][:10]
+            + ' '
+            + f'{ins["session_info"]["number"]:03}'
+            + ' '
+            + self.normalize_shank_label(ins['name'])
+        )
 
     def set_info(self, idx):
         """
@@ -529,10 +759,10 @@ class ProbeHandlerONE(ProbeHandler):
         self.lab = self.shank_labels[idx]['session_info']['lab']
         self.pid = self.shank_labels[idx]['id']
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Download and load in the histology slice data."""
         _, hist_path = download_histology_data(self.subj, self.lab)
-        return NrrdSliceLoader(hist_path, self.brain_atlas)
+        return make_slice_loader(hist_path, self.brain_atlas, 'ccf')
 
     def initialise_shanks(self):
         """Initialise each shank with the loaders."""
@@ -541,19 +771,23 @@ class ProbeHandlerONE(ProbeHandler):
         for ins in self.shank_labels:
             loaders = Bunch()
             loaders['data'] = DataLoaderOne(ins, self.one, spike_collection=self.spike_collection)
-            loaders['geom'] = GeometryLoaderOne(ins, self.one,
-                                                probe_collection=loaders['data'].probe_collection)
+            loaders['geom'] = GeometryLoaderOne(
+                ins, self.one, probe_collection=loaders['data'].probe_collection
+            )
             loaders['align'] = AlignmentLoaderOne(ins, self.one)
             loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-            loaders['features'] = FeatureLoaderOne(ins, self.one)
+            if EPHYS_ATLAS:
+                loaders['features'] = FeatureLoaderOne(
+                    ins, self.one, self.ea_model, multi_area=self.lab == 'steinmetzlab'
+                )
             loaders['plots'] = PlotLoader()
             self.shanks[ins['name']][self.default_config] = ShankHandler(loaders, 0)
 
-    def load_data(self) -> None:
+    def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """Load data for all configs and shanks."""
         print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
-        super().load_data()
+        super().load_data(progress_callback=progress_callback)
 
 
 class ProbeHandlerCSV(ProbeHandler):
@@ -566,10 +800,8 @@ class ProbeHandlerCSV(ProbeHandler):
     """
 
     def __init__(
-            self,
-            csv_file: str | Path,
-            one: ONE = None,
-            brain_atlas: AllenAtlas | None = None):
+        self, csv_file: str | Path, one: ONE = None, brain_atlas: BrainAtlas | None = None
+    ):
         super().__init__(brain_atlas)
 
         csv_file = Path(csv_file)
@@ -585,6 +817,10 @@ class ProbeHandlerCSV(ProbeHandler):
         self.default_config = 'dense'
         self.non_default_config = 'quarter'
         self.selected_config = 'quarter'
+        if EPHYS_ATLAS:
+            self.ea_model = ephysatlas.data.get_latest_label(one=self.one, project='ea_active')
+        else:
+            self.ea_model = None
 
     def get_subjects(self) -> np.ndarray:
         """
@@ -617,8 +853,9 @@ class ProbeHandlerCSV(ProbeHandler):
             All probes with spikesorting data for the chosen session
         """
         self.session_df = self.df.loc[self.df['session_strip'] == self.subjects[idx]]
-        self.sessions = np.unique([self.normalize_shank_label(pr)
-                                   for pr in self.session_df['probe'].values])
+        self.sessions = np.unique(
+            [self.normalize_shank_label(pr) for pr in self.session_df['probe'].values]
+        )
         return self.sessions
 
     def get_shanks(self, idx: int) -> np.ndarray:
@@ -637,7 +874,8 @@ class ProbeHandlerCSV(ProbeHandler):
         """
         shank = self.sessions[idx]
         self.shank_df = self.session_df.loc[
-            self.session_df['probe'].str.contains(shank)].sort_values('probe')
+            self.session_df['probe'].str.contains(shank)
+        ].sort_values('probe')
         self.initialise_shanks()
         self.shank_labels = self.shank_df['probe'].unique()
         return self.shank_labels
@@ -654,10 +892,10 @@ class ProbeHandlerCSV(ProbeHandler):
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Download and load in the histology slice data."""
         _, hist_path = download_histology_data(self.subj, self.lab)
-        return NrrdSliceLoader(hist_path, self.brain_atlas)
+        return make_slice_loader(hist_path, self.brain_atlas, 'ccf')
 
     def initialise_shanks(self) -> None:
         """Initialise each shank and config with the selected loaders."""
@@ -666,47 +904,51 @@ class ProbeHandlerCSV(ProbeHandler):
 
         for _, shank in self.shank_df.iterrows():
             loaders = Bunch()
-            collections = CollectionData(
-                spike_collection=shank.spike_collection or '',
-                ephys_collection=shank.ephys_collection or '',
-                task_collection=shank.task_collection or '',
-                raw_task_collection=shank.raw_task_collection or '',
-                meta_collection=shank.meta_collection or '')
-
             local_path = self.root_path.joinpath(shank.local_path)
+
+            data_paths = DatasetPaths(
+                spike_sorting=local_path.joinpath(shank.spike_collection or ''),
+                processed_ephys=local_path.joinpath(shank.ephys_collection or ''),
+                raw_ephys=local_path.joinpath(shank.meta_collection or ''),
+                task=local_path.joinpath(shank.task_collection or ''),
+                raw_task=local_path.joinpath(shank.raw_task_collection or ''),
+            )
 
             ins = self.get_insertion(shank)
             xyz_picks = ins['json'].get('xyz_picks', None)
             xyz_picks = np.array(xyz_picks) / 1e6 if xyz_picks is not None else None
 
             if shank.is_quarter:  # Quarter is offline
-                loaders['data'] = DataLoaderLocal(local_path, collections)
-                loaders['geom'] = GeometryLoaderLocal(local_path, collections)
+                loaders['data'] = DataLoaderLocal(data_paths)
+                loaders['geom'] = GeometryLoaderLocal(data_paths)
                 loaders['align'] = AlignmentLoaderLocal(
-                    local_path.joinpath(collections.spike_collection), 0, 1,
-                    user=user, xyz_picks=xyz_picks)
+                    data_paths.spike_sorting, 0, 1, user=user, xyz_picks=xyz_picks
+                )
                 loaders['upload'] = AlignmentUploaderLocal(
-                    local_path.joinpath(collections.spike_collection), 0, loaders['geom'],
-                    self.brain_atlas, user=user)
-                loaders['ephys'] = SpikeGLXLoaderLocal(local_path, collections.meta_collection)
+                    data_paths.spike_sorting, 0, loaders['geom'], self.brain_atlas, user=user
+                )
+                loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
                 loaders['plots'] = PlotLoader()
-                loaders['features'] = FeatureLoaderOne(ins, self.one)
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
                 # If we don't have the data locally we download it
-                if collections.spike_collection == '':
+                if data_paths.spike_sorting == local_path:
                     loaders['data'] = DataLoaderOne(ins, self.one)
                     loaders['geom'] = GeometryLoaderOne(
-                        ins, self.one, probe_collection=loaders['data'].probe_collection)
+                        ins, self.one, probe_collection=loaders['data'].probe_collection
+                    )
                 # Otherwise we load from local
                 else:
-                    loaders['data'] = DataLoaderLocal(local_path, collections)
-                    loaders['geom'] = GeometryLoaderLocal(local_path, collections)
+                    loaders['data'] = DataLoaderLocal(data_paths)
+                    loaders['geom'] = GeometryLoaderLocal(data_paths)
 
                 loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
                 loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
-                loaders['features'] = FeatureLoaderOne(ins, self.one)
+                if EPHYS_ATLAS:
+                    loaders['features'] = FeatureLoaderOne(
+                        ins, self.one, self.ea_model, multi_area=True
+                    )
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 
@@ -723,19 +965,20 @@ class ProbeHandlerCSV(ProbeHandler):
             if dense_align.alignment_keys != ['original']:
                 # Alyx alignment exists: overwrite local
                 quarter_align.alignments = dense_align.alignments
+                quarter_align.stored_alignment_key = dense_align.stored_alignment_key
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(0)
+                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
 
             elif quarter_align.alignment_keys != ['original']:
                 # Local alignment exists: add to online
                 dense_align.add_extra_alignments(quarter_align.alignments)
                 dense_align.get_previous_alignments()
-                dense_align.get_starting_alignment(0)
+                dense_align.get_starting_alignment(dense_align.get_stored_alignment_idx())
 
                 # Ensure consistency by syncing quarter with updated dense
                 quarter_align.alignments = dense_align.alignments
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(0)
+                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
 
     def get_insertion(self, shank: pd.Series) -> dict:
         """Get the alyx probe insertion for the shank."""
@@ -750,7 +993,7 @@ class ProbeHandlerLocal(ProbeHandler):
     For this ProbeHandler, all ephys and alignment data must be stored in a single folder on disk.
     """
 
-    def __init__(self, brain_atlas: AllenAtlas | None = None):
+    def __init__(self, brain_atlas: BrainAtlas | None = None):
         super().__init__(brain_atlas)
 
     def get_shanks(self, folder_path: Path) -> list[str]:
@@ -765,11 +1008,17 @@ class ProbeHandlerLocal(ProbeHandler):
         folder_path : Path
             A path to the folder on the local disk that contains the data
         """
-        self.folder_path = folder_path
-        collections = CollectionData()
+        self.data_paths = DatasetPaths(
+            spike_sorting=folder_path,
+            processed_ephys=folder_path,
+            raw_ephys=folder_path,
+            histology=folder_path,
+            picks=folder_path,
+            output=folder_path,
+        )
 
-        # Load in the geometry and find the number of shanks
-        self.geom = GeometryLoaderLocal(self.folder_path, collections)
+        # Load in the geometry and find the number of shnaks
+        self.geom = GeometryLoaderLocal(self.data_paths)
         self.geom.get_geometry()
 
         self.n_shanks = self.geom.channels.n_shanks
@@ -795,9 +1044,11 @@ class ProbeHandlerLocal(ProbeHandler):
         self.selected_shank = self.shank_labels[idx]
         self.selected_idx = idx
 
-    def download_histology(self) -> NrrdSliceLoader:
+    def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
-        return NrrdSliceLoader(self.folder_path, self.brain_atlas)
+        return make_slice_loader(
+            self.data_paths.histology, self.brain_atlas, self.data_paths.histology_space
+        )
 
     def initialise_shanks(self) -> None:
         """Initialise each shank with the loaders."""
@@ -806,10 +1057,290 @@ class ProbeHandlerLocal(ProbeHandler):
         for ish, ishank in enumerate(self.shank_labels):
             loaders = Bunch()
             loaders['geom'] = self.geom
-            loaders['data'] = DataLoaderLocal(self.folder_path, CollectionData())
-            loaders['align'] = AlignmentLoaderLocal(self.folder_path, ish, self.n_shanks)
-            loaders['upload'] = AlignmentUploaderLocal(self.folder_path, ish, self.n_shanks,
-                                                       self.brain_atlas)
-            loaders['ephys'] = SpikeGLXLoaderLocal(self.folder_path, '')
+            loaders['data'] = DataLoaderLocal(self.data_paths)
+            loaders['align'] = AlignmentLoaderLocal(self.data_paths.picks, ish, self.n_shanks)
+            loaders['upload'] = AlignmentUploaderLocal(
+                self.data_paths.output, ish, self.n_shanks, self.brain_atlas
+            )
+            if self.data_paths.raw_ephys is not None:
+                loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
             loaders['plots'] = PlotLoader()
             self.shanks[ishank][self.default_config] = ShankHandler(loaders, ish)
+
+
+class ProbeHandlerLocalYaml(ProbeHandler):
+    """
+    Local file system ProbeHandler driven by a session yaml file.
+
+    The yaml (see :func:`ibl_alignment_gui.utils.parse_yaml.load_alignment_yaml`) specifies, per
+    probe/config, where each dataset lives (spike sorting, raw/processed ephys, picks, histology,
+    output, and optional per-channel features). The resolved ``DatasetPaths`` for each probe/config
+    are wired directly into the local loaders (``DataLoaderLocal``, ``GeometryLoaderLocal`` etc.).
+
+    Parameters
+    ----------
+    yaml_file : str or Path
+        Path to the session yaml configuration file.
+    brain_atlas : AllenAtlas or None
+        An AllenAtlas instance (created if None).
+    """
+
+    def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
+        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
+            yaml_file
+        )
+        # The atlas (anatomical or Allen, see _make_atlas) is built lazily by build_atlas() on the
+        # background loading thread rather than here, so it does not block GUI construction.
+        super().__init__(brain_atlas)
+
+        # The base sets a single 'default' config; mirror it to the yaml config name and, when the
+        # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.
+        self.default_config = self.configs[0]
+        if len(self.configs) > 1:
+            self.non_default_config = self.configs[1]
+            self.possible_configs = self.configs + ['both']
+        else:
+            self.possible_configs = [self.default_config]
+        self.selected_config = self.default_config
+
+    def get_shanks(self, _) -> list[str]:
+        """
+        Determine the shanks from the yaml and initialise the loaders.
+
+        If a single probe is specified we load its geometry to detect whether it is a multi-shank
+        recording. Otherwise each probe entry in the yaml is treated as an individual shank.
+
+        Parameters
+        ----------
+        _ : Any
+            Ignored — the yaml path was supplied at construction time. The signature matches the
+            other ProbeHandlers so the controller can call it uniformly.
+        """
+        if len(self.probes) == 1:
+            data_path = self.data_paths[self.default_config][self.probes[0]]
+            geom = GeometryLoaderLocal(data_path)
+            geom.get_geometry()
+            # Shank count comes from the ALF channels object when present, else from the SpikeGLX
+            # meta (e.g. external datasets with no spike sorting), mirroring the fallback used in
+            # GeometryLoader.get_sites_for_shank.
+            sites = geom.channels if geom.channels is not None else geom.electrodes
+            self.n_shanks = sites.n_shanks
+            if self.n_shanks == 1:
+                self.shank_labels = list(self.probes)
+            else:
+                self.shank_labels = [f'shank_{ishank + 1}' for ishank in range(self.n_shanks)]
+        else:
+            self.shank_labels = list(self.probes)
+            self.n_shanks = 1
+
+        self.initialise_shanks()
+
+        return self.shank_labels
+
+    def set_info(self, idx: int) -> None:
+        """
+        Set the information about the selected shank.
+
+        Parameters
+        ----------
+        idx : int
+            The index of the selected shank.
+        """
+        self.selected_shank = self.shank_labels[idx]
+        self.selected_idx = idx
+
+    def download_histology(self) -> SliceLoader:
+        """Load in the histology slice data."""
+        data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
+        return make_slice_loader(data_paths.histology, self.brain_atlas, self.histology_space)
+
+    def initialise_shanks(self) -> None:
+        """Initialise each shank and config with loaders pointing at the resolved yaml paths."""
+        self.shanks = defaultdict(Bunch)
+
+        # A single probe entry may still be multi-shank; in that case all shanks share that one
+        # probe's dataset paths and are told apart by their shank index (the geometry is split per
+        # shank inside ShankHandler.load_data via get_sites_for_shank).
+        single_probe = len(self.probes) == 1
+
+        for ish, shank in enumerate(self.shank_labels):
+            ishank = ish if self.n_shanks > 1 else 0
+            probe = self.probes[0] if single_probe else shank
+
+            for config in self.configs:
+                data_path = self.data_paths[config][probe]
+
+                loaders = Bunch()
+                loaders['geom'] = GeometryLoaderLocal(data_path)
+                loaders['data'] = DataLoaderLocal(data_path)
+                loaders['align'] = self._build_align_loader(data_path, ishank)
+                loaders['upload'] = self._build_upload_loader(data_path, ishank)
+                loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
+                # Per-session features (if the yaml specifies them) load via the existing
+                # shank_handler.load_data -> loaders['features'] path, so the session is
+                # self-contained and switching yaml switches the features too.
+                # TODO pass in geometry
+                if data_path.features is not None:
+                    loaders['features'] = FeatureLoaderLocal(data_path.features)
+                loaders['plots'] = PlotLoader()
+                self.shanks[shank][config] = ShankHandler(loaders, ishank)
+
+    def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderLocal:
+        """
+        Build the alignment loader for a shank.
+
+        Reads xyz picks and previous alignments from the local file system;
+        :class:`ProbeHandlerAllenYaml` overrides it to use the DocDB backend.
+
+        Parameters
+        ----------
+        data_path : DatasetPaths
+            The resolved dataset paths for the probe/config.
+        ishank : int
+            Index of the shank (0-based).
+
+        Returns
+        -------
+        AlignmentLoaderLocal
+            The alignment loader for the shank.
+        """
+        return AlignmentLoaderLocal(
+            data_path.picks or data_path.spike_sorting,
+            ishank,
+            self.n_shanks,
+            histology_space=self.histology_space,
+        )
+
+    def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderLocal:
+        """
+        Build the alignment uploader for a shank.
+
+        Writes channel locations and alignments to the local file system;
+        :class:`ProbeHandlerAllenYaml` overrides it to additionally post the results to DocDB.
+
+        Parameters
+        ----------
+        data_path : DatasetPaths
+            The resolved dataset paths for the probe/config.
+        ishank : int
+            Index of the shank (0-based).
+
+        Returns
+        -------
+        AlignmentUploaderLocal
+            The alignment uploader for the shank.
+        """
+        return AlignmentUploaderLocal(
+            data_path.output,
+            ishank,
+            self.n_shanks,
+            self.brain_atlas,
+        )
+
+
+class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
+    """
+    Probe handler for the Allen/Code Ocean (anatomical) workflow with DocDB support.
+
+    Extends :class:`ProbeHandlerLocalYaml` (so all the yaml/anatomical/data/geometry/histology/
+    transform wiring is reused) and, mirroring how :class:`ProbeHandlerONE` owns a ``one``
+    instance, owns a :class:`~ibl_alignment_gui.backends.allen.docdb_api.DocDB` instance that is
+    injected into the DocDB alignment loader and uploader (overriding the local factory hooks
+    :meth:`ProbeHandler._build_align_loader` / :meth:`ProbeHandler._build_upload_loader`).
+
+    The ``use_docdb`` flag selects the alignment backend: when True the DocDB-backed loader and
+    uploader are used (previous alignments read from DocDB with a local fallback; results written
+    locally and posted to DocDB); when False the plain local variants are used. It can be flipped
+    at runtime with :meth:`set_use_docdb` (e.g. from the DocDB checkbox).
+
+    Parameters
+    ----------
+    yaml_file : str or Path
+        Path to the session yaml configuration file.
+    brain_atlas : BrainAtlas or None
+        A pre-built brain atlas. If None, it is built lazily (anatomical or Allen, per the yaml).
+    docdb : DocDB or None
+        The DocDB client to inject. A default :class:`DocDB` is created if None.
+    use_docdb : bool
+        Whether to use the DocDB alignment backend (True) or the local one (False).
+    """
+
+    def __init__(
+        self,
+        yaml_file: str | Path,
+        brain_atlas: BrainAtlas | None = None,
+        docdb: DocDB | None = None,
+        use_docdb: bool = True,
+    ):
+        # Imported lazily so the base install (offline / IBL modes) does not require the allen
+        # extra; the alignment-gui-allen launcher checks the extra is installed up front.
+        from ibl_alignment_gui.backends.allen.docdb_api import DocDB  # noqa: PLC0415
+
+        self.docdb: DocDB = docdb or DocDB()
+        self.use_docdb: bool = use_docdb
+
+        super().__init__(yaml_file, brain_atlas=brain_atlas)
+
+    def _make_atlas(self) -> BrainAtlas:
+        """Return the appropriate atlas based on the histology space in the YAML config."""
+        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
+        if self.histology_space == 'anatomical' and histology_path:
+            return build_anatomical_atlas(histology_path)
+        return AllenAtlas()
+
+    def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderDocDB:
+        """Build a DocDB alignment loader (falling back to local when ``use_docdb`` is False)."""
+        return AlignmentLoaderDocDB(
+            data_path.picks or data_path.spike_sorting,
+            ishank,
+            self.n_shanks,
+            self.docdb,
+            use_db=self.use_docdb,
+            histology_space=self.histology_space,
+        )
+
+    def _build_upload_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentUploaderDocDB:
+        """Build a DocDB alignment uploader (falling back to local when ``use_docdb`` is False)."""
+        return AlignmentUploaderDocDB(
+            data_path.output,
+            ishank,
+            self.n_shanks,
+            self.brain_atlas,
+            self.docdb,
+            transform_loader=self._build_transform_loader(data_path),
+            use_db=self.use_docdb,
+        )
+
+    @staticmethod
+    def _build_transform_loader(data_path: DatasetPaths) -> TransformLoaderAllen | None:
+        """Return a SmartSPIM -> CCF transform loader for the probe, or None if not configured."""
+        return (
+            TransformLoaderAllen(data_path.transforms)
+            if data_path.transforms is not None
+            else None
+        )
+
+    def set_use_docdb(self, use_docdb: bool) -> None:
+        """
+        Switch the alignment backend and refresh previous alignments for every shank.
+
+        Flips the ``use_db`` flag on each shank's existing DocDB alignment loader and uploader
+        (leaving the loaded ephys/geometry/histology untouched) and re-reads the previous
+        alignments so the alignment dropdown reflects the new source.
+
+        Parameters
+        ----------
+        use_docdb : bool
+            Whether to use the DocDB alignment backend (True) or the local one (False).
+        """
+        self.use_docdb = use_docdb
+
+        for shank in self.shanks:
+            for config in self.configs:
+                handler = self.shanks[shank][config]
+                handler.loaders['align'].use_db = use_docdb
+                handler.loaders['upload'].use_db = use_docdb
+
+                align = handler.loaders['align']
+                align.load_previous_alignments()
+                align.get_starting_alignment(align.get_stored_alignment_idx())

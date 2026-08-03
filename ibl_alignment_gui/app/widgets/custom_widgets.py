@@ -9,17 +9,17 @@ import pyqtgraph as pg
 from pyqtgraph.functions import makeARGB
 from qtpy import QtCore, QtGui, QtWidgets
 
-from ibl_alignment_gui.utils.qt.qrange_slider import QRangeSlider
+from ibl_alignment_gui.app.widgets.qrange_slider import QRangeSlider
 from iblutil.util import Bunch
 
 
 def set_axis(
-        fig: pg.PlotItem | pg.PlotWidget,
-        ax: str,
-        show: bool = True,
-        label: str | None = None,
-        pen: str | None = 'k',
-        ticks: bool = True
+    fig: pg.PlotItem | pg.PlotWidget,
+    ax: str,
+    show: bool = True,
+    label: str | None = None,
+    pen: str | None = 'k',
+    ticks: bool = True,
 ) -> pg.AxisItem:
     """
     Show, hide, and configure an axis on a pyqtgraph figure.
@@ -64,11 +64,11 @@ def set_axis(
 
 
 def set_font(
-        fig: pg.PlotItem | pg.PlotWidget,
-        ax: str,
-        ptsize: int = 8,
-        width: int | None = None,
-        height: int | None = None
+    fig: pg.PlotItem | pg.PlotWidget,
+    ax: str,
+    ptsize: int = 8,
+    width: int | None = None,
+    height: int | None = None,
 ) -> None:
     """
     Set the font size and optionally the axis width/height for a given axis in a pyqtgraph figure.
@@ -175,8 +175,9 @@ class PopupWindow(QtWidgets.QWidget):
         PopupWindow
             The existing or newly created popup window.
         """
-        window = next((w for w in cls._instances() if w.isVisible() and
-                       w.windowTitle() == title), None)
+        window = next(
+            (w for w in cls._instances() if w.isVisible() and w.windowTitle() == title), None
+        )
         if window is None:
             window = cls(title, *args, **kwargs)
         else:
@@ -185,11 +186,11 @@ class PopupWindow(QtWidgets.QWidget):
         return window
 
     def __init__(
-            self,
-            title: str,
-            parent: QtWidgets.QMainWindow = None,
-            size: tuple | list = (300, 300),
-            graphics: bool = True
+        self,
+        title: str,
+        parent: QtWidgets.QMainWindow = None,
+        size: tuple | list = (300, 300),
+        graphics: bool = True,
     ):
         super().__init__(parent)
 
@@ -294,13 +295,13 @@ class ColorBar(pg.GraphicsWidget):
     """
 
     def __init__(
-            self,
-            cmap_name: str,
-            width: int = 20,
-            height: int = 5,
-            plot_item: pg.PlotItem | None = None,
-            cbin: int = 256,
-            orientation: str = 'horizontal'
+        self,
+        cmap_name: str,
+        width: int = 20,
+        height: int = 5,
+        plot_item: pg.PlotItem | None = None,
+        cbin: int = 256,
+        orientation: str = 'horizontal',
     ):
         pg.GraphicsWidget.__init__(self)
 
@@ -329,8 +330,7 @@ class ColorBar(pg.GraphicsWidget):
 
     @staticmethod
     def get_color(
-            cmap_name: str,
-            cbin: int = 256
+        cmap_name: str, cbin: int = 256
     ) -> tuple[pg.ColorMap, np.ndarray, QtGui.QLinearGradient]:
         """
         Generate a pyqtgraph-compatible color map, LUT, and gradient from a given colormap.
@@ -351,13 +351,13 @@ class ColorBar(pg.GraphicsWidget):
         grad : QtGui.QLinearGradient
             Gradient object for rendering the bar.
         """
-        mpl_cmap = mpl.cm.get_cmap(cmap_name)
+        mpl_cmap = mpl.colormaps[cmap_name]
         if isinstance(mpl_cmap, mpl.colors.LinearSegmentedColormap):
             cbins = np.linspace(0.0, 1.0, cbin)
             colors = (mpl_cmap(cbins)[np.newaxis, :, :3][0]).tolist()
         else:
             colors = mpl_cmap.colors
-        colors = [(np.array(c) * 255).astype(int).tolist() + [255.] for c in colors]
+        colors = [(np.array(c) * 255).astype(int).tolist() + [255.0] for c in colors]
         positions = np.linspace(0, 1, len(colors))
         cmap = pg.ColorMap(positions, colors)
         lut = cmap.getLookupTable()
@@ -381,9 +381,7 @@ class ColorBar(pg.GraphicsWidget):
         p.drawRect(QtCore.QRectF(0, 0, self.width, self.height))
 
     def get_brush(
-            self,
-            data: np.ndarray,
-            levels: list | tuple | np.ndarray | None = None
+        self, data: np.ndarray, levels: list | tuple | np.ndarray | None = None
     ) -> list[QtGui.QColor]:
         """
         Convert numeric data values into QColor brushes based on the color bar's LUT.
@@ -418,10 +416,7 @@ class ColorBar(pg.GraphicsWidget):
         return self.lut
 
     def set_levels(
-            self,
-            levels: tuple | list | np.ndarray,
-            label: str | None = None,
-            n_ticks: int = 2
+        self, levels: tuple | list | np.ndarray, label: str | None = None, n_ticks: int = 2
     ) -> None:
         """
         Set the levels represented by the color bar and configure ticks and optional label.
@@ -441,11 +436,11 @@ class ColorBar(pg.GraphicsWidget):
         self.set_axis(ticks=self.ticks, label=label)
 
     def set_axis(
-            self,
-            ticks: list[tuple[float, str]] | None = None,
-            label: str | None = None,
-            loc: str | None = None,
-            extent: int = 30
+        self,
+        ticks: list[tuple[float, str]] | None = None,
+        label: str | None = None,
+        loc: str | None = None,
+        extent: int = 30,
     ) -> None:
         """
         Configure the axis associated with this color bar.
@@ -495,7 +490,7 @@ class ColorBar(pg.GraphicsWidget):
             A list of (position, label) pairs for axis ticks.
         """
         extent = self.width if self.orientation == 'horizontal' else self.height
-        offset = (0.005 * extent)
+        offset = 0.005 * extent
 
         ticks = []
         for i in range(n):
@@ -505,7 +500,7 @@ class ColorBar(pg.GraphicsWidget):
             val = int(val) if np.abs(val) > 1 else np.round(val, 1)
             if i == 0:
                 pos += offset
-            elif i == n-1:
+            elif i == n - 1:
                 pos -= offset
             ticks.append((pos, str(val)))
 
@@ -575,8 +570,12 @@ class GridTabSwitcher(QtWidgets.QWidget):
         # Track whether we are in grid or tab layout
         self.grid_layout = True
 
-    def initialise(self, panels: list[QtWidgets.QWidget], names: list[str],
-                   headers: list[QtWidgets.QLabel] | None = None) -> None:
+    def initialise(
+        self,
+        panels: list[QtWidgets.QWidget],
+        names: list[str],
+        headers: list[QtWidgets.QLabel] | None = None,
+    ) -> None:
         """
         Initialize the widget with a set of panels and their names.
 
@@ -717,7 +716,7 @@ class GridTabSwitcher(QtWidgets.QWidget):
             self.add_header()
             self.add_grid_layout()
             # Emit signal so we can respond to change
-            self.custom_signal.emit("layout_switched")
+            self.custom_signal.emit('layout_switched')
 
         self.grid_layout = not self.grid_layout
         self.tab_widget.blockSignals(False)
@@ -754,8 +753,6 @@ class ButtonWidget(QtWidgets.QWidget):
         """Create the buttons and labels."""
         # Button to apply interpolation
         self.buttons['fit'] = QtWidgets.QPushButton('Fit')
-        # Button to apply offset
-        self.buttons['offset'] = QtWidgets.QPushButton('Offset')
         # String to display current move index
         self.labels['current'] = QtWidgets.QLabel()
         # String to display total number of moves
@@ -774,7 +771,6 @@ class ButtonWidget(QtWidgets.QWidget):
         # Layout rows
         hlayout1 = QtWidgets.QHBoxLayout()
         hlayout1.addWidget(self.buttons['fit'], stretch=1)
-        hlayout1.addWidget(self.buttons['offset'], stretch=1)
         hlayout1.addWidget(QtWidgets.QLabel(), stretch=2)
         hlayout2 = QtWidgets.QHBoxLayout()
         hlayout2.addWidget(self.buttons['previous'], stretch=1)
@@ -829,15 +825,17 @@ class SelectionWidget(QtWidgets.QWidget):
     """
 
     def __init__(
-            self,
-            offline: bool = False,
-            config: bool = False,
-            parent: QtWidgets.QMainWindow | None = None
+        self,
+        offline: bool = False,
+        config: bool = False,
+        allen: bool = False,
+        parent: QtWidgets.QMainWindow | None = None,
     ):
         super().__init__(parent)
 
         self.offline: bool = offline
         self.config: bool = config
+        self.allen: bool = allen
         self.dropdowns: dict[str, Bunch] = defaultdict(Bunch)
         self.buttons: dict[str, Bunch] = defaultdict(Bunch)
         self.button_style: dict = {
@@ -858,7 +856,7 @@ class SelectionWidget(QtWidgets.QWidget):
                 border-radius: 5px;  /* Rounded corners */
                 padding: 2px;
             }
-        """
+        """,
         }
 
         self.create_widgets()
@@ -903,6 +901,11 @@ class SelectionWidget(QtWidgets.QWidget):
         self.buttons['data']['button'].setFixedWidth(70)
         self.buttons['data']['button'].setStyleSheet(self.button_style['deactivated'])
 
+        # Checkbox to toggle the DocDB alignment backend (Allen/Code Ocean workflow only)
+        if self.allen:
+            self.docdb_checkbox = QtWidgets.QCheckBox('DocDB')
+            self.docdb_checkbox.setChecked(True)
+
     def layout_widgets(self) -> None:
         """Layout the dropdowns and buttons."""
         layout = QtWidgets.QHBoxLayout()
@@ -921,7 +924,11 @@ class SelectionWidget(QtWidgets.QWidget):
             layout.addWidget(self.buttons['folder']['button'])
             layout.addWidget(self.dropdowns['shank']['combobox'])
             layout.addWidget(self.dropdowns['align']['combobox'])
+            if self.allen:
+                layout.addWidget(self.docdb_checkbox)
             layout.addWidget(self.buttons['data']['button'])
+            if self.config:
+                layout.addWidget(self.dropdowns['config']['combobox'])
 
         self.setLayout(layout)
 
@@ -935,10 +942,13 @@ class SelectionWidget(QtWidgets.QWidget):
 
     @staticmethod
     def create_combobox(
-            editable: bool = False
-    ) -> tuple[QtGui.QStandardItemModel,
-               QtWidgets.QComboBox, QtWidgets.QLineEdit | None,
-               QtWidgets.QCompleter | None]:
+        editable: bool = False,
+    ) -> tuple[
+        QtGui.QStandardItemModel,
+        QtWidgets.QComboBox,
+        QtWidgets.QLineEdit | None,
+        QtWidgets.QCompleter | None,
+    ]:
         """
         Create a combobox with an optional editable line edit.
 
@@ -975,10 +985,10 @@ class SelectionWidget(QtWidgets.QWidget):
 
     @staticmethod
     def populate_combobox(
-            data: list[str] | np.ndarray[str] | dict,
-            list_name: QtGui.QStandardItemModel,
-            combobox: QtWidgets.QComboBox,
-            init=True
+        data: list[str] | np.ndarray[str] | dict,
+        list_name: QtGui.QStandardItemModel,
+        combobox: QtWidgets.QComboBox,
+        init=True,
     ) -> None:
         """
         Populate a combobox and its associated model with a list or array of string options.
@@ -1149,6 +1159,10 @@ class LutWidget(pg.GraphicsLayoutWidget):
             self.lut_layout.removeItem(self.slice_lut)
             self.lut_status = False
 
+    def reset_lut_levels(self) -> None:
+        """Clear stored LUT levels so the next set_lut call computes fresh levels."""
+        self.lut_levels = None
+
     def set_lut_levels(self, levels: list | tuple | None = None) -> None:
         """
         Apply the specified intensity levels to all linked images and update the LUT.
@@ -1209,21 +1223,17 @@ class MenuWidget(QtWidgets.QMenuBar):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'feature', 'slice', 'filter']:
+        for group in ['image', 'line', 'probe', 'feature', 'slice', 'region', 'filter']:
             self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)
 
         # Add tab for fit and displat options (thse are non-exclusive)
-        self.tabs['fit']['menu'] = self.addMenu("Fit Options")
+        self.tabs['fit']['menu'] = self.addMenu('Fit Options')
         self.tabs['display']['menu'] = self.addMenu('Display Options')
 
     def populate_exclusive_tab(
-            self,
-            name: str,
-            callback: Callable,
-            options: list[str] = None,
-            set_checked: bool = True
+        self, name: str, callback: Callable, options: list[str] = None, set_checked: bool = True
     ) -> str | None:
         """
         Populate an exclusive tab with actions.
@@ -1254,7 +1264,8 @@ class MenuWidget(QtWidgets.QMenuBar):
                 self.tabs[name]['menu'],
                 self.tabs[name]['group'],
                 data_only=True,
-                set_checked=set_checked)
+                set_checked=set_checked,
+            )
         else:
             option_init = None
 
@@ -1282,12 +1293,12 @@ class MenuWidget(QtWidgets.QMenuBar):
 
     @staticmethod
     def add_actions(
-            options: list[str],
-            function: Callable,
-            menu: QtWidgets.QMenu,
-            group: QtWidgets.QActionGroup,
-            set_checked: bool = True,
-            **kwargs
+        options: list[str],
+        function: Callable,
+        menu: QtWidgets.QMenu,
+        group: QtWidgets.QActionGroup,
+        set_checked: bool = True,
+        **kwargs,
     ) -> str:
         """
         Add a list of actions to a menu and its corresponding QActionGroup.
@@ -1484,8 +1495,7 @@ class ConfigWidget(QtWidgets.QWidget):
 
     @staticmethod
     def create_figure_area(
-            layout: pg.GraphicsLayout,
-            tracking: bool = False
+        layout: pg.GraphicsLayout, tracking: bool = False
     ) -> pg.GraphicsLayoutWidget:
         """
         Wrap a GraphicsLayout in a GraphicsLayoutWidget for display.
@@ -1521,9 +1531,11 @@ class ConfigWidget(QtWidgets.QWidget):
             The callback to connect to
         """
         self.ephys_area.scene().sigMouseClicked.connect(
-            lambda event, i=self.idx: func_click(event, i))
+            lambda event, i=self.idx: func_click(event, i)
+        )
         self.hist_area.scene().sigMouseClicked.connect(
-            lambda event, i=self.idx: func_click(event, i))
+            lambda event, i=self.idx: func_click(event, i)
+        )
 
     def setup_mouse_hover(self, func_hover: Callable) -> None:
         """
@@ -1535,11 +1547,15 @@ class ConfigWidget(QtWidgets.QWidget):
             The callback to connect to
         """
         self.ephys_area.scene().sigMouseHover.connect(
-            lambda hover_items, n=self.name, i=self.idx, c=self.config:
-            func_hover(hover_items, n, i, c))
+            lambda hover_items, n=self.name, i=self.idx, c=self.config: func_hover(
+                hover_items, n, i, c
+            )
+        )
         self.hist_area.scene().sigMouseHover.connect(
-            lambda hover_items, n=self.name, i=self.idx, c=self.config:
-            func_hover(hover_items, n, i, c))
+            lambda hover_items, n=self.name, i=self.idx, c=self.config: func_hover(
+                hover_items, n, i, c
+            )
+        )
 
 
 class SingleConfigFeatureWidget(ConfigWidget):
@@ -1621,7 +1637,6 @@ class SingleConfigFeatureWidget(ConfigWidget):
         hist_layout = self.create_hist_figure_layout(self.items)
 
         return ephys_layout, hist_layout
-
 
 
 class SingleConfigWidget(ConfigWidget):
@@ -1750,11 +1765,9 @@ class DualConfigWidget(ConfigWidget):
         The name of the shank, provided by the subclass.
     """
 
-    def __init__(self,
-                 items_default,
-                 items_non_default,
-                 parent: QtWidgets.QMainWindow | None = None):
-
+    def __init__(
+        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+    ):
         self.items_default = items_default
         self.items_non_default = items_non_default
         self.config: str = items_default.config
@@ -1764,11 +1777,7 @@ class DualConfigWidget(ConfigWidget):
 
         super().__init__(parent)
 
-    def create_ephys_figure_layout(
-            self,
-            items_default,
-            items_non_default
-    ) -> pg.GraphicsLayout:
+    def create_ephys_figure_layout(self, items_default, items_non_default) -> pg.GraphicsLayout:
         """
         Build an ephys figure layout showing two configurations alongside each other.
 
@@ -1789,7 +1798,8 @@ class DualConfigWidget(ConfigWidget):
         # Configure axes for both sets
         items_non_default.fig_data_ax = set_axis(items_non_default.fig_img, 'left', show=False)
         items_default.fig_data_ax = set_axis(
-            items_default.fig_img, 'left', label='Distance from probe tip (um)')
+            items_default.fig_img, 'left', label='Distance from probe tip (um)'
+        )
         set_axis(items_default.fig_scale_cb, 'bottom')
 
         # Link the y-axis
@@ -1892,11 +1902,9 @@ class DualConfigFeatureWidget(ConfigWidget):
         The name of the shank, provided by the subclass.
     """
 
-    def __init__(self,
-                 items_default,
-                 items_non_default,
-                 parent: QtWidgets.QMainWindow | None = None):
-
+    def __init__(
+        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+    ):
         self.items_default = items_default
         self.items_non_default = items_non_default
         self.config: str = items_default.config
@@ -1906,11 +1914,7 @@ class DualConfigFeatureWidget(ConfigWidget):
 
         super().__init__(parent)
 
-    def create_ephys_figure_layout(
-            self,
-            items_default,
-            items_non_default
-    ) -> pg.GraphicsLayout:
+    def create_ephys_figure_layout(self, items_default, items_non_default) -> pg.GraphicsLayout:
         """
         Build an ephys figure layout showing two configurations alongside each other.
 
@@ -1929,10 +1933,12 @@ class DualConfigFeatureWidget(ConfigWidget):
             The created ephys figure layout.
         """
         # Configure axes for both sets
-        items_non_default.fig_feature_ax = set_axis(items_non_default.fig_feature, 'left',
-                                                    show=False)
+        items_non_default.fig_feature_ax = set_axis(
+            items_non_default.fig_feature, 'left', show=False
+        )
         items_default.fig_feature_ax = set_axis(
-            items_default.fig_feature, 'left', label='Distance from probe tip (um)')
+            items_default.fig_feature, 'left', label='Distance from probe tip (um)'
+        )
         set_axis(items_default.fig_scale_cb, 'bottom')
 
         # Link the y-axis
@@ -2012,10 +2018,11 @@ class SliderWidget(QtWidgets.QGroupBox):
     reset = QtCore.Signal(QtWidgets.QWidget, str)
 
     def __init__(
-            self,
-            steps: int = 100,
-            slider_type: str | None = None,
-            parent: QtWidgets.QMainWindow | None = None):
+        self,
+        steps: int = 100,
+        slider_type: str | None = None,
+        parent: QtWidgets.QMainWindow | None = None,
+    ):
         super().__init__(parent)
 
         self.slider_type: str | None = slider_type
@@ -2074,7 +2081,7 @@ class SliderWidget(QtWidgets.QGroupBox):
             The formatted value as a string.
         """
         if abs(val) >= 1e4 or abs(val) <= 1e-3:
-            return f"{val:.2e}"
+            return f'{val:.2e}'
         else:
             return str(np.round(val, 2))
 
@@ -2143,10 +2150,11 @@ class CheckBoxGroup(QtWidgets.QGroupBox):
     """
 
     def __init__(
-            self,
-            title: str | None = None,
-            orientation: str = 'horizontal',
-            parent: QtWidgets.QMainWindow | None = None):
+        self,
+        title: str | None = None,
+        orientation: str = 'horizontal',
+        parent: QtWidgets.QMainWindow | None = None,
+    ):
         super().__init__(title, parent)
 
         self.checkboxes: dict[str, QtWidgets.QCheckBox] = Bunch()
@@ -2157,13 +2165,23 @@ class CheckBoxGroup(QtWidgets.QGroupBox):
         """Create the button group and layout."""
         self.group = QtWidgets.QButtonGroup()
         self.group.setExclusive(False)
-        self.layout = QtWidgets.QHBoxLayout() if self.orientation == 'horizontal' \
+        self.layout = (
+            QtWidgets.QHBoxLayout()
+            if self.orientation == 'horizontal'
             else QtWidgets.QVBoxLayout()
+        )
 
         self.setLayout(self.layout)
 
     def add_options(self, options: list[str]) -> None:
+        """
+        Add checkboxes for the provided options.
 
+        Parameters
+        ----------
+        options: list of str
+            The list of options to create checkboxes for.
+        """
         if len(self.checkboxes) > 0:
             for checkbox in self.checkboxes.values():
                 self.group.removeButton(checkbox)

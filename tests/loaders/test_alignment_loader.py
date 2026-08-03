@@ -23,17 +23,17 @@ class TestAlignmentLoaderOne(unittest.TestCase):
         self.user = 'test_user'
         insertion = {
             'id': uuid.uuid4(),
-            'json': {'xyz_picks': [[1000, 2000, 3000], [1000, 2500, 4000]]}
+            'json': {'xyz_picks': [[1000, 2000, 3000], [1000, 2500, 4000]]},
         }
 
         self.loader = AlignmentLoaderOne(insertion, self.one_mock, user=self.user)
         self.alignments = {
             '2025-07-03_user1': [[0.5, 0, 0.5], [0.2, 0, 0.2]],
-            '2025-06-10_user2': [[0.2, 0, 0.1], [0.2, 0, 0.1]]
+            '2025-06-10_user2': [[0.2, 0, 0.1], [0.2, 0, 0.1]],
         }
 
     def test_load_xyz_picks(self):
-        """ Test the load_xyz_picks method """
+        """Test the load_xyz_picks method"""
         # Test case where we load xyz picks from insertion json
         with self.subTest('xyz_picks present'):
             expected = np.array([[0.001, 0.002, 0.003], [0.001, 0.0025, 0.004]])
@@ -41,34 +41,25 @@ class TestAlignmentLoaderOne(unittest.TestCase):
 
         # Test case where we don't have xyz picks in the insertion json
         with self.subTest('xyz_picks missing'):
-            insertion = {
-                'id': uuid.uuid4(),
-                'json': {'alignment_stored': True}
-            }
+            insertion = {'id': uuid.uuid4(), 'json': {'alignment_stored': True}}
             loader = AlignmentLoaderOne(insertion, self.one_mock)
             self.assertIsNone(loader.load_xyz_picks())
 
     def test_load_alignments(self):
-        """ Test the load_alignments, load_previous_alignments and get_previous_alignments methods """
+        """Test load_alignments, load_previous_alignments and get_previous_alignments methods."""
         # Test case where we have an ephys aligned trajectory with previous alignments
         with self.subTest('Previous alignments found'):
-            self.one_mock.alyx.rest.return_value = [{
-                'id': uuid.uuid4(),
-                'json': self.alignments
-            }]
+            self.one_mock.alyx.rest.return_value = [{'id': uuid.uuid4(), 'json': self.alignments}]
             self.assertEqual(self.loader.load_alignments(), self.alignments)
             expected_keys = ['2025-07-03_user1', '2025-06-10_user2', 'original']
             self.assertListEqual(self.loader.load_previous_alignments(), expected_keys)
-            self.assertListEqual( self.loader.get_previous_alignments(), expected_keys)
+            self.assertListEqual(self.loader.get_previous_alignments(), expected_keys)
 
         # Test case where we have an ephys aligned trajectory with no alignment
         with self.subTest('No previous alignments in json'):
             # Reset the alignments variable
             self.loader.alignments = Bunch()
-            self.one_mock.alyx.rest.return_value = [{
-                'id': uuid.uuid4(),
-                'json': {}
-            }]
+            self.one_mock.alyx.rest.return_value = [{'id': uuid.uuid4(), 'json': {}}]
             self.assertEqual(self.loader.load_alignments(), dict())
             expected_keys = ['original']
             self.assertListEqual(self.loader.load_previous_alignments(), expected_keys)
@@ -85,7 +76,7 @@ class TestAlignmentLoaderOne(unittest.TestCase):
             self.assertListEqual(self.loader.get_previous_alignments(), expected_keys)
 
     def test_starting_alignment(self):
-        """ Test the get_starting_alignment method """
+        """Test the get_starting_alignment method"""
         self.loader.alignments = self.alignments
         self.loader.alignment_keys = ['2025-07-03_user1', '2025-06-10_user2', 'original']
 
@@ -101,8 +92,26 @@ class TestAlignmentLoaderOne(unittest.TestCase):
             np.testing.assert_array_equal(self.loader.feature_prev, np.array([-0.006, 0.006]))
             np.testing.assert_array_equal(self.loader.track_prev, np.array([-0.006, 0.006]))
 
+    def test_stored_alignment_idx(self):
+        """Test get_stored_alignment_idx returns stored key index or 0 as fallback."""
+        self.loader.alignment_keys = ['2025-07-03_user1', '2025-06-10_user2', 'original']
+        self.assertEqual(self.loader.get_stored_alignment_idx(), 0)  # no stored key
+        self.loader.stored_alignment_key = '2025-06-10_user2'
+        self.assertEqual(self.loader.get_stored_alignment_idx(), 1)  # key present
+        self.loader.stored_alignment_key = '2025-01-01_other'
+        self.assertEqual(self.loader.get_stored_alignment_idx(), 0)  # key missing
+
+    def test_stored_alignment_key_from_insertion(self):
+        """Test stored_alignment_key is read from insertion extended_qc on construction."""
+        ins = {
+            'id': uuid.uuid4(),
+            'json': {'extended_qc': {'alignment_stored': '2025-06-10_user2'}},
+        }
+        loader = AlignmentLoaderOne(ins, self.one_mock)
+        self.assertEqual(loader.stored_alignment_key, '2025-06-10_user2')
+
     def test_extra_alignment(self):
-        """ Test the add_extra_alignments method """
+        """Test the add_extra_alignments method"""
         self.loader.alignments = self.alignments
 
         # Test adding extra alignment with a user in the key
@@ -125,13 +134,10 @@ class TestAlignmentLoaderOne(unittest.TestCase):
             self.assertListEqual(['2025-07-10T15:34:00_test_user', 'original'], alignment_keys)
 
     def test_load_trajectory(self):
-        """ Test the load_trajectory method """
+        """Test the load_trajectory method"""
         # Test case where histology trajectory is found
         with self.subTest('Trajectory found'):
-            self.one_mock.alyx.rest.return_value = [{
-                'id': 'traj-id-123',
-                'x': 123.0
-            }]
+            self.one_mock.alyx.rest.return_value = [{'id': 'traj-id-123', 'x': 123.0}]
             self.loader.load_trajectory()
             self.assertEqual(self.loader.traj_id, 'traj-id-123')
 
@@ -153,13 +159,13 @@ class TestAlignmentLoaderOne(unittest.TestCase):
 
 
 class TestAlignmentLoaderLocal(unittest.TestCase):
-    """ Test the AlignmentLoaderLocal class """
+    """Test the AlignmentLoaderLocal class"""
 
     def setUp(self):
         self.xyz_picks = {'xyz_picks': [[1000, 2000, 3000], [1000, 2500, 4000]]}
         self.alignments = {
             '2025-07-03_user1': [[0.5, 0, 0.5], [0.2, 0, 0.2]],
-            '2025-06-10_user2': [[0.2, 0, 0.1], [0.2, 0, 0.1]]
+            '2025-06-10_user2': [[0.2, 0, 0.1], [0.2, 0, 0.1]],
         }
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
@@ -173,7 +179,7 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
             json.dump(data, f)
 
     def test_load_xyz_picks_single_shank(self):
-        """ Test the load_xyz_picks method for single shank data """
+        """Test the load_xyz_picks method for single shank data"""
         loader = AlignmentLoaderLocal(self.temp_path, shank_idx=0, n_shanks=1)
 
         # Test case where we have no xyz_picks data
@@ -192,7 +198,7 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
             np.testing.assert_array_equal(loader.load_xyz_picks(), expected)
 
     def test_load_xyz_picks_multi_shank(self):
-        """ Test the load_xyz_picks method for multi shank data """
+        """Test the load_xyz_picks method for multi shank data"""
         loader = AlignmentLoaderLocal(self.temp_path, shank_idx=2, n_shanks=4)
 
         # Test case where we have no xyz_picks data
@@ -211,7 +217,7 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
             np.testing.assert_array_equal(loader.load_xyz_picks(), expected)
 
     def test_load_alignments_single_shank(self):
-        """ Test the load_alignments method for single shank data """
+        """Test the load_alignments method for single shank data"""
         loader = AlignmentLoaderLocal(self.temp_path, shank_idx=0, n_shanks=1)
 
         # Test case where we have no alignments data
@@ -229,7 +235,7 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
             self.assertEqual(loader.load_alignments(), self.alignments)
 
     def test_load_alignments_multi_shank(self):
-        """ Test the load_alignments method for multi shank data """
+        """Test the load_alignments method for multi shank data"""
         loader = AlignmentLoaderLocal(self.temp_path, shank_idx=3, n_shanks=4)
 
         # Test case where we have no alignments data
@@ -247,7 +253,7 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
             self.assertEqual(loader.load_alignments(), self.alignments)
 
     def test_load_json_file(self):
-        """ Test the _load_json_file method """
+        """Test the _load_json_file method"""
         # File exists and contains valid JSON
         with self.subTest('Valid JSON file'):
             self.create_temp_file('valid.json', {'key': 'value'})

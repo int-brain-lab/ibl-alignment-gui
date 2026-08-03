@@ -1,6 +1,5 @@
-
 import copy
-from pathlib import Path
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -8,22 +7,24 @@ import pandas as pd
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
-from ibl_alignment_gui.app.shank_view import ShankView
-from ibl_alignment_gui.loaders.geometry_loader import ChannelGeometry, arrange_channels_into_banks
-from ibl_alignment_gui.utils.qt.adapted_axis import replace_axis
-from ibl_alignment_gui.utils.qt.custom_widgets import (
+from ibl_alignment_gui.app.views.shank_view import ShankView
+from ibl_alignment_gui.app.widgets.adapted_axis import replace_axis
+from ibl_alignment_gui.app.widgets.custom_widgets import (
     ColorBar,
     PopupWindow,
     SelectionWidget,
     SliderWidget,
     set_axis,
 )
-from ibllib.pipes.ephys_alignment import EphysAlignment
+from ibl_alignment_gui.core.ephys_alignment import EphysAlignment
+from ibl_alignment_gui.loaders.data_loader import FeatureLoaderOne
+from ibl_alignment_gui.loaders.geometry_loader import ChannelGeometry, arrange_channels_into_banks
 from iblutil.util import Bunch
-from one.remote import aws
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+
+_logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = 'Ephys Features'
 
@@ -101,7 +102,6 @@ class EphysFeatureView(PopupWindow):
     """
 
     def __init__(self, title: str, controller: 'AlignmentGUIController', step: int = 10):
-
         # Initialise plot variables
         self.plots_hist: list = list()
         self.plots_feat: list = list()
@@ -167,8 +167,9 @@ class EphysFeatureView(PopupWindow):
         scale_layout.addWidget(self.align_button, 0, 0, 1, 1)
         scale_layout.addWidget(self.normalise_button, 1, 0, 1, 1)
         scale_layout.addWidget(self.pid_label, 2, 0, 1, 1)
-        scale_layout.addItem(QtWidgets.QSpacerItem(10, 20, QtWidgets.QSizePolicy.Expanding),
-                             0, 1, 1, 3)
+        scale_layout.addItem(
+            QtWidgets.QSpacerItem(10, 20, QtWidgets.QSizePolicy.Expanding), 0, 1, 1, 3
+        )
         scale_layout.addWidget(self.slider, 0, 2, 3, 10)
 
         # Add widgets to main layout
@@ -217,13 +218,21 @@ class EphysFeatureView(PopupWindow):
     def clear_plots(self) -> None:
         """Clear all plots."""
         for fig_hist, fig_feat, fig_cbar in zip(
-                self.plots_hist, self.plots_feat, self.plots_cbar, strict=False):
+            self.plots_hist, self.plots_feat, self.plots_cbar, strict=False
+        ):
             fig_hist.clear()
             fig_feat.clear()
             fig_cbar.clear()
             set_axis(fig_cbar, 'top', pen='w')
 
-    def plot_probe(self, idx: int, data: dict, offset: float, levels: list | None = None) -> None:
+    def plot_probe(
+        self,
+        idx: int,
+        data: dict,
+        offset: float,
+        levels: list | None = None,
+        label: str | None = None,
+    ) -> None:
         """
         Plot the feature data for a single probe.
 
@@ -237,6 +246,8 @@ class EphysFeatureView(PopupWindow):
             The offset to apply to the y-axis.
         levels: list, optional
             The color levels to use for the plot.
+        label: str, optional
+            A label to display above the colorbar (used to mark the reference column).
         """
         fig_probe = self.plots_feat[idx]
         fig_cbar = self.plots_cbar[idx]
@@ -244,17 +255,28 @@ class EphysFeatureView(PopupWindow):
         levels = levels if levels is not None else data['levels']
 
         color_bar = ColorBar(self.cmap, plot_item=fig_cbar)
-        color_bar.set_levels(levels)
+        color_bar.set_levels(levels, label=label)
         image = pg.ImageItem()
         image.setImage(data['img'])
-        transform = [data['scale'][0], 0., 0., 0., data['scale'][1], 0., data['offset'][0],
-                     data['offset'][1] - offset, 1.]
+        transform = [
+            data['scale'][0],
+            0.0,
+            0.0,
+            0.0,
+            data['scale'][1],
+            0.0,
+            data['offset'][0],
+            data['offset'][1] - offset,
+            1.0,
+        ]
         image.setTransform(QtGui.QTransform(*transform))
         image.setLookupTable(color_bar.get_colour_map())
         image.setLevels((levels[0], levels[1]))
         fig_probe.addItem(image)
 
-        fig_probe.setXRange(min=data['xrange'][0], max=data['xrange'][1], padding=0)
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
+        fig_probe.setXRange(min=float(data['xrange'][0]), max=float(data['xrange'][1]), padding=0)
         if self.aligned:
             fig_probe.setYRange(min=-1000, max=1000)
         else:
@@ -291,17 +313,20 @@ class EphysFeatureView(PopupWindow):
         axis.setPen('k')
 
         # Plot each histology region
-        for reg, col, reg_id in zip(data['regions'], data['colors'], data['region_id'],
-                                    strict=False):
-
+        for reg, col, reg_id in zip(
+            data['regions'], data['colors'], data['region_id'], strict=False
+        ):
             colour = QtGui.QColor(*col)
             if reg_id == selected_region:
                 colour.setAlpha(255)
             else:
                 colour.setAlpha(60)
-            region = pg.LinearRegionItem(values=(reg[0] - offset, reg[1] - offset),
-                                         orientation=pg.LinearRegionItem.Horizontal,
-                                         brush=colour, movable=False)
+            region = pg.LinearRegionItem(
+                values=(reg[0] - offset, reg[1] - offset),
+                orientation=pg.LinearRegionItem.Horizontal,
+                brush=colour,
+                movable=False,
+            )
             # Add a white line at the boundary between regions
             bound = pg.InfiniteLine(pos=reg[0] - offset, angle=0, pen='w')
             fig.addItem(region)
@@ -354,6 +379,9 @@ class EphysFeatures:
         The currently selected probe id.
     selected_idx: int
         The index of the currently selected probe within the current page.
+    reference_pid: str or None
+        The GUI's currently selected insertion, pinned as a fixed reference in column 0 on
+        every page. ``None`` if the insertion is unavailable or absent from the features table.
     feature_data: Bunch
         A bunch containing the feature data for each pid.
     region_data: Bunch
@@ -363,7 +391,6 @@ class EphysFeatures:
     """
 
     def __init__(self, title: str, controller: 'AlignmentGUIController'):
-
         self.controller = controller
         self.title = title
         # Initialise pagination variables
@@ -389,6 +416,8 @@ class EphysFeatures:
         self.current_pids = []
         self.selected_pid = None
         self.selected_idx = 0
+        # The GUI's currently selected insertion, pinned as a fixed reference column
+        self.reference_pid = None
 
         # Initialise data variables
         self.feature_data = Bunch()
@@ -408,7 +437,8 @@ class EphysFeatures:
 
         for i, fig_area in enumerate(self.view.fig_areas):
             fig_area.scene().sigMouseClicked.connect(
-                lambda event, idx=i: self.on_area_clicked(event, idx))
+                lambda event, idx=i: self.on_area_clicked(event, idx)
+            )
 
         self.view.align_button.clicked.connect(self.on_align_plots)
         self.view.slider.reset.connect(self.on_reset_levels)
@@ -421,19 +451,49 @@ class EphysFeatures:
         self.region_ids = self.get_regions(self.controller)
         self.data = self.get_features()
 
+        # Pin the GUI's currently selected insertion as a fixed reference column. Fall back to
+        # the standard paginated grid if the pid is unavailable (e.g. offline) or absent from
+        # the features table.
+        self.reference_pid = getattr(self.controller.model, 'pid', None)
+        if self.reference_pid is not None and self.reference_pid not in self.data['pid'].values:
+            _logger.warning(
+                'Selected insertion %s not found in ephys features table; no reference column '
+                'will be shown.',
+                self.reference_pid,
+            )
+            self.reference_pid = None
+
         # Populate region combobox
         acronyms = self.ba.regions.id2acronym(self.region_ids)
-        SelectionWidget.populate_combobox(acronyms, self.view.region_list,
-                                          self.view.region_combobox)
+        SelectionWidget.populate_combobox(
+            acronyms, self.view.region_list, self.view.region_combobox
+        )
 
         # Populate plot combobox
-        ignore_cols = ['pid', 'axial_um', 'lateral_um', 'x', 'y', 'z', 'acronym', 'atlas_id',
-                       'x_target', 'y_target', 'z_target', 'outside', 'Allen_id', 'Cosmos_id',
-                       'Beryl_id', 'alpha_mean', 'alpha_std']
+        ignore_cols = [
+            'pid',
+            'axial_um',
+            'lateral_um',
+            'x',
+            'y',
+            'z',
+            'acronym',
+            'atlas_id',
+            'x_target',
+            'y_target',
+            'z_target',
+            'outside',
+            'Allen_id',
+            'Cosmos_id',
+            'Beryl_id',
+            'alpha_mean',
+            'alpha_std',
+        ]
         self.features = [k for k in self.data if k not in ignore_cols]
         self.features.sort()
-        SelectionWidget.populate_combobox(self.features, self.view.plot_list,
-                                          self.view.plot_combobox)
+        SelectionWidget.populate_combobox(
+            self.features, self.view.plot_list, self.view.plot_combobox
+        )
 
         # Populate colormap combobox
         SelectionWidget.populate_combobox(CMAPS, self.view.cmap_list, self.view.cmap_combobox)
@@ -460,27 +520,38 @@ class EphysFeatures:
     # -------------------------------------------------------------------------
     # Download and prepare data
     # -------------------------------------------------------------------------
+    def _get_feature_loader(self) -> FeatureLoaderOne:
+        """
+        Return a feature loader from the currently selected shank.
+
+        The loader is reused to read the same ephys-atlas feature table that was already
+        downloaded while loading the insertion, rather than fetching a separate copy.
+
+        Returns
+        -------
+        FeatureLoaderOne
+            The feature loader for the selected shank's default config.
+        """
+        model = self.controller.model
+        return model.get_selected_shank()[model.default_config].loaders['features']
+
     def get_features(self) -> pd.DataFrame:
         """
-        Download ephys atlas features table from S3.
+        Load the full ephys atlas features table.
+
+        Reuses the same table downloaded by :class:`FeatureLoaderOne` while loading the
+        insertion, reading every insertion's rows rather than only the selected pid's.
 
         Returns
         -------
         pd.DataFrame
-            The ephys atlas features table.
+            The ephys atlas features table for all insertions.
         """
-        # Create folder to store the features table
+        loader = self._get_feature_loader()
         table_path = self.one.cache_dir.joinpath('ephys_atlas_features')
-        table_path.mkdir(parents=True, exist_ok=True)
-        s3, bucket_name = aws.get_s3_from_alyx(alyx=self.one.alyx)
-        # Download file
-        base_path = Path('aggregates/atlas/features/ea_active/2025_W43/agg_full/')
-        fname = 'df_all_cols_merged.pqt'
-        aws.s3_download_file(base_path.joinpath(fname), table_path.joinpath(fname), s3=s3,
-                             bucket_name=bucket_name)
+        table_path.parent.mkdir(parents=True, exist_ok=True)
 
-        data = pd.read_parquet(table_path.joinpath('df_all_cols_merged.pqt')).reset_index()
-        return data
+        return loader.read_full_dataframe('ea_active', self.controller.model.ea_model, table_path)
 
     def get_regions(self, controller: 'AlignmentGUIController') -> np.ndarray:
         """
@@ -499,7 +570,8 @@ class EphysFeatures:
         all_regions = np.array([])
         for shank in controller.all_shanks:
             regions = controller.model.shanks[shank][
-                controller.model.default_config].align_handle.ephysalign.region_id
+                controller.model.default_config
+            ].align_handle.ephysalign.region_id
             all_regions = np.r_[all_regions, np.array(regions.ravel())]
 
         return np.unique(all_regions)
@@ -522,7 +594,8 @@ class EphysFeatures:
         missing_feature_pids = [p for p in pids if p not in self.feature_data[self.plot_name]]
         if len(missing_feature_pids) > 0:
             self.feature_data[self.plot_name].update(
-                self.prepare_feature_data(missing_feature_pids))
+                self.prepare_feature_data(missing_feature_pids)
+            )
 
         missing_region_pids = [p for p in pids if p not in self.region_data]
         if len(missing_region_pids) > 0:
@@ -549,7 +622,6 @@ class EphysFeatures:
         feature_data = Bunch()
 
         for pid in pids:
-
             df = self.data[self.data['pid'] == pid]
             data = df[self.plot_name].values
             chn_coords = Bunch()
@@ -593,19 +665,18 @@ class EphysFeatures:
         region_data = Bunch()
 
         for pid in pids:
-
             df = self.data[self.data['pid'] == pid]
             mlapdv = np.c_[df['x'].values, df['y'].values, df['z'].values]
 
-            region, region_label, region_colour, region_id = \
-                EphysAlignment.get_histology_regions(mlapdv, df['axial_um'].values,
-                                                     brain_atlas=self.ba)
+            region, region_label, region_colour, region_id = EphysAlignment.get_histology_regions(
+                mlapdv, df['axial_um'].values, brain_atlas=self.ba
+            )
 
             data_dict = {
                 'regions': region,
                 'labels': region_label,
                 'colors': region_colour,
-                'region_id': region_id
+                'region_id': region_id,
             }
 
             region_data[pid] = data_dict
@@ -633,6 +704,10 @@ class EphysFeatures:
             data = self.region_data[pid]
 
             idx_reg = np.where(data['region_id'] == self.chosen_region)[0]
+            # The reference probe may not pass through the chosen region; leave it un-centered
+            if idx_reg.size == 0:
+                offset_data[pid] = 0
+                continue
             regs = np.array([])
             for idx in idx_reg:
                 regs = np.r_[regs, data['regions'][idx]]
@@ -644,22 +719,35 @@ class EphysFeatures:
     # -------------------------------------------------------------------------
     # User selection
     # -------------------------------------------------------------------------
+    @property
+    def page_step(self) -> int:
+        """Number of paginated probes per page, reserving column 0 for the reference."""
+        return self.step - 1 if self.reference_pid is not None else self.step
+
+    def _column_label(self, pid: str) -> str | None:
+        """Return the label marking the reference column, or ``None`` for other columns."""
+        return 'Reference' if pid == self.reference_pid else None
+
     def get_pids(self) -> np.ndarray:
         """
         Get the list of probe ids for the current page.
+
+        When a reference insertion is set it is prepended so that it always occupies the first
+        column, with the remaining columns holding the paginated probes.
 
         Returns
         -------
         np.ndarray
             An array of probe ids for the current page.
         """
-        if self.page_idx == self.page_num:
-            pid_idx = np.arange(self.page_idx * self.step, self.max_idx)
-        else:
-            pid_idx = np.arange(self.page_idx * self.step, (self.page_idx * self.step) +
-                                self.step)
+        start = self.page_idx * self.page_step
+        stop = self.max_idx if self.page_idx == self.page_num else start + self.page_step
+        page_pids = self.pids[start : min(stop, self.max_idx)]
 
-        return self.pids[pid_idx]
+        if self.reference_pid is not None:
+            return np.concatenate(([self.reference_pid], page_pids))
+
+        return page_pids
 
     def on_cmap_chosen(self, idx: int) -> None:
         """
@@ -695,12 +783,16 @@ class EphysFeatures:
         # to number of channels in region
         pids = self.data[self.data['atlas_id'] == self.chosen_region]
         pids = pids.groupby('pid').atlas_id.count().sort_values()[::-1]
-        self.pids = pids.index.values
+        pids = pids.index.values
+        # Exclude the reference pid from the paginated probes; it is pinned to column 0
+        if self.reference_pid is not None:
+            pids = pids[pids != self.reference_pid]
+        self.pids = pids
 
         # Reset the offset data
         self.offset_data = Bunch()
-        # Compute the number of pages required
-        self.page_num = np.ceil(self.pids.size / self.step) - 1
+        # Compute the number of pages required over the paginated (non-reference) probes
+        self.page_num = max(0, np.ceil(self.pids.size / self.page_step) - 1)
         self.max_idx = self.pids.size
         self.page_idx = 0
         self.update_page_label()
@@ -723,8 +815,12 @@ class EphysFeatures:
         item = self.view.plot_list.item(idx)
         self.plot_name = item.text()
 
-        # Find the min max levels for the chosen feature across all probes
-        df = self.data[self.data['pid'].isin(self.pids)]
+        # Find the min max levels for the chosen feature across all probes, including the
+        # pinned reference so its colour scaling shares the same range
+        level_pids = self.pids
+        if self.reference_pid is not None:
+            level_pids = np.concatenate(([self.reference_pid], self.pids))
+        df = self.data[self.data['pid'].isin(level_pids)]
         self.max_levels = np.nanquantile(df[self.plot_name].values, [0, 1])
         self.view.slider.set_slider_intervals(self.max_levels)
         self.levels = np.copy(self.max_levels)
@@ -775,9 +871,8 @@ class EphysFeatures:
             The index of the clicked area.
         """
         if not self.normalised:
-            # Highlight the background of the selected area
-            full_idx = (self.page_idx * self.step) + idx
-            if full_idx < len(self.pids):
+            # Highlight the background of the selected area, ignoring empty trailing columns
+            if idx < len(self.current_pids):
                 for i, area in enumerate(self.view.fig_areas):
                     if i == idx:
                         area.setBackground('lightblue')
@@ -874,7 +969,7 @@ class EphysFeatures:
             self.view.plot_region(i, data, offset, self.chosen_region)
 
         if i < self.step - 1:
-            for fig in self.view.plots_hist[i + 1:]:
+            for fig in self.view.plots_hist[i + 1 :]:
                 axis = fig.getAxis('left')
                 axis.setTicks([])
                 axis.setPen(None)
@@ -892,14 +987,16 @@ class EphysFeatures:
             data = self.feature_data[self.plot_name][pid]
             offset = self.offset_data[pid] if self.aligned else 0
             levels = self.levels if self.normalised else None
-            self.view.plot_probe(i, data, offset, levels=levels)
+            self.view.plot_probe(i, data, offset, levels=levels, label=self._column_label(pid))
 
         if i < self.step - 1:
-            for fig in self.view.plots_feat[i + 1:]:
+            for fig in self.view.plots_feat[i + 1 :]:
                 set_axis(fig, 'bottom', pen=None)
 
     def plot_single_feature(self) -> None:
         """Plot the feature data for the currently selected probe."""
         data = self.feature_data[self.plot_name][self.selected_pid]
         offset = self.offset_data[self.selected_pid] if self.aligned else 0
-        self.view.plot_probe(self.selected_idx, data, offset)
+        self.view.plot_probe(
+            self.selected_idx, data, offset, label=self._column_label(self.selected_pid)
+        )

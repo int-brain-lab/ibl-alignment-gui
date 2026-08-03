@@ -1,12 +1,21 @@
+from __future__ import annotations
+
 import json
+import logging
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from iblutil.util import Bunch
-from one.api import ONE
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ibl_alignment_gui.backends.allen.docdb_api import DocDB
+    from one.api import ONE
 
 
 class AlignmentLoader(ABC):
@@ -24,15 +33,16 @@ class AlignmentLoader(ABC):
     """
 
     def __init__(self, user: str | None = None, xyz_picks: np.ndarray | None = None) -> None:
-
         self.user: str | None = user
-        self.xyz_picks: np.ndarray | None = self.load_xyz_picks() \
-            if xyz_picks is None else xyz_picks
+        self.xyz_picks: np.ndarray | None = (
+            self.load_xyz_picks() if xyz_picks is None else xyz_picks
+        )
 
         self.alignments: Bunch | dict = Bunch()
         self.alignment_keys: list = ['original']
         self.feature_prev: np.ndarray | None = None
         self.track_prev: np.ndarray | None = None
+        self.stored_alignment_key: str | None = None
 
     @abstractmethod
     def load_alignments(self) -> dict[str, Any] | None:
@@ -89,6 +99,25 @@ class AlignmentLoader(ABC):
             self.feature_prev = np.array(self.alignments[self.alignment_keys[idx]][0])
             self.track_prev = np.array(self.alignments[self.alignment_keys[idx]][1])
 
+    def get_stored_alignment_idx(self) -> int:
+        """
+        Return the index of the stored (resolved) alignment in the alignment keys list.
+
+        If no stored alignment is set or the stored key is not present in the current
+        alignment keys, returns 0 (i.e. the most recent alignment).
+
+        Returns
+        -------
+        int
+            Index of the stored alignment in ``self.alignment_keys``, or 0 if not found.
+        """
+        if (
+            self.stored_alignment_key is None
+            or self.stored_alignment_key not in self.alignment_keys
+        ):
+            return 0
+        return self.alignment_keys.index(self.stored_alignment_key)
+
     def add_extra_alignments(self, extra_alignments: dict[str, Any]) -> list[str]:
         """
         Add additional alignment data.
@@ -135,12 +164,15 @@ class AlignmentLoaderOne(AlignmentLoader):
     """
 
     def __init__(self, insertion: dict, one: ONE, user: str | None = None):
-
         self.insertion: dict[str, Any] = insertion
         self.one: ONE = one
         self.traj_id: str | None = None
 
         super().__init__(user=user)
+
+        self.stored_alignment_key: str | None = (
+            insertion['json'].get('extended_qc', {}).get('alignment_stored')
+        )
 
     def load_xyz_picks(self) -> np.ndarray | None:
         """
@@ -163,15 +195,24 @@ class AlignmentLoaderOne(AlignmentLoader):
         dict or None
             Dictionary of alignments, or None if not found.
         """
-        traj = self.one.alyx.rest('trajectories', 'list', probe_insertion=self.insertion['id'],
-                                  provenance='Ephys aligned histology track', no_cache=True)
+        traj = self.one.alyx.rest(
+            'trajectories',
+            'list',
+            probe_insertion=self.insertion['id'],
+            provenance='Ephys aligned histology track',
+            no_cache=True,
+        )
         if traj:
             return traj[0]['json']
 
     def load_trajectory(self) -> None:
         """Load the histology track trajectory and stores the trajectory id."""
-        hist = self.one.alyx.rest('trajectories', 'list', probe_insertion=self.insertion['id'],
-                                  provenance='Histology track')
+        hist = self.one.alyx.rest(
+            'trajectories',
+            'list',
+            probe_insertion=self.insertion['id'],
+            provenance='Histology track',
+        )
 
         if hist and hist[0]['x'] is not None:
             self.traj_id = hist[0]['id']
@@ -205,12 +246,19 @@ class AlignmentLoaderLocal(AlignmentLoader):
         Preloaded xyz picks. If not provided, it will attempt to load from file.
     """
 
-    def __init__(self, data_path: Path, shank_idx: int, n_shanks: int, user: str | None = None,
-                 xyz_picks: np.ndarray | None = None):
-
+    def __init__(
+        self,
+        data_path: Path,
+        shank_idx: int,
+        n_shanks: int,
+        user: str | None = None,
+        xyz_picks: np.ndarray | None = None,
+        histology_space: str = 'ccf',
+    ):
         self.data_path: Path = data_path
         self.shank_idx: int = shank_idx
         self.n_shanks: int = n_shanks
+        self.histology_space: str = histology_space
 
         super().__init__(user=user, xyz_picks=xyz_picks)
 
@@ -223,8 +271,12 @@ class AlignmentLoaderLocal(AlignmentLoader):
         np.ndarray or None
             The xyz picks as a (N, 3) array in m, or None if not found.
         """
-        xyz_name = '*xyz_picks.json' if self.n_shanks == 1 else \
-            f'*xyz_picks_shank{self.shank_idx + 1}.json'
+        space = '_image_space' if self.histology_space != 'ccf' else ''
+        xyz_name = (
+            f'*xyz_picks{space}.json'
+            if self.n_shanks == 1
+            else f'*xyz_picks{space}_shank{self.shank_idx + 1}.json'
+        )
 
         xyz_file = sorted(self.data_path.glob(xyz_name))
 
@@ -232,7 +284,6 @@ class AlignmentLoaderLocal(AlignmentLoader):
             return
 
         user_picks = self._load_json_file(xyz_file[0])
-
         return np.array(user_picks['xyz_picks']) / 1e6
 
     def load_alignments(self) -> dict[str, Any] | None:
@@ -244,8 +295,11 @@ class AlignmentLoaderLocal(AlignmentLoader):
         dict or None
             Dictionary of alignment data or None if file not found.
         """
-        prev_align_name = 'prev_alignments.json' if self.n_shanks == 1 else \
-            f'prev_alignments_shank{self.shank_idx + 1}.json'
+        prev_align_name = (
+            'prev_alignments.json'
+            if self.n_shanks == 1
+            else f'prev_alignments_shank{self.shank_idx + 1}.json'
+        )
 
         prev_align_file = self.data_path.joinpath(prev_align_name)
 
@@ -271,3 +325,85 @@ class AlignmentLoaderLocal(AlignmentLoader):
                 return json.load(f)
 
         return None
+
+
+class AlignmentLoaderDocDB(AlignmentLoaderLocal):
+    """
+    Alignment loader using the Allen Neural Dynamics DocDB.
+
+    Used by the Allen/Code Ocean (anatomical) workflow when the DocDB option is enabled.
+    xyz picks are always read from the local file system (inherited from
+    :class:`AlignmentLoaderLocal`); previous alignments are read from the DocDB QC evaluation
+    for this session/probe/shank, falling back to the local ``prev_alignments.json`` when DocDB
+    has no matching record or is unreachable.
+
+    The session and probe names are derived from ``data_path`` to match how they are written by
+    :class:`~ibl_alignment_gui.loaders.alignment_uploader.AlignmentUploaderDocDB`:
+    ``session = data_path.parent.stem`` and ``probe = data_path.stem``.
+
+    Parameters
+    ----------
+    data_path : Path
+        The path to the local data folder.
+    shank_idx : int
+        Index of the shank (0-based).
+    n_shanks : int
+        Total number of shanks.
+    docdb : DocDB
+        The DocDB client used to read previous alignments (injected, analogous to ``one``).
+    user : str or None
+        Username for tagging alignments.
+    xyz_picks : np.ndarray or None
+        Preloaded xyz picks. If not provided, it will attempt to load from file.
+    """
+
+    def __init__(
+        self,
+        data_path: Path,
+        shank_idx: int,
+        n_shanks: int,
+        docdb: DocDB,
+        user: str | None = None,
+        xyz_picks: np.ndarray | None = None,
+        use_db: bool = True,
+        histology_space: str = 'ccf',
+    ):
+        self.docdb: DocDB = docdb
+        self.use_db = use_db
+        super().__init__(
+            data_path,
+            shank_idx,
+            n_shanks,
+            user=user,
+            xyz_picks=xyz_picks,
+            histology_space=histology_space,
+        )
+
+    def load_alignments(self) -> dict[str, Any] | None:
+        """
+        Load previous alignment data from DocDB, falling back to the local file.
+
+        Returns
+        -------
+        dict or None
+            Dictionary of alignment data from DocDB, the local file if DocDB has no matching
+            record, or None if neither is available.
+        """
+        if self.use_db:
+            session_name = self.data_path.parent.stem
+            probe = self.data_path.stem
+            try:
+                alignments = self.docdb.load_alignments(session_name, probe, self.shank_idx)
+            except ValueError as err:
+                logger.warning(
+                    f'Failed to load previous alignments from docdb ({err}). '
+                    'Falling back to local file.'
+                )
+                alignments = None
+
+            if alignments is None:
+                alignments = super().load_alignments()
+        else:
+            alignments = super().load_alignments()
+
+        return alignments

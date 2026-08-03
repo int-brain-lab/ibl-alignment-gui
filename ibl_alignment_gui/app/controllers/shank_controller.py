@@ -1,9 +1,9 @@
 import numpy as np
 import pyqtgraph as pg
 
-from ibl_alignment_gui.app.shank_view import ShankView
+from ibl_alignment_gui.app.views.shank_view import ShankView
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
 from iblutil.util import Bunch
 
 
@@ -41,7 +41,6 @@ class ShankController:
     """
 
     def __init__(self, model: ShankHandler, name: str, index: int, config: str):
-
         self.name: str = name
         self.index: int = index
         self.config: str = config
@@ -51,11 +50,11 @@ class ShankController:
         self.cluster_data: np.ndarray | None = None
 
     def init_reference_line_arrays(self):
-        """" See :meth:`ShankView.init_reference_line_arrays` for details."""
+        """See :meth:`ShankView.init_reference_line_arrays` for details."""
         self.view.init_reference_line_arrays()
 
     def init_plot_items(self):
-        """" See :meth:`ShankView.init_plot_items` for details."""
+        """See :meth:`ShankView.init_plot_items` for details."""
         self.view.init_plot_items()
 
     # --------------------------------------------------------------------------------------------
@@ -154,6 +153,7 @@ class ShankController:
         jitter = np.random.uniform(-1 * 1e-5, 1 * 1e-5, size=self.model.xyz_channels.shape)
         data['xyz_channels'] = self.model.xyz_channels + jitter
         data['track_lines'] = self.model.track_lines
+        data['tip'] = self.model.tip_location
         data_feature = self.model.probe_plots.get(plot_key, None)
         self.view.plot_channels(fig_slice, data, data_feature, colour)
 
@@ -298,6 +298,7 @@ class ShankController:
     def get_yaxis_lims(self) -> list[float, float]:
         """
         Get the y-axis limits from the model.
+
         Returns
         -------
         list[float, float]
@@ -336,10 +337,6 @@ class ShankController:
     # --------------------------------------------------------------------------------------------
     # Fitting functions
     # --------------------------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`ShankHandler.offset_hist_data` for details."""
-        self.model.offset_hist_data(*args)
-
     def scale_hist_data(self, extend_feature: float, lin_fit: bool) -> None:
         """
         Scale brain regions along the probe track based on reference lines.
@@ -352,8 +349,9 @@ class ShankController:
             Whether to use a linear fit or not
         """
         line_feature, line_track = self.view.get_feature_and_track_coords()
-        self.model.scale_hist_data(line_track, line_feature,
-                                   extend_feature=extend_feature, lin_fit=lin_fit)
+        self.model.scale_hist_data(
+            line_track, line_feature, extend_feature=extend_feature, lin_fit=lin_fit
+        )
 
     def get_scaled_histology(self) -> None:
         """See :meth:`ShankHandler.get_scaled_histology` for details."""
@@ -400,7 +398,7 @@ class ShankController:
         self.view.align_reference_lines_and_points()
 
     def remove_reference_lines_from_display(self) -> None:
-        """" See :meth:`ShankView.remove_reference_lines_to_display` for details."""
+        """See :meth:`ShankView.remove_reference_lines_to_display` for details."""
         self.view.remove_reference_lines_from_display()
 
     def add_reference_lines_to_display(self) -> None:

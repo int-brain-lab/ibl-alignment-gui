@@ -24,21 +24,24 @@ class ShankHandler:
     """
 
     def __init__(self, loaders: Bunch, shank_idx: int):
-
         self.shank_idx: int = shank_idx
         self.loaders: Bunch = loaders
         self.loaders['align'].load_previous_alignments()
-        self.loaders['align'].get_starting_alignment(0)
+        self.loaders['align'].get_starting_alignment(
+            self.loaders['align'].get_stored_alignment_idx()
+        )
         self.align_exists: bool = True
         self.data_loaded: bool = False
+        self.align_handle = None
 
     # -------------------------------------------------------------------------
     # Alignment loader - attributes and methods in loaders['align']
     # -------------------------------------------------------------------------
     def set_init_alignment(self) -> None:
         """Set the initial alignment based on previous features and tracks."""
-        self.align_handle.set_init_feature_track(self.loaders['align'].feature_prev,
-                                                 self.loaders['align'].track_prev)
+        self.align_handle.set_init_feature_track(
+            self.loaders['align'].feature_prev, self.loaders['align'].track_prev
+        )
 
     @property
     def feature_prev(self) -> np.ndarray:
@@ -67,10 +70,6 @@ class ShankHandler:
     # -------------------------------------------------------------------------
     # Alignment handler - attributes and methods in align_handle
     # -------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`AlignmentHandler.offset_hist_data` for details."""
-        self.align_handle.offset_hist_data(*args)
-
     def scale_hist_data(self, *args, **kwargs) -> None:
         """See :meth:`AlignmentHandler.scale_hist_data` for details."""
         self.align_handle.scale_hist_data(*args, **kwargs)
@@ -78,13 +77,11 @@ class ShankHandler:
     def get_scaled_histology(self) -> None:
         """See :meth:`AlignmentHandler.get_scaled_histology` for details."""
         self.hist_data, self.hist_data_ref, self.scale_data = (
-            self.align_handle.get_scaled_histology())
+            self.align_handle.get_scaled_histology()
+        )
 
     def feature2track_lin(
-            self,
-            depths: np.ndarray,
-            feature: np.ndarray,
-            track: np.ndarray
+        self, depths: np.ndarray, feature: np.ndarray, track: np.ndarray
     ) -> np.ndarray:
         """
         Estimate values of depth according to linear fit between feature and track reference lines.
@@ -128,6 +125,11 @@ class ShankHandler:
     def xyz_track(self) -> np.ndarray:
         """See :meth:`AlignmentHandler.xyz_track` for details."""
         return self.align_handle.xyz_track
+
+    @property
+    def tip_location(self) -> np.ndarray:
+        """See :meth:`AlignmentHandler.tip_location` for details."""
+        return self.align_handle.tip_location
 
     @property
     def track_lines(self) -> list[np.ndarray]:
@@ -297,11 +299,12 @@ class ShankHandler:
         self.raw_data = self.loaders['data'].get_data(shank_sites)
 
         # Load in the raw data snippets
-        self.raw_data['raw_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_ap_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_lf_snippets'] = self.loaders['ephys'].load_lf_snippets()
 
         # Load in the features data
         if self.loaders.get('features', None) is not None:
-            self.raw_data['features'] = self.loaders['features'].load_features()
+            self.raw_data['features'] = self.loaders['features'].load_features(shank_sites)
         else:
             self.raw_data['features'] = Bunch(exists=False)
 
@@ -321,12 +324,14 @@ class ShankHandler:
             self.align_handle = AlignmentHandler(
                 self.loaders['align'].xyz_picks,
                 self.chn_depths,
-                self.loaders['upload'].brain_atlas)
+                self.loaders['upload'].brain_atlas,
+            )
 
             self.set_init_alignment()
             # Load in the histology data
-            self.loaders['plots'].slice_plots = (
-                self.loaders['hist'].get_slices(self.align_handle.xyz_samples))
+            self.loaders['plots'].slice_plots = self.loaders['hist'].get_slices(
+                self.align_handle.xyz_samples
+            )
         else:
             self.align_exists = False
             self.loaders['plots'].slice_plots = Bunch()
@@ -352,15 +357,15 @@ class ShankHandler:
 
     def upload_data(self) -> str:
         """Upload the data, save the channels and the alignments."""
-        data = {'chn_coords': self.chn_coords,
-                'xyz_channels': self.align_handle.xyz_channels,
-                'feature': self.align_handle.feature.tolist(),
-                'track': self.align_handle.track.tolist(),
-                'alignments': self.loaders['align'].alignments,
-                'cluster_chns': self.cluster_chns,
-                'probe_collection': self.loaders['data'].probe_collection,
-                'probe_path': self.loaders['data'].probe_path,
-                'chn_depths': self.chn_depths,
-                'xyz_picks': self.loaders['align'].xyz_picks,
-                }
+        data = {
+            'chn_coords': self.chn_coords,
+            'xyz_channels': self.align_handle.xyz_channels,
+            'feature': self.align_handle.feature.tolist(),
+            'track': self.align_handle.track.tolist(),
+            'alignments': self.loaders['align'].alignments,
+            'cluster_chns': self.cluster_chns,
+            'probe_collection': self.loaders['data'].probe_collection,
+            'chn_depths': self.chn_depths,
+            'xyz_picks': self.loaders['align'].xyz_picks,
+        }
         return self.loaders['upload'].upload_data(data, shank_sites=self.chn_sites)

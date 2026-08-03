@@ -2,12 +2,32 @@ from typing import TYPE_CHECKING
 
 from qtpy import QtWidgets
 
-from ibllib.qc.critical_reasons import CriticalInsertionNote
-
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController, AlignmentGUIView
+    from ibl_alignment_gui.app.controllers.app_controller import (
+        AlignmentGUIController,
+        AlignmentGUIView,
+    )
 
-PLUGIN_NAME = "QC dialog"
+PLUGIN_NAME = 'QC dialog'
+
+
+def _get_critical_descriptions() -> list[str]:
+    """Return the QC reason descriptions, or an empty list if ``ibllib`` is missing.
+
+    The reasons come from ``ibllib`` (the optional ``ibl`` extra). QC is only submitted in online
+    mode, so in offline mode without ``ibllib`` the dialog is still built, simply without reason
+    checkboxes.
+
+    Returns
+    -------
+    list[str]
+        The QC reason descriptions used to populate the dialog checkboxes.
+    """
+    try:
+        from ibllib.qc import critical_reasons  # noqa: PLC0415
+    except ImportError:
+        return []
+    return critical_reasons.CriticalInsertionNote.descriptions_gui
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -39,7 +59,7 @@ def display(controller: 'AlignmentGUIController', shank: str) -> int:
         int
             The result of the dialog execution (Accepted or Rejected).
     """
-    controller.qc_dialog.setWindowTitle(f"QC assessment {shank}")
+    controller.qc_dialog.setWindowTitle(f'QC assessment {shank}')
     return controller.qc_dialog.exec_()
 
 
@@ -53,8 +73,9 @@ def callback(controller: 'AlignmentGUIController'):
         The main application controller.
     """
     # Get the uploader for the selected shank and default configuration
-    upload = controller.model.get_selected_shank()[
-        controller.model.default_config].loaders['upload']
+    upload = controller.model.get_selected_shank()[controller.model.default_config].loaders[
+        'upload'
+    ]
     # Pass in the QC information from the dialog
     upload.set_user_qc(*controller.qc_dialog.get_qc())
 
@@ -79,34 +100,35 @@ class QCDialog(QtWidgets.QDialog):
     def setup(self) -> None:
         """Set up the dialog layout and widgets."""
         # Alignment QC
-        align_qc_label = QtWidgets.QLabel("Confidence of alignment:")
+        align_qc_label = QtWidgets.QLabel('Confidence of alignment:')
         self.align_qc = QtWidgets.QComboBox()
-        self.align_qc.addItems(["High", "Medium", "Low"])
+        self.align_qc.addItems(['High', 'Medium', 'Low'])
 
         # Ephys QC
-        ephys_qc_label = QtWidgets.QLabel("QC for ephys recording:")
+        ephys_qc_label = QtWidgets.QLabel('QC for ephys recording:')
         self.ephys_qc = QtWidgets.QComboBox()
-        self.ephys_qc.addItems(["Pass", "Warning", "Critical"])
+        self.ephys_qc.addItems(['Pass', 'Warning', 'Critical'])
 
         # Ephys QC descriptions
         self.desc_buttons = QtWidgets.QButtonGroup()
         self.desc_buttons.setExclusive(False)
 
         desc_layout = QtWidgets.QVBoxLayout()
-        for i, label in enumerate(CriticalInsertionNote.descriptions_gui):
+        for i, label in enumerate(_get_critical_descriptions()):
             checkbox = QtWidgets.QCheckBox(label)
             self.desc_buttons.addButton(checkbox, i)
             desc_layout.addWidget(checkbox)
 
-        desc_group = QtWidgets.QGroupBox("Describe problem with recording:")
+        desc_group = QtWidgets.QGroupBox('Describe problem with recording:')
         desc_group.setLayout(desc_layout)
 
         # Force upload option
         resolve_label = QtWidgets.QLabel(
-            "Do you want to resolve this alignment with the current alignment?")
+            'Do you want to resolve this alignment with the current alignment?'
+        )
         self.resolve = QtWidgets.QComboBox()
-        self.resolve.addItem("No", False)
-        self.resolve.addItem("Yes", True)
+        self.resolve.addItem('No', False)
+        self.resolve.addItem('Yes', True)
 
         # Dialog buttons
         button_box = QtWidgets.QDialogButtonBox(
@@ -133,8 +155,9 @@ class QCDialog(QtWidgets.QDialog):
         ephys_desc = [btn.text() for btn in self.desc_buttons.buttons() if btn.isChecked()]
 
         if ephys_qc != 'Pass' and not ephys_desc:
-            QtWidgets.QMessageBox.warning(self, "Missing Information",
-                                          "You must select a reason for QC choice")
+            QtWidgets.QMessageBox.warning(
+                self, 'Missing Information', 'You must select a reason for QC choice'
+            )
             return
         self.accept()
 

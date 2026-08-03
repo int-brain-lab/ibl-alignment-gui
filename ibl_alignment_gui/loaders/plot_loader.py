@@ -1,12 +1,13 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
+from types import ModuleType
 from typing import Any
 
 import numpy as np
-from matplotlib import cm, colors
+from matplotlib import colormaps, colors
 
-from brainbox.task import passive
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
     arrange_channels_into_banks,
@@ -16,13 +17,41 @@ from ibl_alignment_gui.loaders.geometry_loader import (
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
 
+try:
+    import ephysatlas.features
+
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
+
 logger = logging.getLogger(__name__)
 
 np.seterr(divide='ignore', invalid='ignore')
 
 
+def _get_passive() -> ModuleType | None:
+    """Import ``brainbox.task.passive`` lazily.
+
+    Passive-stimulus and receptive-field plots rely on ``brainbox`` (shipped with the optional
+    ``ibllib`` dependency). In offline mode this may not be installed, in which case those plots
+    are skipped rather than raising.
+
+    Returns
+    -------
+    ModuleType or None
+        The ``brainbox.task.passive`` module, or None if it is not installed.
+    """
+    try:
+        from brainbox.task import passive  # noqa: PLC0415
+
+        return passive
+    except ImportError:
+        return None
+
+
 def skip_missing(required_keys):
     """Skip method execution if required data keys are missing or false."""
+
     def decorator(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -31,7 +60,9 @@ def skip_missing(required_keys):
                 if not val:
                     return {}
             return func(self, *args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -212,14 +243,16 @@ FILTER_MATCH = {
     'KS mua': ('ks2_label', 'mua'),
 }
 
+# Custom filters that can be added as through plugins
+CUSTOM_FILTERS: dict[str, Callable[[Any], np.ndarray]] = {}
+
 TBIN = 0.05
 DBIN = 5
 BNK_SIZE = 10
 
 
 def compute_spike_average(
-        spikes: Bunch[str, Any],
-        clusters: Bunch[str, Any]
+    spikes: Bunch[str, Any], clusters: Bunch[str, Any]
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute average spike amplitudes, depths, and firing rates for each cluster.
@@ -270,12 +303,12 @@ def compute_spike_average(
 
 
 def compute_bincount(
-        spike_times: np.ndarray,
-        spike_depths: np.ndarray,
-        spike_amps: np.ndarray,
-        xbin: float = TBIN,
-        ybin: float = DBIN,
-        **kwargs
+    spike_times: np.ndarray,
+    spike_depths: np.ndarray,
+    spike_amps: np.ndarray,
+    xbin: float = TBIN,
+    ybin: float = DBIN,
+    **kwargs,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute 2D binned spike count and amplitude over time and depth.
@@ -308,8 +341,9 @@ def compute_bincount(
     """
     count, times, depths = bincount2D(spike_times, spike_depths, xbin=xbin, ybin=ybin, **kwargs)
 
-    amp, times, depths = bincount2D(spike_times, spike_depths, xbin=xbin, ybin=ybin,
-                                    weights=spike_amps, **kwargs)
+    amp, times, depths = bincount2D(
+        spike_times, spike_depths, xbin=xbin, ybin=ybin, weights=spike_amps, **kwargs
+    )
 
     return count, amp, times, depths
 
@@ -335,9 +369,9 @@ def group_bincount(arr: np.ndarray, group_size: int, axis: int = 1) -> np.ndarra
         Array with grouped means and a final summed group if leftovers exist.
     """
     if arr.ndim != 2:
-        raise ValueError("Input array must be 2D.")
+        raise ValueError('Input array must be 2D.')
     if axis not in (0, 1):
-        raise ValueError("Axis must be 0 or 1.")
+        raise ValueError('Axis must be 0 or 1.')
 
     # Transpose if operating on axis 0 to reuse logic
     if axis == 0:
@@ -368,7 +402,6 @@ class PlotLoader:
     """Class for handling plot data generation."""
 
     def __init__(self):
-
         self.data: Bunch | None = None
         self.shank_sites: Bunch | None = None
         self.chn_min: float | None = None
@@ -496,8 +529,9 @@ class PlotLoader:
         self.avg_fr : np.ndarray
             Average firing rate per cluster.
         """
-        self.clust_id, self.avg_amp, self.avg_depth, self.avg_fr = (
-            compute_spike_average(self.data['spikes'], self.data['clusters']))
+        self.clust_id, self.avg_amp, self.avg_depth, self.avg_fr = compute_spike_average(
+            self.data['spikes'], self.data['clusters']
+        )
 
     @skip_missing(['spikes'])
     def compute_rasters(self) -> None:
@@ -524,9 +558,12 @@ class PlotLoader:
         self.chn_min_bc = np.min(np.r_[self.chn_min, self.spike_depths])
         self.chn_max_bc = np.max(np.r_[self.chn_max, self.spike_depths])
 
-        self.fr, self.amp, self.times, self.depths = (
-            compute_bincount(self.spike_times, self.spike_depths, self.spike_amps,
-                             ylim=[self.chn_min_bc, self.chn_max_bc]))
+        self.fr, self.amp, self.times, self.depths = compute_bincount(
+            self.spike_times,
+            self.spike_depths,
+            self.spike_amps,
+            ylim=[self.chn_min_bc, self.chn_max_bc],
+        )
 
     @skip_missing(['spikes'])
     def filter_units(self, filter_type) -> None:
@@ -550,17 +587,26 @@ class PlotLoader:
             The index of spikes that do not have NaN values for depth and amplitude
         """
         try:
-            if filter_type == "All":
+            if filter_type == 'All':
                 self.cluster_idx = np.arange(self.data['clusters'].channels.size)
                 self.spike_idx = np.arange(self.data['spikes']['clusters'].size)
+            elif filter_type in CUSTOM_FILTERS:
+                mask = np.asarray(CUSTOM_FILTERS[filter_type](self.data['clusters'].metrics))
+                self.cluster_idx = np.where(mask)[0]
+                self.spike_idx = np.where(
+                    np.isin(self.data['spikes']['clusters'], self.cluster_idx)
+                )[0]
             else:
                 column, condition = FILTER_MATCH[filter_type]
                 self.cluster_idx = np.where(self.data['clusters'].metrics[column] == condition)[0]
                 self.spike_idx = np.where(
-                    np.isin(self.data['spikes']['clusters'], self.cluster_idx))[0]
+                    np.isin(self.data['spikes']['clusters'], self.cluster_idx)
+                )[0]
 
-            self.kp_idx = np.where(~np.isnan(self.data['spikes']['depths'][self.spike_idx]) &
-                                   ~np.isnan(self.data['spikes']['amps'][self.spike_idx]))[0]
+            self.kp_idx = np.where(
+                ~np.isnan(self.data['spikes']['depths'][self.spike_idx])
+                & ~np.isnan(self.data['spikes']['amps'][self.spike_idx])
+            )[0]
         except Exception:
             logger.warning(f'{filter_type} metrics not found will return all units instead')
             self.filter_units('All')
@@ -593,7 +639,7 @@ class PlotLoader:
         amps = self.spike_amps[::subsample]
 
         # Amplitude bins (ignore top 10% outliers)
-        amp_range = np.quantile(amps, [0, 0.9])
+        amp_range = np.nanquantile(amps, [0, 0.9])
         amp_bins = np.linspace(amp_range[0], amp_range[1], a_bin)
 
         # Map amplitudes to bin indices
@@ -601,10 +647,10 @@ class PlotLoader:
 
         # Build colormap
         colour_bin = np.linspace(0.0, 1.0, a_bin + 1)
-        colormap = cm.get_cmap('BuPu')(colour_bin)[..., :3]
+        colormap = colormaps['BuPu'](colour_bin)[..., :3]
 
         # Initialize colours and sizes
-        spikes_colours = np.array(["#000000"] * amps.size)
+        spikes_colours = np.array(['#000000'] * amps.size)
         spikes_size = np.zeros(amps.size)
 
         # Assign colour and sizes according to bin index
@@ -614,7 +660,7 @@ class PlotLoader:
 
         # For saturated amplitudes, set to dark purple and larger size
         saturated = bin_idx >= a_bin
-        spikes_colours[saturated] = "#400080"
+        spikes_colours[saturated] = '#400080'
         spikes_size[saturated] = (a_bin - 1) / (a_bin / 4)
 
         xrange = np.array([np.min(times), np.max(times)])
@@ -632,7 +678,7 @@ class PlotLoader:
             xaxis='Time (s)',
             title='Amplitude (uV)',
             cmap='BuPu',
-            cluster=False
+            cluster=False,
         )
 
         return {'Amplitude': scatter}
@@ -660,12 +706,16 @@ class PlotLoader:
             pen='k',
             size=np.array(8),
             symbol=np.array('o'),
-            xrange=np.array([0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
-                             1.1 * np.nanmax(self.avg_amp[self.cluster_idx])]),
+            xrange=np.array(
+                [
+                    0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
+                    1.1 * np.nanmax(self.avg_amp[self.cluster_idx]),
+                ]
+            ),
             xaxis='Amplitude (uV)',
             title='Firing Rate (Sp/s)',
             cmap='hot',
-            cluster=True
+            cluster=True,
         )
 
         return {'Cluster Amp vs Depth vs FR': scatter}
@@ -693,12 +743,16 @@ class PlotLoader:
             pen='k',
             size=np.array(8),
             symbol=np.array('o'),
-            xrange=np.array([0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
-                             1.1 * np.nanmax(self.avg_amp[self.cluster_idx])]),
+            xrange=np.array(
+                [
+                    0.9 * np.nanmin(self.avg_amp[self.cluster_idx]),
+                    1.1 * np.nanmax(self.avg_amp[self.cluster_idx]),
+                ]
+            ),
             xaxis='Amplitude (uV)',
             title='Peak to Trough duration (ms)',
             cmap='RdYlGn',
-            cluster=True
+            cluster=True,
         )
 
         return {'Cluster Amp vs Depth vs Duration': scatter}
@@ -726,12 +780,16 @@ class PlotLoader:
             pen='k',
             size=np.array(8),
             symbol=np.array('o'),
-            xrange=np.array([0.9 * np.nanmin(self.avg_fr[self.cluster_idx]),
-                             1.1 * np.nanmax(self.avg_fr[self.cluster_idx])]),
+            xrange=np.array(
+                [
+                    0.9 * np.nanmin(self.avg_fr[self.cluster_idx]),
+                    1.1 * np.nanmax(self.avg_fr[self.cluster_idx]),
+                ]
+            ),
             xaxis='Firing Rate (Sp/s)',
             title='Amplitude (uV)',
             cmap='magma',
-            cluster=True
+            cluster=True,
         )
 
         return {'Cluster FR vs Depth vs Amp': scatter}
@@ -751,7 +809,7 @@ class PlotLoader:
         """
         xscale = (self.times[-1] - self.times[0]) / self.fr.shape[1]
         yscale = (self.depths[-1] - self.depths[0]) / self.fr.shape[0]
-        levels = np.quantile(np.mean(self.fr.T, axis=0), [0, 1])
+        levels = np.nanquantile(np.mean(self.fr.T, axis=0), [0, 1])
 
         img = ImageData(
             img=self.fr.T,
@@ -762,7 +820,7 @@ class PlotLoader:
             xrange=np.array([self.times[0], self.times[-1]]),
             xaxis='Time (s)',
             cmap='binary',
-            title='Firing Rate'
+            title='Firing Rate',
         )
 
         return {'Firing Rate': img}
@@ -797,7 +855,7 @@ class PlotLoader:
             xrange=np.array([self.chn_min, self.chn_max]),
             cmap='viridis',
             title='Correlation',
-            xaxis='Distance from probe tip (um)'
+            xaxis='Distance from probe tip (um)',
         )
         return {'Correlation': img}
 
@@ -811,7 +869,7 @@ class PlotLoader:
         Dict
             A dict containing a ImageData object with key 'rms_AP'.
         """
-        return self._image_rms('AP')
+        return self._image_rms('rms_AP')
 
     @skip_missing(['rms_LF'])
     def image_rms_lf(self) -> dict[str, Any]:
@@ -823,16 +881,18 @@ class PlotLoader:
         Dict
             A bunch containing a ImageData object with key 'rms_LF'.
         """
-        return self._image_rms('LF')
+        return self._image_rms('rms_LF')
 
-    def _image_rms(self, band: str) -> dict[str, Any]:
+    def _image_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for an image plot of the RMS for the specified frequency band (AP or LF).
 
         Parameters
         ----------
-        band: str
-            The frequency band to process (AP or LF).
+        alf_object: str
+            The alf object name of the frequency band to process (AP or LF).
+        plot_key: str | None
+            The key to give the plot
 
         Returns
         -------
@@ -848,24 +908,28 @@ class PlotLoader:
           to align with the full channel map.
         """
         # Identify channels at the same depth
-        img = average_chns_at_same_depths(self.shank_sites,
-                                          self.data[f"rms_{band}"]["rms"]) * 1e6  # convert to µV
+
+        img = (
+            average_chns_at_same_depths(self.shank_sites, self.data[alf_object]['rms']) * 1e6
+        )  # convert to µV
 
         # Median subtract across depths (remove horizontal bands)
-        depth_medians = np.median(img, axis=1, keepdims=True)
-        global_median = np.mean(depth_medians)
+        depth_medians = np.nanmedian(img, axis=1, keepdims=True)
+        global_median = np.nanmean(depth_medians)
         img = img - depth_medians + global_median
 
         # Reconstruct full channel map (handles gaps in channel geometry)
         img_full = pad_data_to_full_chn_map(self.shank_sites, img)
 
         # Scaling for plotting
-        timestamps = self.data[f"rms_{band}"]["timestamps"]
+        timestamps = self.data[alf_object]['timestamps']
         xscale = (timestamps[-1] - timestamps[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
-        cmap = "plasma" if band == "AP" else "inferno"
+        cmap = 'plasma' if 'AP' in alf_object else 'inferno'
+        band = 'AP' if 'AP' in alf_object else 'LF'
+        key = plot_key or f'rms {band}'
 
         img = ImageData(
             img=img_full,
@@ -875,11 +939,11 @@ class PlotLoader:
             offset=np.array([0, self.chn_min]),
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
-            xaxis=self.data[f"rms_{band}"]["xaxis"],
-            title=f"{band} RMS (uV)",
+            xaxis=self.data[alf_object]['xaxis'],
+            title=f'{band} RMS (uV)',
         )
 
-        return {f"rms {band}": img}
+        return {key: img}
 
     @skip_missing(['psd_LF'])
     def image_lfp_spectrum(self) -> dict[str, Any]:
@@ -899,8 +963,10 @@ class PlotLoader:
         """
         # Find frequency range
         freq_range = [0, 300]
-        freq_idx = np.where((self.data['psd_LF']['freqs'] >= freq_range[0]) &
-                            (self.data['psd_LF']['freqs'] < freq_range[1]))[0]
+        freq_idx = np.where(
+            (self.data['psd_LF']['freqs'] >= freq_range[0])
+            & (self.data['psd_LF']['freqs'] < freq_range[1])
+        )[0]
 
         # Extract PSD data for the selected frequency range and selected channels
         lfp_power = self.data['psd_LF']['power'][freq_idx, :]
@@ -915,7 +981,7 @@ class PlotLoader:
         # Scaling for plotting
         xscale = (freq_range[-1] - freq_range[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
         img = ImageData(
             img=img_full,
@@ -926,9 +992,8 @@ class PlotLoader:
             cmap='viridis',
             xrange=np.array([freq_range[0], freq_range[-1]]),
             xaxis='Frequency (Hz)',
-            title='PSD (dB)'
+            title='PSD (dB)',
         )
-
         return {'LF spectrum': img}
 
     @skip_missing(['spikes'])
@@ -944,7 +1009,12 @@ class PlotLoader:
         Notes
         -----
         - Will only return data for passive events that are present in the data
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            return dict()
+
         # Find the list of passive events that are present in the data
         if not self.data['pass_stim']['exists'] and not self.data['gabor']['exists']:
             return dict()
@@ -956,24 +1026,30 @@ class PlotLoader:
             stims = {stim_type: self.data['pass_stim'][stim_type] for stim_type in stim_types}
         else:
             stim_types = ['valveOn', 'toneOn', 'noiseOn', 'leftGabor', 'rightGabor']
-            stims = {stim_type: self.data['pass_stim'][stim_type]
-                     for stim_type in stim_types[0:3]}
-            stims.update({stim_type: self.data['gabor'][stim_type]
-                          for stim_type in stim_types[3:]})
+            stims = {stim_type: self.data['pass_stim'][stim_type] for stim_type in stim_types[0:3]}
+            stims.update(
+                {stim_type: self.data['gabor'][stim_type] for stim_type in stim_types[3:]}
+            )
 
         # Compute normalised event aligned psths
         base_stim = 1
         pre_stim = 0.4
         post_stim = 1
         stim_events = passive.get_stim_aligned_activity(
-            stims, self.spike_times, self.spike_depths, pre_stim=pre_stim, post_stim=post_stim,
-            base_stim=base_stim, y_lim=[self.chn_min_bc, self.chn_max_bc])
+            stims,
+            self.spike_times,
+            self.spike_depths,
+            pre_stim=pre_stim,
+            post_stim=post_stim,
+            base_stim=base_stim,
+            y_lim=[self.chn_min_bc, self.chn_max_bc],
+        )
 
         # Loop over each stimulus type and create ImageData objects
         passive_imgs = dict()
         for stim_type, aligned_img in stim_events.items():
             xscale = (post_stim + pre_stim) / aligned_img.shape[1]
-            yscale = ((self.chn_max - self.chn_min) / aligned_img.shape[0])
+            yscale = (self.chn_max - self.chn_min) / aligned_img.shape[0]
             levels = np.array([-10, 10])
 
             img = ImageData(
@@ -985,18 +1061,47 @@ class PlotLoader:
                 cmap='bwr',
                 xrange=np.array([-1 * pre_stim, post_stim]),
                 xaxis='Time from Stim Onset (s)',
-                title='Firing rate (z score)'
+                title='Firing rate (z score)',
             )
 
             passive_imgs.update({stim_type: img})
 
         return passive_imgs
 
-    @skip_missing(['raw_snippets'])
-    def image_raw_data(self) -> dict[str, Any]:
+    @skip_missing(['raw_ap_snippets'])
+    def image_raw_ap_data(self) -> dict[str, Any]:
+        """
+        Generate data for image plots of raw AP band ephys data snippets.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ImageData objects with keys according to the time of the
+            snippet during the recording.
+        """
+        return self._image_raw_data('ap')
+
+    @skip_missing(['raw_lf_snippets'])
+    def image_raw_lf_data(self) -> dict[str, Any]:
+        """
+        Generate data for image plots of raw LFP band ephys data snippets.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ImageData objects with keys according to the time of the
+            snippet during the recording.
+        """
+        return self._image_raw_data('lf')
+
+    def _image_raw_data(self, band: str) -> dict[str, Any]:
         """
         Generate data for image plots of raw ephys data snippets.
 
+        Parameters
+        ----------
+        band : str
+            The frequency band of the raw data snippets to plot. Ap or Lf
         Returns
         -------
         Dict
@@ -1005,8 +1110,10 @@ class PlotLoader:
         """
         raw_imgs = dict()
 
-        for i, (t, raw_img) in enumerate(self.data['raw_snippets']['images'].items()):
-            x_range = np.array([0, raw_img.shape[0] - 1]) / self.data['raw_snippets']['fs'] * 1e3
+        for i, (t, raw_img) in enumerate(self.data[f'raw_{band}_snippets']['images'].items()):
+            x_range = (
+                np.array([0, raw_img.shape[0] - 1]) / self.data[f'raw_{band}_snippets']['fs'] * 1e3
+            )
             xscale = (x_range[1] - x_range[0]) / raw_img.shape[0]
             yscale = (self.chn_max - self.chn_min) / raw_img.shape[1]
             levels = 10 ** (-90 / 20) * 4 * np.array([-1, 1])
@@ -1020,9 +1127,9 @@ class PlotLoader:
                 cmap='bone',
                 xrange=x_range,
                 xaxis='Time (ms)',
-                title=f'Power (uV) T={int(t)} s'
+                title=f'Power (uV) T={int(t)} s',
             )
-            raw_imgs[f'Raw ap snippet {i}'] = img
+            raw_imgs[f'Raw {band} snippet {i}'] = img
 
         return raw_imgs
 
@@ -1053,7 +1160,7 @@ class PlotLoader:
             xrange=np.array([0, np.max(mean_fr)]),
             levels=np.array([0, np.max(mean_fr)]),
             default_levels=np.array([0, np.max(mean_fr)]),
-            xaxis='Firing Rate (Sp/s)'
+            xaxis='Firing Rate (Sp/s)',
         )
 
         return {'Firing Rate': line}
@@ -1082,12 +1189,12 @@ class PlotLoader:
             xrange=np.array([0, np.max(mean_amp)]),
             levels=np.array([0, np.max(mean_amp)]),
             default_levels=np.array([0, np.max(mean_amp)]),
-            xaxis='Amplitude (uV)'
+            xaxis='Amplitude (uV)',
         )
 
         return {'Amplitude': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_dead_channels(self) -> dict[str, Any]:
         """
         Generate data for a line plot of dead channels across depth.
@@ -1097,7 +1204,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Dead Channels'.
         """
-        data = self.data['raw_snippets']['dead_channels']
+        data = self.data['raw_ap_snippets']['dead_channels']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1112,12 +1219,12 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='k',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Dead Channels': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_noisy_channels_coherence(self) -> dict[str, Any]:
         """
         Generate data for a line plot of noisy channels across depth.
@@ -1129,7 +1236,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels Coherence'.
         """
-        data = self.data['raw_snippets']['noisy_channels_coherence']
+        data = self.data['raw_ap_snippets']['noisy_channels_coherence']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1144,12 +1251,12 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='r',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Noisy Channels Coherence': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_noisy_channels_psd(self) -> dict[str, Any]:
         """
         Generate data for a line plot of noisy channels across depth.
@@ -1161,7 +1268,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels PSD'.
         """
-        data = self.data['raw_snippets']['noisy_channels_psd']
+        data = self.data['raw_ap_snippets']['noisy_channels_psd']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1176,12 +1283,12 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='r',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Noisy Channels PSD': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_outside_channels(self) -> dict[str, Any]:
         """
         Generate data for a line plot of outide channels across depth.
@@ -1191,7 +1298,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Outside Channels'.
         """
-        data = self.data['raw_snippets']['outside_channels']
+        data = self.data['raw_ap_snippets']['outside_channels']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1206,7 +1313,7 @@ class PlotLoader:
             vlines=data['lines'],
             mask=data['points'],
             mask_colour='y',
-            mask_style='star'
+            mask_style='star',
         )
 
         return {'Outside Channels': line}
@@ -1224,7 +1331,7 @@ class PlotLoader:
         Dict
             A dict containing a ProbeData object with key 'rms_AP'.
         """
-        return self._probe_rms('AP')
+        return self._probe_rms('rms_AP')
 
     @skip_missing(['rms_LF'])
     def probe_rms_lf(self) -> dict[str, Any]:
@@ -1236,16 +1343,18 @@ class PlotLoader:
         Dict
             A dict containing a ProbeData object with key 'rms_LF'.
         """
-        return self._probe_rms('LF')
+        return self._probe_rms('rms_LF')
 
-    def _probe_rms(self, band: str) -> dict[str, Any]:
+    def _probe_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for a probe plot of the RMS for the specified frequency band (AP or LF).
 
         Parameters
         ----------
-        band: str
-            The frequency band to process (AP or LF).
+        alf_object: str
+            The alf object containing the frequency band to process (AP or LF).
+        plot_key: str | None
+            The key to use for the returned dict. If None, defaults to 'rms_{alf_object}'.
 
         Returns
         -------
@@ -1253,13 +1362,16 @@ class PlotLoader:
             A dict containing a ProbeData object with key 'rms_{band}'.
         """
         # Average data across time
-        rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
-        levels = np.quantile(rms_avg, [0.1, 0.9])
+        rms_avg = np.mean(self.data[alf_object]['rms'], axis=0) * 1e6
+        levels = np.nanquantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
-        probe_img, probe_scale, probe_offset = (
-            arrange_channels_into_banks(self.shank_sites, rms_avg, bnk_width=BNK_SIZE))
+        probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
+            self.shank_sites, rms_avg, bnk_width=BNK_SIZE
+        )
 
-        cmap = 'plasma' if band == 'AP' else 'inferno'
+        cmap = 'plasma' if 'AP' in alf_object else 'inferno'
+        band = 'AP' if 'AP' in alf_object else 'LF'
+        key = plot_key or f'rms {band}'
 
         probe = ProbeData(
             img=probe_img,
@@ -1270,10 +1382,10 @@ class PlotLoader:
             cmap=cmap,
             xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
             title=band + ' RMS (uV)',
-            data=rms_avg
+            data=rms_avg,
         )
 
-        return {f'rms {band}': probe}
+        return {key: probe}
 
     @skip_missing(['psd_LF'])
     def probe_lfp_spectrum(self) -> dict[str, Any]:
@@ -1290,13 +1402,16 @@ class PlotLoader:
 
         data_probe = dict()
         for freq in freq_bands:
-            freq_idx = np.where((self.data['psd_LF']['freqs'] >= freq[0])
-                                & (self.data['psd_LF']['freqs'] < freq[1]))[0]
+            freq_idx = np.where(
+                (self.data['psd_LF']['freqs'] >= freq[0])
+                & (self.data['psd_LF']['freqs'] < freq[1])
+            )[0]
             lfp_power = np.mean(self.data['psd_LF']['power'][freq_idx], axis=0)
             lfp_power = 10 * np.log10(lfp_power)
-            probe_img, probe_scale, probe_offset = (
-                arrange_channels_into_banks(self.shank_sites, lfp_power, bnk_width=BNK_SIZE))
-            levels = np.quantile(lfp_power, [0.1, 0.9])
+            probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
+                self.shank_sites, lfp_power, bnk_width=BNK_SIZE
+            )
+            levels = np.nanquantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
                 img=probe_img,
@@ -1307,7 +1422,7 @@ class PlotLoader:
                 cmap='viridis',
                 xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
                 title=f'{freq[0]}-{freq[1]} Hz (dB)',
-                data=lfp_power
+                data=lfp_power,
             )
             data_probe.update({f'{freq[0]} - {freq[1]} Hz': probe})
 
@@ -1327,17 +1442,31 @@ class PlotLoader:
         -----
         - Although this is a probe plot the data is not split into banks as for the case of other
          probe plots.
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            logger.warning(
+                "Receptive field map plots require the optional 'ibllib' dependency; skipping. "
+                "Install it with 'pip install ibl_alignment_gui[ibl]'."
+            )
+            return dict()
+
         # Extract stimulus times and positions
-        rf_map_times, rf_map_pos, rf_stim_frames = (
-            passive.get_on_off_times_and_positions(self.data['rf_map']))
+        rf_map_times, rf_map_pos, rf_stim_frames = passive.get_on_off_times_and_positions(
+            self.data['rf_map']
+        )
 
         # Compute receptive field map over depth
-        rf_map, _ = \
-            passive.get_rf_map_over_depth(rf_map_times, rf_map_pos, rf_stim_frames,
-                                          self.spike_times,
-                                          self.spike_depths,
-                                          d_bin=160, y_lim=[self.chn_min_bc, self.chn_max_bc])
+        rf_map, _ = passive.get_rf_map_over_depth(
+            rf_map_times,
+            rf_map_pos,
+            rf_stim_frames,
+            self.spike_times,
+            self.spike_depths,
+            d_bin=160,
+            y_lim=[self.chn_min_bc, self.chn_max_bc],
+        )
 
         # Apply SVD decomposition to obtain ON and OFF maps
         rfs_svd = passive.get_svd_map(rf_map)
@@ -1346,28 +1475,27 @@ class PlotLoader:
         img['off'] = np.vstack(rfs_svd['off'])
 
         # Scaling
-        yscale = ((self.chn_max - self.chn_min) / img['on'].shape[0])
+        yscale = (self.chn_max - self.chn_min) / img['on'].shape[0]
         xscale = 1
         depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
-        levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
+        levels = np.nanquantile(np.c_[img['on'], img['off']], [0, 1])
 
         data_img = dict()
         sub_type = ['on', 'off']
         for sub in sub_type:
             sub_data = {
-                f'RF Map - {sub}':
-                    ProbeData(
-                        img=img[sub].T,
-                        scale=np.array([xscale, yscale]),
-                        levels=levels,
-                        default_levels=np.copy(levels),
-                        offset=np.array([0, self.chn_min]),
-                        cmap='viridis',
-                        xrange=np.array([0, 15]),
-                        title='rfmap (dB)',
-                        boundaries=depths,
-                        data=None,
-                    )
+                f'RF Map - {sub}': ProbeData(
+                    img=img[sub].T,
+                    scale=np.array([xscale, yscale]),
+                    levels=levels,
+                    default_levels=np.copy(levels),
+                    offset=np.array([0, self.chn_min]),
+                    cmap='viridis',
+                    xrange=np.array([0, 15]),
+                    title='rfmap (dB)',
+                    boundaries=depths,
+                    data=None,
+                )
             }
             data_img.update(sub_data)
 
@@ -1386,25 +1514,24 @@ class PlotLoader:
         Dict
             A dict containing multiple ProbeData objects with keys according to features.
         """
-        ignore_cols = ['pid', 'axial_um', 'lateral_um', 'x', 'y', 'z', 'acronym', 'atlas_id',
-                       'x_target', 'y_target', 'z_target', 'outside', 'Allen_id', 'Cosmos_id',
-                       'Beryl_id']
+        if not EPHYS_ATLAS:
+            return {}
 
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
         chn_coords['localCoordinates'] = np.c_[
-            feature_data['lateral_um'].values, feature_data['axial_um'].values]
+            feature_data['lateral_um'].values, feature_data['axial_um'].values
+        ]
         chn_coords['rawInd'] = np.arange(chn_coords['localCoordinates'].shape[0])
         chn_geom = ChannelGeometry(chn_coords)
         chn_geom.split_sites_per_shank()
         sites = chn_geom._get_sites_for_shank(0)
 
-        features = [k for k in feature_data if k not in ignore_cols]
-        features.sort()
-
         data = Bunch()
 
-        for i, feature in enumerate(features):
+        feature_set = ephysatlas.features.voltage_features_set()
+
+        for i, feature in enumerate(feature_set):
             vals = feature_data[feature].values
             min_val = np.nanmin(vals)
             max_val = np.nanmax(vals)

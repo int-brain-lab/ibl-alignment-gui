@@ -361,12 +361,61 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
             self.uploader.save_channels({'channel_0': {'x': 0}})
             self.assertTrue(self.temp_path.joinpath('channel_locations_shank3.json').exists())
 
+    def test_progress_file(self):
+        """Test the naming of the progress file"""
+        with self.subTest('Single shank data'):
+            self.uploader.n_shanks = 1
+            self.uploader.shank_idx = 0
+            self.assertEqual(self.uploader.progress_file.name, 'alignment_progress.json')
+
+        with self.subTest('Multi shank data'):
+            self.uploader.n_shanks = 4
+            self.uploader.shank_idx = 2
+            self.assertEqual(self.uploader.progress_file.name, 'alignment_progress_shank3.json')
+
+        with self.subTest('No path to save to'):
+            self.uploader.data_path = None
+            self.assertIsNone(self.uploader.progress_file)
+
+    def test_save_progress(self):
+        """Test the save_progress method"""
+        feature = [-0.1, 0, 0.1]
+        track = [-0.3, 0, 0.2]
+
+        with self.subTest('Progress is saved'):
+            self.uploader.save_progress(feature, track)
+            progress_file = self.temp_path.joinpath('alignment_progress.json')
+            self.assertTrue(progress_file.exists())
+            with open(progress_file) as f:
+                progress = json.load(f)
+            self.assertEqual(progress['feature'], feature)
+            self.assertEqual(progress['track'], track)
+            # The save time is stored so that it can be displayed when recovered
+            self.assertIsNotNone(progress['saved'])
+
+        with self.subTest('Saving again replaces the previous progress'):
+            self.uploader.save_progress([-0.2, 0, 0.2], [-0.4, 0, 0.4])
+            with open(progress_file) as f:
+                progress = json.load(f)
+            self.assertEqual(progress['feature'], [-0.2, 0, 0.2])
+
+        with self.subTest('Progress is deleted once uploaded'):
+            self.uploader.delete_progress()
+            self.assertFalse(progress_file.exists())
+
+        with self.subTest('Deleting when there is nothing saved does not raise'):
+            self.uploader.delete_progress()
+
+        with self.subTest('No path to save to'):
+            self.uploader.data_path = None
+            self.assertIn('No location', self.uploader.save_progress(feature, track))
+            self.uploader.delete_progress()
+
     def test_save_json_file(self):
         """Test the _save_json_file method"""
-        file_name = 'test_file.json'
+        file_path = self.temp_path.joinpath('test_file.json')
         json_data = {'a': 1, 'b': 2}
-        self.uploader._save_json_file(file_name, json_data)
-        file_path = self.temp_path.joinpath(file_name)
+        self.uploader._save_json_file(file_path, json_data)
         self.assertTrue(file_path.exists())
         with open(file_path) as f:
             data = json.load(f)

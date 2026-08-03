@@ -227,6 +227,7 @@ class AlignmentGUIController:
         self.view.connect_button('fit', self.fit_button_pressed)
         self.view.connect_button('reset', self.reset_button_pressed)
         self.view.connect_button('upload', self.complete_button_pressed)
+        self.view.connect_button('save', self.save_progress_button_pressed)
         self.view.connect_button('next', self.next_button_pressed)
         self.view.connect_button('previous', self.prev_button_pressed)
 
@@ -252,6 +253,11 @@ class AlignmentGUIController:
             'Reset': {'shortcut': 'Shift+R', 'callback': self.reset_button_pressed},
             # Shortcut to upload final state to Alyx/to local file
             'Upload': {'shortcut': 'Shift+U', 'callback': self.complete_button_pressed},
+            # Shortcut to save the current alignment to file
+            'Save Progress': {
+                'shortcut': 'Shift+S',
+                'callback': self.save_progress_button_pressed,
+            },
         }
         display_options = {
             # Shortcuts to toggle between plots options
@@ -907,11 +913,12 @@ class AlignmentGUIController:
         self.view.clear_selection_dropdown('align')
         self.model.set_info(idx)
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load the stored (resolved) alignment if available, otherwise the most recent
-        stored_alignment_idx = self.model.get_stored_alignment_idx()
-        self.model.get_starting_alignment(stored_alignment_idx)
-        # Highlight the stored alignment as the selected option in the dropdown
-        self.view.set_selection_dropdown('align', stored_alignment_idx)
+        # Load any recovered alignment if available, then the stored (resolved) alignment,
+        # otherwise the most recent
+        start_alignment_idx = self.model.get_start_alignment_idx()
+        self.model.get_starting_alignment(start_alignment_idx)
+        # Highlight the alignment that has been loaded as the selected option in the dropdown
+        self.view.set_selection_dropdown('align', start_alignment_idx)
         if self.loaded is not None:
             # If in tab view, update the tab to display the selected shank
             self.view.set_tabs(idx)
@@ -1331,6 +1338,34 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Upload data
     # --------------------------------------------------------------------------------------------
+    def save_progress_button_pressed(self) -> None:
+        """
+        Triggered when the save progress button or Shift+S is pressed.
+
+        Saves the current alignment of the chosen shanks to file, so that it can be recovered if
+        the GUI crashes before the alignment has been uploaded. The saved alignment is offered in
+        the alignment dropdown the next time the data is loaded, and is deleted once the alignment
+        has been successfully uploaded.
+        """
+        if self._load_thread is not None:
+            return
+
+        if len(self.all_shanks) > 1:
+            shanks_to_save = display_upload_dialog(self)
+        else:
+            shanks_to_save = self.all_shanks
+
+        if not shanks_to_save:
+            return
+
+        info = self.model.save_progress(shanks_to_save)
+        # Label each shank only when more than one was saved
+        if len(info) == 1:
+            message = next(iter(info.values()))
+        else:
+            message = '\n\n'.join(f'{shank}:\n{msg}' for shank, msg in info.items())
+        self.view.upload_info(True, message)
+
     def complete_button_pressed(self) -> None:
         """
         Triggered when complete button or Shift+U is pressed.
@@ -1353,26 +1388,31 @@ class AlignmentGUIController:
         # confirms the upload; offline there is no QC step so a simple upload prompt is used
         # instead. Only one of the two is ever shown per shank.
         approved: list[str] = []
-        for idx, shank in enumerate(shanks_to_upload):
-            self.model.selected_shank = shank
-            self.model.current_shank = shank
+        # The shank is switched to gather the input for each one, so keep track of the one the
+        # user had selected and restore it once the input has been gathered
+        selected_shank = self.model.selected_shank
+        try:
+            for idx, shank in enumerate(shanks_to_upload):
+                self.model.selected_shank = shank
 
-            if not self.offline:
-                # The shanks that haven't been asked about yet
-                remaining = shanks_to_upload[idx + 1 :]
-                # Cancelling the QC dialog aborts the whole upload.
-                if display_qc_dialog(self, shank, allow_apply_all=len(remaining) > 0) == 0:
-                    break
-                approved.append(shank)
-                # Give the remaining shanks the same assessment instead of asking again
-                if self.qc_dialog.apply_to_all:
-                    apply_qc_to_shanks(self, remaining)
-                    approved.extend(remaining)
-                    break
-            elif self.view.upload_prompt(shank):
-                approved.append(shank)
-            else:
-                self.view.upload_info(False)
+                if not self.offline:
+                    # The shanks that haven't been asked about yet
+                    remaining = shanks_to_upload[idx + 1 :]
+                    # Cancelling the QC dialog aborts the whole upload.
+                    if display_qc_dialog(self, shank, allow_apply_all=len(remaining) > 0) == 0:
+                        break
+                    approved.append(shank)
+                    # Give the remaining shanks the same assessment instead of asking again
+                    if self.qc_dialog.apply_to_all:
+                        apply_qc_to_shanks(self, remaining)
+                        approved.extend(remaining)
+                        break
+                elif self.view.upload_prompt(shank):
+                    approved.append(shank)
+                else:
+                    self.view.upload_info(False)
+        finally:
+            self.model.selected_shank = selected_shank
 
         if not approved:
             return

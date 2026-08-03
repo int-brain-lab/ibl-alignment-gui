@@ -28,7 +28,7 @@ class ShankHandler:
         self.loaders: Bunch = loaders
         self.loaders['align'].load_previous_alignments()
         self.loaders['align'].get_starting_alignment(
-            self.loaders['align'].get_stored_alignment_idx()
+            self.loaders['align'].get_start_alignment_idx()
         )
         self.align_exists: bool = True
         self.data_loaded: bool = False
@@ -346,6 +346,9 @@ class ShankHandler:
         """
         Filter the spikesorting data by selected unit type and recompute plot data.
 
+        The levels applied to the plots are kept, so that changing the filter doesn't discard
+        the levels chosen by the user.
+
         Parameters
         ----------
         filter_type: str
@@ -353,7 +356,20 @@ class ShankHandler:
         """
         self.loaders['plots'].filter_units(filter_type)
         self.loaders['plots'].compute_rasters()
-        self.loaders['plots'].get_plots()
+        self.loaders['plots'].get_plots(keep_levels=True)
+
+    def save_progress(self) -> str:
+        """
+        Save the current alignment to file so it can be recovered if the GUI crashes.
+
+        Returns
+        -------
+        str
+            Message containing information about the save result.
+        """
+        return self.loaders['upload'].save_progress(
+            self.align_handle.feature.tolist(), self.align_handle.track.tolist()
+        )
 
     def upload_data(self) -> str:
         """Upload the data, save the channels and the alignments."""
@@ -362,10 +378,21 @@ class ShankHandler:
             'xyz_channels': self.align_handle.xyz_channels,
             'feature': self.align_handle.feature.tolist(),
             'track': self.align_handle.track.tolist(),
-            'alignments': self.loaders['align'].alignments,
+            # Any recovered alignment is left out, it is a local record of work in progress
+            'alignments': self.loaders['align'].uploadable_alignments,
             'cluster_chns': self.cluster_chns,
             'probe_collection': self.loaders['data'].probe_collection,
             'chn_depths': self.chn_depths,
             'xyz_picks': self.loaders['align'].xyz_picks,
         }
-        return self.loaders['upload'].upload_data(data, shank_sites=self.chn_sites)
+        info = self.loaders['upload'].upload_data(data, shank_sites=self.chn_sites)
+
+        # The alignment is now uploaded, so any saved progress is no longer needed
+        if info is not None:
+            self.loaders['upload'].delete_progress()
+            # Reload so that the recovered alignment, whose file has just been deleted, is no
+            # longer offered for this shank
+            self.loaders['align'].load_progress()
+            self.loaders['align'].get_previous_alignments()
+
+        return info

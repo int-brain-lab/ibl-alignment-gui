@@ -443,6 +443,18 @@ class DataLoaderOne(DataLoader):
 
         super().__init__()
 
+    @property
+    def spike_sorting_path(self) -> Path:
+        """
+        Return the path to the folder holding the spike sorting data.
+
+        Returns
+        -------
+        Path
+            The path to the spike sorting folder.
+        """
+        return self.probe_path
+
     def get_spike_sorting_path(self) -> Path:
         """
         Determine the path to the spike sorting output.
@@ -548,6 +560,18 @@ class DataLoaderLocal(DataLoader):
         self.probe_collection: str = self.spike_path.name
 
         super().__init__()
+
+    @property
+    def spike_sorting_path(self) -> Path:
+        """
+        Return the path to the folder holding the spike sorting data.
+
+        Returns
+        -------
+        Path
+            The path to the spike sorting folder.
+        """
+        return self.spike_path
 
     def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
         """

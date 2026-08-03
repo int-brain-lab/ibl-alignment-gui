@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     from ibl_alignment_gui.app.shank_controller import ShankController
     from iblatlas.atlas import AllenAtlas
 
-from ibl_alignment_gui.utils.utils import shank_loop
-from ibl_alignment_gui.utils.qt.custom_widgets import PopupWindow
+from ibl_alignment_gui.utils.helpers import shank_loop
+from ibl_alignment_gui.app.widgets.custom_widgets import PopupWindow
 
 PLUGIN_NAME = "3D features"
 
@@ -58,16 +58,6 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['plot_probe_panels'] = feature3d_plugin.plot_channels
     controller.plugins[PLUGIN_NAME]['plot_scatter_panels'] = feature3d_plugin.plot_clusters
 
-    # # Add a submenu to the main menu
-    # plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
-    # controller.plugin_options.addMenu(plugin_menu)
-    #
-    # # Show the 3D viewer setup
-    # show_action = QtWidgets.QAction('Show 3D Viewer', controller.view)
-    # show_action.triggered.connect(lambda _, c=controller: callback(_, c))
-    # show_action.setCheckable(True)
-    # show_action.setChecked(False)
-    # plugin_menu.addAction(show_action)
 
     action = QtWidgets.QAction(PLUGIN_NAME, controller.view)
     action.triggered.connect(lambda: callback(controller))
@@ -218,12 +208,9 @@ class Features3D:
 
         Called when the data button is pressed in the main application.
         """
-        # Remove existing data
-        for text in self.texts:
-            text.delete()
-        # TODO should delete the regions from the viewer
+
+        self.remove_markers()
         self.remove_regions()
-        self.texts = []
 
         # Find new regions
         regions = get_regions(self.controller)
@@ -347,8 +334,16 @@ class Features3D:
             A list of marker positions, colors, and names.
         """
         for marker in markers:
+            self.texts.append(marker['name'])
             self.viewer.texts.add_text(marker['name'], marker['pos'], marker['col'], 1)
 
+    def remove_markers(self) -> None:
+        """Remove all markers from the 3D view."""
+        for marker in self.texts:
+            self.viewer.texts.hide_text(marker)
+
+        self.texts = []
+        self.view.qfig.update_image()
 
     def update_plots(self) -> None:
         """Update the plots in the 3D view based on the current selection."""

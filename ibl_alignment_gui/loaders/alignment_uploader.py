@@ -33,14 +33,102 @@ class AlignmentUploader(ABC):
     ----------
     brain_atlas : AllenAtlas
         An AllenAtlas instance
+    data_path : Path or None
+        The path to the folder that work in progress alignments are saved to. If None, progress
+        can't be saved.
+    shank_idx : int
+        Index of the shank (0-based).
+    n_shanks : int
+        Total number of shanks.
     """
 
-    def __init__(self, brain_atlas: BrainAtlas) -> None:
+    def __init__(
+        self,
+        brain_atlas: BrainAtlas,
+        data_path: Path | None = None,
+        shank_idx: int = 0,
+        n_shanks: int = 1,
+    ) -> None:
         self.brain_atlas = brain_atlas
+        self.data_path: Path | None = data_path
+        self.shank_idx: int = shank_idx
+        self.n_shanks: int = n_shanks
 
     @abstractmethod
     def upload_data(self, *args, **kwargs) -> str:
         """Upload alignment data."""
+
+    @property
+    def progress_file(self) -> Path | None:
+        """
+        Return the path of the file that work in progress alignments are saved to.
+
+        Returns
+        -------
+        Path or None
+            The path of the file, or None if there is nowhere to save progress to.
+        """
+        if self.data_path is None:
+            return None
+
+        progress_name = (
+            'alignment_progress.json'
+            if self.n_shanks == 1
+            else f'alignment_progress_shank{self.shank_idx + 1}.json'
+        )
+
+        return self.data_path.joinpath(progress_name)
+
+    def save_progress(self, feature: list, track: list) -> str:
+        """
+        Save the current alignment to file so that it can be recovered if the GUI crashes.
+
+        Any previously saved progress is replaced, so the file always holds the most recent
+        alignment. It is deleted once the alignment has been successfully uploaded.
+
+        Parameters
+        ----------
+        feature : list
+            The positions of the feature reference lines.
+        track : list
+            The positions of the track reference lines.
+
+        Returns
+        -------
+        str
+            Message containing information about the save result.
+        """
+        if self.progress_file is None:
+            return 'No location available to save progress to'
+
+        progress = {
+            'feature': feature,
+            'track': track,
+            'saved': datetime.now().replace(second=0, microsecond=0).isoformat(),
+        }
+        self._save_json_file(self.progress_file, progress)
+
+        return f'Progress saved to {self.progress_file}'
+
+    def delete_progress(self) -> None:
+        """Delete any saved progress, as the alignment has now been uploaded."""
+        if self.progress_file is not None:
+            self.progress_file.unlink(missing_ok=True)
+
+    @staticmethod
+    def _save_json_file(file: Path, json_data: dict[str, Any]) -> None:
+        """
+        Save data to a json file.
+
+        Parameters
+        ----------
+        file: Path
+            The path of the json file to save to.
+        json_data:
+            The data to save to the JSON file. Must be JSON serializable
+        """
+        with open(file, 'w') as f:
+            json.dump(json_data, f, indent=2, separators=(',', ': '))
 
 
 class AlignmentUploaderOne(AlignmentUploader):
@@ -55,9 +143,18 @@ class AlignmentUploaderOne(AlignmentUploader):
         An ONE instance used to upload results to Alyx
     brain_atlas : AllenAtlas
         An AllenAtlas object.
+    data_path : Path or None
+        The path to the folder that work in progress alignments are saved to, normally the folder
+        containing the spike sorting data.
     """
 
-    def __init__(self, insertion: dict[str, Any], one: ONE, brain_atlas: atlas.AllenAtlas):
+    def __init__(
+        self,
+        insertion: dict[str, Any],
+        one: ONE,
+        brain_atlas: atlas.AllenAtlas,
+        data_path: Path | None = None,
+    ):
         self.one: ONE = one
         self.pid: str = insertion['id']
         self.pname: str = insertion['name']
@@ -70,7 +167,7 @@ class AlignmentUploaderOne(AlignmentUploader):
         self.force_resolve: bool = False
         self.align_key: str | None = None
 
-        super().__init__(brain_atlas)
+        super().__init__(brain_atlas, data_path=data_path)
 
     def upload_data(self, data: dict[str, Any], **kwargs) -> str:
         """
@@ -345,13 +442,10 @@ class AlignmentUploaderLocal(AlignmentUploader):
         user: str | None = None,
         transform_loader: TransformLoader | None = None,
     ):
-        self.data_path: Path = data_path
-        self.shank_idx: int = shank_idx
-        self.n_shanks: int = n_shanks
         self.user: str | None = user
         self.transform_loader: TransformLoader | None = transform_loader
         self.orig_idx: np.ndarray | None = None
-        super().__init__(brain_atlas)
+        super().__init__(brain_atlas, data_path=data_path, shank_idx=shank_idx, n_shanks=n_shanks)
 
     def upload_data(self, data: dict[str, Any], shank_sites: Bunch[str, Any] | None = None) -> str:
         """
@@ -561,7 +655,7 @@ class AlignmentUploaderLocal(AlignmentUploader):
             else f'prev_alignments_shank{self.shank_idx + 1}.json'
         )
 
-        self._save_json_file(prev_align_filename, alignments)
+        self._save_json_file(self.data_path.joinpath(prev_align_filename), alignments)
 
     def save_channels(self, channels: dict[str, dict], suffix: str = '') -> None:
         """
@@ -581,21 +675,7 @@ class AlignmentUploaderLocal(AlignmentUploader):
             else f'channel_locations{suffix}_shank{self.shank_idx + 1}.json'
         )
 
-        self._save_json_file(chan_loc_filename, channels)
-
-    def _save_json_file(self, file_path: str, json_data: dict[str, Any]) -> None:
-        """
-        Save data to a json file.
-
-        Parameters
-        ----------
-        file_path: str
-            The name of the json file to save to.
-        json_data:
-            The data to save to the JSON file. Must be JSON serializable
-        """
-        with open(self.data_path.joinpath(file_path), 'w') as f:
-            json.dump(json_data, f, indent=2, separators=(',', ': '))
+        self._save_json_file(self.data_path.joinpath(chan_loc_filename), channels)
 
 
 class AlignmentUploaderDocDB(AlignmentUploaderLocal):

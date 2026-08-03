@@ -179,21 +179,23 @@ class ProbeHandler(ABC):
         for config in self.configs:
             self.get_selected_shank()[config].loaders['align'].get_starting_alignment(idx)
 
-    def get_stored_alignment_idx(self) -> int:
+    def get_start_alignment_idx(self) -> int:
         """
-        Return the index of the stored (resolved) alignment for the selected shank.
+        Return the index of the alignment to display for the selected shank when data is loaded.
 
-        Delegates to the default configuration's alignment loader.
+        Delegates to the default configuration's alignment loader. A recovered alignment takes
+        precedence over the stored (resolved) alignment, which in turn takes precedence over the
+        most recent one.
 
         Returns
         -------
         int
-            Index of the stored alignment in the alignment keys list, or 0 if not found.
+            Index of the alignment in the alignment keys list.
         """
         return (
             self.get_selected_shank()[self.default_config]
             .loaders['align']
-            .get_stored_alignment_idx()
+            .get_start_alignment_idx()
         )
 
     def set_init_alignment(self) -> None:
@@ -520,11 +522,39 @@ class ProbeHandler(ABC):
         """
         info: dict[str, str] = {}
         total = len(shanks)
-        for idx, shank in enumerate(shanks):
-            if progress_callback is not None:
-                progress_callback(f'Saving {shank}…', idx, total)
-            self.selected_shank = shank
-            info[shank] = self.upload_data()
+        # The shank is switched to reach each one in turn, so keep the one the user had selected
+        selected_shank = self.selected_shank
+        try:
+            for idx, shank in enumerate(shanks):
+                if progress_callback is not None:
+                    progress_callback(f'Saving {shank}…', idx, total)
+                self.selected_shank = shank
+                info[shank] = self.upload_data()
+        finally:
+            self.selected_shank = selected_shank
+
+        return info
+
+    def save_progress(self, shanks: list[str]) -> dict[str, str]:
+        """
+        Save the current alignment of several shanks to file.
+
+        The alignments are saved so that they can be recovered if the GUI crashes before they
+        have been uploaded. Only the default configuration is saved.
+
+        Parameters
+        ----------
+        shanks : list of str
+            The shanks to save the alignment for.
+
+        Returns
+        -------
+        dict[str, str]
+            A mapping of shank label to the save result message for that shank.
+        """
+        info: dict[str, str] = {}
+        for shank in shanks:
+            info[shank] = self.shanks[shank][self.default_config].save_progress()
         return info
 
     # -------------------------------------------------------------------------
@@ -774,8 +804,14 @@ class ProbeHandlerONE(ProbeHandler):
             loaders['geom'] = GeometryLoaderOne(
                 ins, self.one, probe_collection=loaders['data'].probe_collection
             )
-            loaders['align'] = AlignmentLoaderOne(ins, self.one)
-            loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
+            # Work in progress alignments are saved next to the spike sorting data
+            spike_path = loaders['data'].spike_sorting_path
+            loaders['align'] = AlignmentLoaderOne(
+                ins, self.one, user=params.get().ALYX_LOGIN, data_path=spike_path
+            )
+            loaders['upload'] = AlignmentUploaderOne(
+                ins, self.one, self.brain_atlas, data_path=spike_path
+            )
             loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
             if EPHYS_ATLAS:
                 loaders['features'] = FeatureLoaderOne(
@@ -787,6 +823,7 @@ class ProbeHandlerONE(ProbeHandler):
     def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """Load data for all configs and shanks."""
         print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
+        print(f'******** pid: {self.pid} ********')
         super().load_data(progress_callback=progress_callback)
 
 
@@ -925,7 +962,7 @@ class ProbeHandlerCSV(ProbeHandler):
                     data_paths.spike_sorting, 0, 1, user=user, xyz_picks=xyz_picks
                 )
                 loaders['upload'] = AlignmentUploaderLocal(
-                    data_paths.spike_sorting, 0, loaders['geom'], self.brain_atlas, user=user
+                    data_paths.spike_sorting, 0, 1, self.brain_atlas, user=user
                 )
                 loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
                 loaders['plots'] = PlotLoader()
@@ -942,8 +979,14 @@ class ProbeHandlerCSV(ProbeHandler):
                     loaders['data'] = DataLoaderLocal(data_paths)
                     loaders['geom'] = GeometryLoaderLocal(data_paths)
 
-                loaders['align'] = AlignmentLoaderOne(ins, self.one, user=user)
-                loaders['upload'] = AlignmentUploaderOne(ins, self.one, self.brain_atlas)
+                # Work in progress alignments are saved next to the spike sorting data
+                spike_path = loaders['data'].spike_sorting_path
+                loaders['align'] = AlignmentLoaderOne(
+                    ins, self.one, user=user, data_path=spike_path
+                )
+                loaders['upload'] = AlignmentUploaderOne(
+                    ins, self.one, self.brain_atlas, data_path=spike_path
+                )
                 loaders['ephys'] = SpikeGLXLoaderOne(ins, self.one)
                 if EPHYS_ATLAS:
                     loaders['features'] = FeatureLoaderOne(
@@ -967,18 +1010,18 @@ class ProbeHandlerCSV(ProbeHandler):
                 quarter_align.alignments = dense_align.alignments
                 quarter_align.stored_alignment_key = dense_align.stored_alignment_key
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
+                quarter_align.get_starting_alignment(quarter_align.get_start_alignment_idx())
 
             elif quarter_align.alignment_keys != ['original']:
                 # Local alignment exists: add to online
                 dense_align.add_extra_alignments(quarter_align.alignments)
                 dense_align.get_previous_alignments()
-                dense_align.get_starting_alignment(dense_align.get_stored_alignment_idx())
+                dense_align.get_starting_alignment(dense_align.get_start_alignment_idx())
 
                 # Ensure consistency by syncing quarter with updated dense
                 quarter_align.alignments = dense_align.alignments
                 quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(quarter_align.get_stored_alignment_idx())
+                quarter_align.get_starting_alignment(quarter_align.get_start_alignment_idx())
 
     def get_insertion(self, shank: pd.Series) -> dict:
         """Get the alyx probe insertion for the shank."""
@@ -1343,4 +1386,4 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
 
                 align = handler.loaders['align']
                 align.load_previous_alignments()
-                align.get_starting_alignment(align.get_stored_alignment_idx())
+                align.get_starting_alignment(align.get_start_alignment_idx())

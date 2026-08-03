@@ -761,6 +761,11 @@ class ButtonWidget(QtWidgets.QWidget):
         self.buttons['reset'] = QtWidgets.QPushButton('Reset')
         # Button to upload final state to Alyx/ to local file
         self.buttons['upload'] = QtWidgets.QPushButton('Upload')
+        # Button to save the current alignment to file so it can be recovered after a crash
+        self.buttons['save'] = QtWidgets.QPushButton('Save Progress')
+        self.buttons['save'].setToolTip(
+            'Save the current alignment to file so that it can be recovered if the GUI crashes'
+        )
         # Button to go to next move
         self.buttons['next'] = QtWidgets.QPushButton('Next')
         # Button to go to previous move
@@ -771,6 +776,7 @@ class ButtonWidget(QtWidgets.QWidget):
         # Layout rows
         hlayout1 = QtWidgets.QHBoxLayout()
         hlayout1.addWidget(self.buttons['fit'], stretch=1)
+        hlayout1.addWidget(self.buttons['save'], stretch=1)
         hlayout1.addWidget(QtWidgets.QLabel(), stretch=2)
         hlayout2 = QtWidgets.QHBoxLayout()
         hlayout2.addWidget(self.buttons['previous'], stretch=1)

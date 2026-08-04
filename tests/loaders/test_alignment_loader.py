@@ -273,3 +273,182 @@ class TestAlignmentLoaderLocal(unittest.TestCase):
             file_path.write_text('{"key": "missing end quote}')
             with self.assertRaises(JSONDecodeError):
                 AlignmentLoaderLocal._load_json_file(file_path)
+
+
+class TestSavedProgress(unittest.TestCase):
+    """Test loading a saved work in progress alignment"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        self.alignments = {
+            '2025-07-03_user1': [[0.5, 0, 0.5], [0.2, 0, 0.2]],
+            '2025-06-10_user2': [[0.2, 0, 0.1], [0.2, 0, 0.1]],
+        }
+        self.progress = {
+            'feature': [0.1, 0, 0.1],
+            'track': [0.3, 0, 0.3],
+            'saved': '2026-08-03T14:22:00',
+        }
+        self.recovered_key = 'recovered (2026-08-03T14:22:00)'
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def create_progress_file(self, fname: str = 'alignment_progress.json'):
+        with open(self.temp_path.joinpath(fname), 'w') as f:
+            json.dump(self.progress, f)
+
+    def make_loader(self, n_shanks: int = 1, shank_idx: int = 0):
+        insertion = {'id': uuid.uuid4(), 'json': {}}
+        loader = AlignmentLoaderOne(
+            insertion, MagicMock(), user='test_user', data_path=self.temp_path
+        )
+        loader.n_shanks = n_shanks
+        loader.shank_idx = shank_idx
+        loader.load_alignments = MagicMock(return_value=dict(self.alignments))
+
+        return loader
+
+    def test_no_progress_file(self):
+        """Test that nothing is recovered when no progress has been saved"""
+        loader = self.make_loader()
+        keys = loader.load_previous_alignments()
+
+        self.assertIsNone(loader.recovered_key)
+        self.assertEqual(keys, sorted(self.alignments, reverse=True) + ['original'])
+        # With nothing recovered the stored alignment is used as the starting point
+        self.assertEqual(loader.get_start_alignment_idx(), loader.get_stored_alignment_idx())
+
+    def test_progress_is_recovered(self):
+        """Test that saved progress is added to the alignments and chosen as the start"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        keys = loader.load_previous_alignments()
+
+        self.assertEqual(loader.recovered_key, self.recovered_key)
+        self.assertIn(self.recovered_key, keys)
+        self.assertEqual(
+            loader.alignments[self.recovered_key],
+            [self.progress['feature'], self.progress['track']],
+        )
+
+        # The recovered alignment is the one displayed when the data is loaded
+        idx = loader.get_start_alignment_idx()
+        self.assertEqual(loader.alignment_keys[idx], self.recovered_key)
+        loader.get_starting_alignment(idx)
+        np.testing.assert_array_equal(loader.feature_prev, self.progress['feature'])
+        np.testing.assert_array_equal(loader.track_prev, self.progress['track'])
+
+    def test_recovered_takes_precedence_over_stored(self):
+        """Test that a recovered alignment is displayed even when a stored one exists"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        loader.stored_alignment_key = '2025-06-10_user2'
+        loader.load_previous_alignments()
+
+        idx = loader.get_start_alignment_idx()
+        self.assertEqual(loader.alignment_keys[idx], self.recovered_key)
+        # The stored alignment is still reachable from the dropdown
+        self.assertIn('2025-06-10_user2', loader.alignment_keys)
+
+    def test_recovered_is_not_uploadable(self):
+        """Test that the recovered alignment is never included in an upload"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        loader.load_previous_alignments()
+
+        self.assertIn(self.recovered_key, loader.alignments)
+        self.assertNotIn(self.recovered_key, loader.uploadable_alignments)
+        self.assertEqual(loader.uploadable_alignments, self.alignments)
+
+    def test_recovered_from_other_loader_is_not_uploadable(self):
+        """Test that a recovered alignment copied in from another loader is also excluded"""
+        loader = self.make_loader()
+        loader.load_previous_alignments()
+        # Alignments are copied wholesale between the loaders of different configurations, so a
+        # recovered alignment can arrive from a loader that saved it
+        self.assertIsNone(loader.recovered_key)
+        loader.alignments['recovered (2026-08-01T09:00:00)'] = [[0.1], [0.1]]
+
+        self.assertEqual(loader.uploadable_alignments, self.alignments)
+
+    def test_recovered_key_follows_the_alignments(self):
+        """Test that the recovered key is picked up from alignments shared between loaders"""
+        self.create_progress_file()
+        saved = self.make_loader()
+        saved.load_previous_alignments()
+
+        # The loaders of different configurations end up sharing one alignments dict, so a loader
+        # with no progress file of its own must still recognise the recovered alignment
+        other = self.make_loader()
+        other.data_path = None
+        other.load_previous_alignments()
+        self.assertIsNone(other.recovered_key)
+        other.alignments = saved.alignments
+        other.get_previous_alignments()
+
+        self.assertEqual(other.recovered_key, self.recovered_key)
+        idx = other.get_start_alignment_idx()
+        self.assertEqual(other.alignment_keys[idx], self.recovered_key)
+
+    def test_most_recent_recovered_key_is_used(self):
+        """Test that the newest recovered alignment is used when two have been merged in"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        loader.load_previous_alignments()
+        # An older one merged in from another configuration must not win
+        loader.alignments['recovered (2026-08-01T09:00:00)'] = [[0.1], [0.1]]
+
+        self.assertEqual(loader.recovered_key, self.recovered_key)
+
+    def test_progress_replaces_previous_recovery(self):
+        """Test that reloading never leaves more than one recovered alignment behind"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        loader.load_previous_alignments()
+
+        # Saving again gives a new key, the stale one must not linger in the dropdown
+        self.progress['saved'] = '2026-08-03T15:30:00'
+        self.create_progress_file()
+        keys = loader.load_previous_alignments()
+
+        recovered = [key for key in keys if key.startswith('recovered')]
+        self.assertEqual(recovered, ['recovered (2026-08-03T15:30:00)'])
+
+    def test_progress_recovered_on_refresh(self):
+        """Test that the recovered alignment survives the alignments being reloaded"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        loader.load_previous_alignments()
+        # Refreshing happens after an upload, so the recovery must not be lost
+        keys = loader.load_previous_alignments()
+        self.assertIn(self.recovered_key, keys)
+
+        # Once the progress file is deleted the recovered alignment goes away
+        self.temp_path.joinpath('alignment_progress.json').unlink()
+        keys = loader.load_previous_alignments()
+        self.assertIsNone(loader.recovered_key)
+        self.assertNotIn(self.recovered_key, keys)
+
+    def test_progress_multi_shank(self):
+        """Test that each shank recovers its own saved progress"""
+        self.create_progress_file('alignment_progress_shank3.json')
+
+        with self.subTest('Shank with saved progress'):
+            loader = self.make_loader(n_shanks=4, shank_idx=2)
+            self.assertIn(self.recovered_key, loader.load_previous_alignments())
+
+        with self.subTest('Shank without saved progress'):
+            loader = self.make_loader(n_shanks=4, shank_idx=0)
+            self.assertNotIn(self.recovered_key, loader.load_previous_alignments())
+
+    def test_no_data_path(self):
+        """Test that nothing is recovered when there is nowhere to load progress from"""
+        self.create_progress_file()
+        loader = self.make_loader()
+        loader.data_path = None
+        keys = loader.load_previous_alignments()
+
+        self.assertIsNone(loader.recovered_key)
+        self.assertNotIn(self.recovered_key, keys)

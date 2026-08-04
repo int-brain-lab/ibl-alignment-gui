@@ -1238,7 +1238,7 @@ class AlignmentGUIController:
         self.model.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
-        # If csv add the config options
+        # If multiple configs add the config options
         if self.view.config:
             self.view.populate_selection_dropdown('config', self.model.possible_configs)
         # Load in the shank panels and configure figures for initial config
@@ -1428,8 +1428,11 @@ class AlignmentGUIController:
 
     def _on_upload_finished(self, info: dict[str, str]) -> None:
         """Refresh the alignment dropdown and report results once saving completes."""
-        self.view.populate_selection_dropdown('align', self.model.load_previous_alignments())
+        self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
+        # Load in the latest alignment (the one that was just saved) so the display reflects the saved state
         self.model.get_starting_alignment(0)
+        self.view.set_selection_dropdown('align', 0)
+
         # Combine the per-shank results into a single message. Label each shank only when more
         # than one was uploaded, so the single-shank case reads exactly as before.
         if len(info) == 1:

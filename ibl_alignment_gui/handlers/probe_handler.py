@@ -203,6 +203,53 @@ class ProbeHandler(ABC):
         for config in self.configs:
             self.get_selected_shank()[config].set_init_alignment()
 
+
+    def sync_config_alignments(self) -> None:
+        """
+        Make the configurations of a shank share one set of alignments.
+
+        The alignments of the default configuration are shared with the non default one, so that
+        the alignments, and the keys used to choose between them, can never differ between the
+        configurations of a shank. Both configurations refer to the same dictionary, so any later
+        change is seen by both. Does nothing when there is only one configuration.
+
+        The default configuration is the source of truth, so where it is the online one its
+        alignments take precedence over any that were found locally. Where it has no alignments of
+        its own it takes on those of the other configuration, so that none are lost.
+
+        The starting alignment of both configurations is set, as the alignments they can choose
+        between may have changed.
+
+        """
+        if self.non_default_config is None:
+            return
+
+
+        for shank in self.shanks:
+            default = self.shanks[shank].get(self.default_config)
+            other = self.shanks[shank].get(self.non_default_config)
+
+            if default is None or other is None:
+                continue
+
+            default_align = default.loaders['align']
+            other_align = other.loaders['align']
+
+            # Where the default configuration has nothing of its own, take on the alignments of
+            # the other configuration rather than discarding them
+            if not default_align.alignments and other_align.alignments:
+                default_align.add_extra_alignments(other_align.alignments)
+
+            other_align.alignments = default_align.alignments
+            other_align.stored_alignment_key = default_align.stored_alignment_key
+
+            # The alignments are shared, so the same index applies to both configurations
+            default_align.get_previous_alignments()
+            other_align.get_previous_alignments()
+            idx = default_align.get_start_alignment_idx()
+            default_align.get_starting_alignment(idx)
+            other_align.get_starting_alignment(idx)
+
     # -------------------------------------------------------------------------
     # Alignment handler methods - methods in align_handle
     # -------------------------------------------------------------------------
@@ -530,6 +577,8 @@ class ProbeHandler(ABC):
                     progress_callback(f'Saving {shank}…', idx, total)
                 self.selected_shank = shank
                 info[shank] = self.upload_data()
+                self.load_previous_alignments()
+                self.get_starting_alignment(0)
         finally:
             self.selected_shank = selected_shank
 
@@ -995,33 +1044,11 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['dense'] = ShankHandler(loaders, 0)
 
-        self._sync_alignments()
+        # The dense configuration is the default one and is read from Alyx, so its alignments take
+        # precedence over the local ones of the quarter configuration
+        self.sync_config_alignments()
         self.subj = shank['subject']
         self.lab = shank['lab']
-
-    def _sync_alignments(self) -> None:
-        """Synchronize alignments between dense and quarter loaders."""
-        for _, shank_group in self.shanks.items():
-            dense_align = shank_group['dense'].loaders['align']
-            quarter_align = shank_group['quarter'].loaders['align']
-
-            if dense_align.alignment_keys != ['original']:
-                # Alyx alignment exists: overwrite local
-                quarter_align.alignments = dense_align.alignments
-                quarter_align.stored_alignment_key = dense_align.stored_alignment_key
-                quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(quarter_align.get_start_alignment_idx())
-
-            elif quarter_align.alignment_keys != ['original']:
-                # Local alignment exists: add to online
-                dense_align.add_extra_alignments(quarter_align.alignments)
-                dense_align.get_previous_alignments()
-                dense_align.get_starting_alignment(dense_align.get_start_alignment_idx())
-
-                # Ensure consistency by syncing quarter with updated dense
-                quarter_align.alignments = dense_align.alignments
-                quarter_align.get_previous_alignments()
-                quarter_align.get_starting_alignment(quarter_align.get_start_alignment_idx())
 
     def get_insertion(self, shank: pd.Series) -> dict:
         """Get the alyx probe insertion for the shank."""
@@ -1230,6 +1257,10 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank][config] = ShankHandler(loaders, ishank)
 
+        # Each configuration has loaded the alignments from its own paths, so share them to keep
+        # the configurations of each shank in step
+        self.sync_config_alignments()
+
     def _build_align_loader(self, data_path: DatasetPaths, ishank: int) -> AlignmentLoaderLocal:
         """
         Build the alignment loader for a shank.
@@ -1393,6 +1424,7 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
                 handler.loaders['align'].use_db = use_docdb
                 handler.loaders['upload'].use_db = use_docdb
 
-                align = handler.loaders['align']
-                align.load_previous_alignments()
-                align.get_starting_alignment(align.get_start_alignment_idx())
+                handler.loaders['align'].load_previous_alignments()
+
+        # Each configuration has re-read the alignments from its own source, so share them again
+        self.sync_config_alignments()

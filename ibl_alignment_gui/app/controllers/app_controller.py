@@ -21,6 +21,7 @@ from ibl_alignment_gui.handlers.probe_handler import (
 )
 from ibl_alignment_gui.loaders import plot_loader
 from ibl_alignment_gui.plugins.add_plugins import Plugins
+from ibl_alignment_gui.plugins.qc_dialog import apply_to_shanks as apply_qc_to_shanks
 from ibl_alignment_gui.plugins.qc_dialog import display as display_qc_dialog
 from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_dialog
 from ibl_alignment_gui.utils.helpers import shank_loop
@@ -226,6 +227,7 @@ class AlignmentGUIController:
         self.view.connect_button('fit', self.fit_button_pressed)
         self.view.connect_button('reset', self.reset_button_pressed)
         self.view.connect_button('upload', self.complete_button_pressed)
+        self.view.connect_button('save', self.save_progress_button_pressed)
         self.view.connect_button('next', self.next_button_pressed)
         self.view.connect_button('previous', self.prev_button_pressed)
 
@@ -251,6 +253,11 @@ class AlignmentGUIController:
             'Reset': {'shortcut': 'Shift+R', 'callback': self.reset_button_pressed},
             # Shortcut to upload final state to Alyx/to local file
             'Upload': {'shortcut': 'Shift+U', 'callback': self.complete_button_pressed},
+            # Shortcut to save the current alignment to file
+            'Save Progress': {
+                'shortcut': 'Shift+S',
+                'callback': self.save_progress_button_pressed,
+            },
         }
         display_options = {
             # Shortcuts to toggle between plots options
@@ -553,7 +560,7 @@ class AlignmentGUIController:
         """Plot channels on slice plots."""
         self.show_channels = True
         c = 'g' if items.config == self.model.default_config else 'r'
-        items.plot_channels(self.slice_figs[kwargs.get('shank')], colour=c)
+        items.plot_channels(self.slice_figs[kwargs.get('shank')], self.probe_init, c)
 
     def plot_line_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -773,6 +780,10 @@ class AlignmentGUIController:
             data_only=data_only,
             **kwargs,
         )
+        if self.model.selected_config == 'both':
+            self.plot_channel_panels()
+        else:
+            self.plot_channel_panels(configs=[self.model.selected_config])
 
     def plot_dual_colorbar(self, results: Bunch, fig: str) -> None:
         """
@@ -902,11 +913,12 @@ class AlignmentGUIController:
         self.view.clear_selection_dropdown('align')
         self.model.set_info(idx)
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load the stored (resolved) alignment if available, otherwise the most recent
-        stored_alignment_idx = self.model.get_stored_alignment_idx()
-        self.model.get_starting_alignment(stored_alignment_idx)
-        # Highlight the stored alignment as the selected option in the dropdown
-        self.view.set_selection_dropdown('align', stored_alignment_idx)
+        # Load any recovered alignment if available, then the stored (resolved) alignment,
+        # otherwise the most recent
+        start_alignment_idx = self.model.get_start_alignment_idx()
+        self.model.get_starting_alignment(start_alignment_idx)
+        # Highlight the alignment that has been loaded as the selected option in the dropdown
+        self.view.set_selection_dropdown('align', start_alignment_idx)
         if self.loaded is not None:
             # If in tab view, update the tab to display the selected shank
             self.view.set_tabs(idx)
@@ -1226,7 +1238,7 @@ class AlignmentGUIController:
         self.model.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
-        # If csv add the config options
+        # If multiple configs add the config options
         if self.view.config:
             self.view.populate_selection_dropdown('config', self.model.possible_configs)
         # Load in the shank panels and configure figures for initial config
@@ -1269,9 +1281,6 @@ class AlignmentGUIController:
         self.set_probe_lims(data_only=True)
         self.set_yaxis_lims()
 
-        # Initialise ephys plots
-        self.set_ephys_plots()
-
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
         self.get_scaled_histology()
@@ -1281,6 +1290,9 @@ class AlignmentGUIController:
         self.show_labels = False
         self.toggle_labels()
         self.update_string()
+
+        # Initialise ephys plots
+        self.set_ephys_plots()
 
         # Add reference lines to the display
         if init:
@@ -1326,6 +1338,34 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Upload data
     # --------------------------------------------------------------------------------------------
+    def save_progress_button_pressed(self) -> None:
+        """
+        Triggered when the save progress button or Shift+S is pressed.
+
+        Saves the current alignment of the chosen shanks to file, so that it can be recovered if
+        the GUI crashes before the alignment has been uploaded. The saved alignment is offered in
+        the alignment dropdown the next time the data is loaded, and is deleted once the alignment
+        has been successfully uploaded.
+        """
+        if self._load_thread is not None:
+            return
+
+        if len(self.all_shanks) > 1:
+            shanks_to_save = display_upload_dialog(self)
+        else:
+            shanks_to_save = self.all_shanks
+
+        if not shanks_to_save:
+            return
+
+        info = self.model.save_progress(shanks_to_save)
+        # Label each shank only when more than one was saved
+        if len(info) == 1:
+            message = next(iter(info.values()))
+        else:
+            message = '\n\n'.join(f'{shank}:\n{msg}' for shank, msg in info.items())
+        self.view.upload_info(True, message)
+
     def complete_button_pressed(self) -> None:
         """
         Triggered when complete button or Shift+U is pressed.
@@ -1348,19 +1388,31 @@ class AlignmentGUIController:
         # confirms the upload; offline there is no QC step so a simple upload prompt is used
         # instead. Only one of the two is ever shown per shank.
         approved: list[str] = []
-        for shank in shanks_to_upload:
-            self.model.selected_shank = shank
-            self.model.current_shank = shank
+        # The shank is switched to gather the input for each one, so keep track of the one the
+        # user had selected and restore it once the input has been gathered
+        selected_shank = self.model.selected_shank
+        try:
+            for idx, shank in enumerate(shanks_to_upload):
+                self.model.selected_shank = shank
 
-            if not self.offline:
-                # Cancelling the QC dialog aborts the whole upload.
-                if display_qc_dialog(self, shank) == 0:
-                    break
-                approved.append(shank)
-            elif self.view.upload_prompt(shank):
-                approved.append(shank)
-            else:
-                self.view.upload_info(False)
+                if not self.offline:
+                    # The shanks that haven't been asked about yet
+                    remaining = shanks_to_upload[idx + 1 :]
+                    # Cancelling the QC dialog aborts the whole upload.
+                    if display_qc_dialog(self, shank, allow_apply_all=len(remaining) > 0) == 0:
+                        break
+                    approved.append(shank)
+                    # Give the remaining shanks the same assessment instead of asking again
+                    if self.qc_dialog.apply_to_all:
+                        apply_qc_to_shanks(self, remaining)
+                        approved.extend(remaining)
+                        break
+                elif self.view.upload_prompt(shank):
+                    approved.append(shank)
+                else:
+                    self.view.upload_info(False)
+        finally:
+            self.model.selected_shank = selected_shank
 
         if not approved:
             return
@@ -1376,8 +1428,11 @@ class AlignmentGUIController:
 
     def _on_upload_finished(self, info: dict[str, str]) -> None:
         """Refresh the alignment dropdown and report results once saving completes."""
-        self.view.populate_selection_dropdown('align', self.model.load_previous_alignments())
+        self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
+        # Load in the latest alignment (the one that was just saved) so the display reflects the saved state
         self.model.get_starting_alignment(0)
+        self.view.set_selection_dropdown('align', 0)
+
         # Combine the per-shank results into a single message. Label each shank only when more
         # than one was uploaded, so the single-shank case reads exactly as before.
         if len(info) == 1:

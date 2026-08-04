@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from ibl_alignment_gui.loaders.alignment_loader import AlignmentLoaderLocal
 from ibl_alignment_gui.loaders.alignment_uploader import (
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
@@ -361,13 +362,119 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
             self.uploader.save_channels({'channel_0': {'x': 0}})
             self.assertTrue(self.temp_path.joinpath('channel_locations_shank3.json').exists())
 
+    def test_progress_file(self):
+        """Test the naming of the progress file"""
+        with self.subTest('Single shank data'):
+            self.uploader.n_shanks = 1
+            self.uploader.shank_idx = 0
+            self.assertEqual(self.uploader.progress_file.name, 'alignment_progress.json')
+
+        with self.subTest('Multi shank data'):
+            self.uploader.n_shanks = 4
+            self.uploader.shank_idx = 2
+            self.assertEqual(self.uploader.progress_file.name, 'alignment_progress_shank3.json')
+
+        with self.subTest('No path to save to'):
+            self.uploader.data_path = None
+            self.assertIsNone(self.uploader.progress_file)
+
+    def test_save_progress(self):
+        """Test the save_progress method"""
+        feature = [-0.1, 0, 0.1]
+        track = [-0.3, 0, 0.2]
+
+        with self.subTest('Progress is saved'):
+            self.uploader.save_progress(feature, track)
+            progress_file = self.temp_path.joinpath('alignment_progress.json')
+            self.assertTrue(progress_file.exists())
+            with open(progress_file) as f:
+                progress = json.load(f)
+            self.assertEqual(progress['feature'], feature)
+            self.assertEqual(progress['track'], track)
+            # The save time is stored so that it can be displayed when recovered
+            self.assertIsNotNone(progress['saved'])
+
+        with self.subTest('Saving again replaces the previous progress'):
+            self.uploader.save_progress([-0.2, 0, 0.2], [-0.4, 0, 0.4])
+            with open(progress_file) as f:
+                progress = json.load(f)
+            self.assertEqual(progress['feature'], [-0.2, 0, 0.2])
+
+        with self.subTest('Progress is deleted once uploaded'):
+            self.uploader.delete_progress()
+            self.assertFalse(progress_file.exists())
+
+        with self.subTest('Deleting when there is nothing saved does not raise'):
+            self.uploader.delete_progress()
+
+        with self.subTest('No path to save to'):
+            self.uploader.data_path = None
+            self.assertIn('No location', self.uploader.save_progress(feature, track))
+            self.uploader.delete_progress()
+
     def test_save_json_file(self):
         """Test the _save_json_file method"""
-        file_name = 'test_file.json'
+        file_path = self.temp_path.joinpath('test_file.json')
         json_data = {'a': 1, 'b': 2}
-        self.uploader._save_json_file(file_name, json_data)
-        file_path = self.temp_path.joinpath(file_name)
+        self.uploader._save_json_file(file_path, json_data)
         self.assertTrue(file_path.exists())
         with open(file_path) as f:
             data = json.load(f)
         self.assertEqual(data, json_data)
+
+
+class TestUploaderLoaderPaths(unittest.TestCase):
+    """Test that the uploader writes the files that the loader reads back in.
+
+    The filenames are built separately in the loader and the uploader, and the two can be given
+    different folders, so a full round trip is checked here.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        self.alignments = {'2025-07-03_user1': [[0.5, 0, 0.5], [0.2, 0, 0.2]]}
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_round_trip_separate_picks_and_output(self):
+        """Test the round trip when the picks and the results are in different folders"""
+        # The layout documented for multi shank yaml sessions, picks and output kept apart
+        picks = self.temp_path.joinpath('picks')
+        output = self.temp_path.joinpath('output')
+        picks.mkdir()
+        output.mkdir()
+        with open(picks.joinpath('xyz_picks_shank1.json'), 'w') as f:
+            json.dump({'xyz_picks': [[1000, 2000, 3000]]}, f)
+
+        loader = AlignmentLoaderLocal(output, 0, 4, picks_path=picks)
+        uploader = AlignmentUploaderLocal(output, 0, 4, MagicMock())
+
+        # The picks are an input, so they are read from the picks folder
+        self.assertIsNotNone(loader.xyz_picks)
+
+        # The alignments and the progress are results, so they are read from the output folder
+        uploader.save_alignments(self.alignments)
+        self.assertEqual(loader.load_alignments(), self.alignments)
+
+        uploader.save_progress([-0.1, 0, 0.1], [-0.3, 0, 0.2])
+        loader.load_progress()
+        self.assertIsNotNone(loader.recovered_key)
+        self.assertEqual(loader.alignments[loader.recovered_key], [[-0.1, 0, 0.1], [-0.3, 0, 0.2]])
+
+    def test_round_trip_one_folder(self):
+        """Test the round trip when everything sits in a single folder"""
+        for n_shanks, shank_idx in [(1, 0), (4, 2)]:
+            with self.subTest(f'{n_shanks} shanks, shank index {shank_idx}'):
+                loader = AlignmentLoaderLocal(self.temp_path, shank_idx, n_shanks, xyz_picks=[])
+                uploader = AlignmentUploaderLocal(self.temp_path, shank_idx, n_shanks, MagicMock())
+                # The picks default to being read from the same folder as the results
+                self.assertEqual(loader.picks_path, loader.data_path)
+
+                uploader.save_alignments(self.alignments)
+                self.assertEqual(loader.load_alignments(), self.alignments)
+
+                uploader.save_progress([-0.1, 0, 0.1], [-0.3, 0, 0.2])
+                loader.load_progress()
+                self.assertIsNotNone(loader.recovered_key)

@@ -20,13 +20,14 @@ dependencies = [
   "matplotlib",
   "simpleitk",
   "pydantic",
-  #"ibl-datoviz"
+  "ibl-datoviz @ git+https://github.com/int-brain-lab/ibl-datoviz.git"
 ]
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
+ephysatlas = ["ibleatools[lite] @ git+https://github.com/int-brain-lab/ibleatools.git"]
 # IBL online mode (ONE/Alyx): raw-data streaming, alignment upload/QC and passive/RF plots.
 # Installs ibllib (which also provides brainbox). Not required for offline mode.
 ibl = ["ibllib"]

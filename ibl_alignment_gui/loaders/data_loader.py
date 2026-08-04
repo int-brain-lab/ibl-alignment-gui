@@ -443,6 +443,18 @@ class DataLoaderOne(DataLoader):
 
         super().__init__()
 
+    @property
+    def spike_sorting_path(self) -> Path:
+        """
+        Return the path to the folder holding the spike sorting data.
+
+        Returns
+        -------
+        Path
+            The path to the spike sorting folder.
+        """
+        return self.probe_path
+
     def get_spike_sorting_path(self) -> Path:
         """
         Determine the path to the spike sorting output.
@@ -548,6 +560,18 @@ class DataLoaderLocal(DataLoader):
         self.probe_collection: str = self.spike_path.name
 
         super().__init__()
+
+    @property
+    def spike_sorting_path(self) -> Path:
+        """
+        Return the path to the folder holding the spike sorting data.
+
+        Returns
+        -------
+        Path
+            The path to the spike sorting folder.
+        """
+        return self.spike_path
 
     def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
         """
@@ -810,7 +834,8 @@ class SpikeGLXLoader(ABC):
 
         # Detect bad channels and destripe
         channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, sr.fs, **kwargs)
-        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels)
+        raw = ibldsp.voltage.destripe(raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels,
+                                      k_filter=False)
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))

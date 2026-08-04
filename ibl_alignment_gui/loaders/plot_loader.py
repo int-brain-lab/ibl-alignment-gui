@@ -246,6 +246,9 @@ FILTER_MATCH = {
 # Custom filters that can be added as through plugins
 CUSTOM_FILTERS: dict[str, Callable[[Any], np.ndarray]] = {}
 
+# The plot types whose levels can be changed by the user
+LEVEL_PLOT_TYPES = ['image', 'scatter', 'line', 'probe']
+
 TBIN = 0.05
 DBIN = 5
 BNK_SIZE = 10
@@ -437,9 +440,19 @@ class PlotLoader:
         self.compute_avg_cluster_activity()
         self.compute_rasters()
 
-    def get_plots(self):
+    def get_plots(self, keep_levels: bool = False):
         """
         Get all plot data for the different plot types.
+
+        The plots are generated from scratch, so the levels that have been applied to them are
+        replaced by the defaults for the newly generated data. Set `keep_levels` to reapply
+        them instead, for example when regenerating the plots after changing the unit filter,
+        where the levels chosen by the user should be kept.
+
+        Parameters
+        ----------
+        keep_levels: bool, default=False
+            Whether to reapply the levels that are currently applied to the plots.
 
         Notes
         -----
@@ -454,11 +467,51 @@ class PlotLoader:
         self.probe_plots : Bunch
             All plots of type probe
         """
+        levels = self._get_applied_levels() if keep_levels else {}
+
         self.image_plots = self._get_plots('image')
         self.scatter_plots = self._get_plots('scatter')
         self.line_plots = self._get_plots('line')
         self.probe_plots = self._get_plots('probe')
         self.feature_plots = self._get_plots('feature')
+
+        self._apply_levels(levels)
+
+    def _get_applied_levels(self) -> dict[tuple[str, str], np.ndarray]:
+        """
+        Get the levels currently applied to each of the plots.
+
+        Returns
+        -------
+        dict
+            The current levels, keyed by plot type and plot name. Empty if the plots haven't
+            been generated yet, as there is then nothing to keep.
+        """
+        levels = {}
+        for plot_type in LEVEL_PLOT_TYPES:
+            plots = getattr(self, f'{plot_type}_plots', None) or {}
+            for name, plot in plots.items():
+                levels[plot_type, name] = np.copy(plot.levels)
+
+        return levels
+
+    def _apply_levels(self, levels: dict[tuple[str, str], np.ndarray]) -> None:
+        """
+        Apply levels to the plots that they were previously applied to.
+
+        The default levels are left as newly computed, so that resetting the levels gives the
+        defaults for the data that is currently shown. Plots that weren't there before keep the
+        levels they were generated with.
+
+        Parameters
+        ----------
+        levels: dict
+            The levels to apply, keyed by plot type and plot name.
+        """
+        for (plot_type, name), level in levels.items():
+            plot = getattr(self, f'{plot_type}_plots').get(name, None)
+            if plot is not None:
+                plot.levels = level
 
     def _get_plots(self, plot_prefix: str) -> Bunch[str, Any]:
         """

@@ -669,10 +669,16 @@ def _fold_mean_probas(
         return None
 
     df = validate_features(df, model.features)
+    # Single-threaded on purpose. torch (spatial encoder) and xgboost (here) each bundle their own
+    # OpenMP runtime, and both Channel Prediction backends can be loaded in one session; two
+    # OpenMP thread pools in one process crash or deadlock the GUI on macOS. A few hundred
+    # channels over ~10 folds costs nothing on one thread, so only xgboost is capped -- the
+    # spatial encoder is the expensive backend and keeps its threads.
     predicted_probas, _ = ephysatlas.regionclassifier.infer_regions(
         df,
         path_model=model.model_path,
         n_folds=model.n_folds,
+        n_jobs=1,
     )
     mean_probas = np.mean(predicted_probas, axis=0)
     depths = df['axial_um'].values

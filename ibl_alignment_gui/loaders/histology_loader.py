@@ -202,7 +202,8 @@ class NrrdSliceLoader(SliceLoader):
         np.ndarray
             Loaded image volume.
         """
-        return AllenAtlas._read_volume(vol_path)
+        vol = AllenAtlas._read_volume(vol_path)
+        return vol
 
 
 @dataclass(frozen=True)
@@ -355,11 +356,6 @@ def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader
     """
     Pick the right SliceLoader by inspecting the histology directory.
 
-    Used by the offline ProbeHandlers (:class:`ProbeHandlerLocal` and
-    :class:`ProbeHandlerLocalYaml`). If the directory contains any ``.tif`` / ``.tiff`` files
-    (e.g. brainreg outputs), return a :class:`TiffSliceLoader`. Otherwise default to the existing
-    :class:`NrrdSliceLoader` so all current NRRD workflows keep working.
-
     Parameters
     ----------
     hist_path : Path
@@ -372,6 +368,8 @@ def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader
     SliceLoader
         A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
     """
+    if any(hist_path.glob('*.nrrd')):
+        return NrrdSliceLoader(hist_path, brain_atlas)
     if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
         return TiffSliceLoader(hist_path, brain_atlas)
     return NrrdSliceLoader(hist_path, brain_atlas)
@@ -455,7 +453,9 @@ class TiffSliceLoader(SliceLoader):
         so a single axis swap suffices — no flips required.
         """
         arr = sitk.GetArrayFromImage(sitk.ReadImage(str(vol_path)))
-        return np.transpose(arr, (0, 2, 1))
+        arr = np.transpose(arr, (0, 2, 1))
+        arr = np.flip(arr, 0)
+        return arr
 
 
 def download_histology_data(

@@ -1068,6 +1068,9 @@ class FeatureLoaderOne(FeatureLoader):
         self.feature_version: str = feature_version
         self.multi_area: bool = multi_area
 
+        if self.multi_area:
+            self.feature_version = '2026_W26'
+
     def load_features(self, shank_sites: Bunch | None = None) -> Bunch[str, Any]:
         """
         Load ephys atlas features from ONE.

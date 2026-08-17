@@ -1557,19 +1557,17 @@ class PlotLoader:
     # --------------------------------------------------------------------------------------------
     # Feature plots
     # --------------------------------------------------------------------------------------------
-    @skip_missing(['features'])
-    def feature_ephys_atlas(self):
+    def _ephys_atlas_sites(self) -> tuple[Any, Bunch]:
         """
-        Generate data for ephys atlas feature plots.
+        Build channel-site geometry for the ephys atlas features table.
 
         Returns
         -------
-        Dict
-            A dict containing multiple ProbeData objects with keys according to features.
+        pd.DataFrame
+            The ephys atlas features table.
+        Bunch
+            The channel-site geometry for the (single) shank the features belong to.
         """
-        if not EPHYS_ATLAS:
-            return {}
-
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
         chn_coords['localCoordinates'] = np.c_[
@@ -1580,31 +1578,110 @@ class PlotLoader:
         chn_geom.split_sites_per_shank()
         sites = chn_geom._get_sites_for_shank(0)
 
+        return feature_data, sites
+
+    @staticmethod
+    def _ephys_atlas_feature_probe(
+        feature: str, feature_data: Any, sites: Bunch, index: int = 0
+    ) -> ProbeData:
+        """
+        Build a single ephys atlas feature normalised into a ``ProbeData`` image.
+
+        Parameters
+        ----------
+        feature: str
+            The name of the feature to build the plot for.
+        feature_data: pd.DataFrame
+            The ephys atlas features table.
+        sites: Bunch
+            The channel-site geometry for the shank the features belong to.
+        index: int, default=0
+            When non-zero, offsets the plot horizontally by this many bank-widths, so
+            several features can be tiled side by side within a single combined view.
+
+        Returns
+        -------
+        ProbeData
+            The normalised (0-1) feature image, min-max scaled across all channels. Its
+            ``data`` is the same per-channel normalised values, so the plot can also be
+            used to colour the channels shown on the histology slice.
+        """
+        vals = feature_data[feature].values
+        min_val = np.nanmin(vals)
+        max_val = np.nanmax(vals)
+        feature_norm = (vals - min_val) / (max_val - min_val)
+        img, scale, offset = arrange_channels_into_banks(sites, feature_norm)
+
+        offset[0] += index * (10 * sites['n_banks'])
+
+        return ProbeData(
+            img=img,
+            scale=scale,
+            offset=offset,
+            levels=np.array([0, 1]),
+            default_levels=np.array([0, 1]),
+            cmap='viridis',
+            xrange=np.array([0, 10 * sites['n_banks']]),
+            title=feature,
+            data=feature_norm,
+        )
+
+    @skip_missing(['features'])
+    def feature_ephys_atlas(self):
+        """
+        Generate data for the combined ephys atlas feature plot.
+
+        Tiles every available feature side by side into a single view.
+
+        Returns
+        -------
+        Dict
+            A dict with one key, 'Ephys Atlas', containing a Bunch of ProbeData objects
+            keyed by feature.
+        """
+        if not EPHYS_ATLAS:
+            return {}
+
+        feature_data, sites = self._ephys_atlas_sites()
+        available_cols = feature_data.columns
+
         data = Bunch()
-
-        feature_set = ephysatlas.features.voltage_features_set()
-
-        for i, feature in enumerate(feature_set):
-            vals = feature_data[feature].values
-            min_val = np.nanmin(vals)
-            max_val = np.nanmax(vals)
-            feature_norm = (vals - min_val) / (max_val - min_val)
-            img, scale, offset = arrange_channels_into_banks(sites, feature_norm)
-
-            offset[0] += i * (10 * sites['n_banks'])
-
-            feat = ProbeData(
-                img=img,
-                scale=scale,
-                offset=offset,
-                levels=np.array([0, 1]),
-                default_levels=np.array([0, 1]),
-                cmap='viridis',
-                xrange=np.array([0, 10 * sites['n_banks']]),
-                title=feature,
-                data=None,
-            )
-
-            data[feature] = feat
+        for i, feature in enumerate(ephysatlas.features.voltage_features_set()):
+            if feature not in available_cols:
+                continue
+            data[feature] = self._ephys_atlas_feature_probe(feature, feature_data, sites, index=i)
 
         return {'Ephys Atlas': data}
+
+    # --------------------------------------------------------------------------------------------
+    # Probe plots (ephys atlas features, registered individually)
+    # --------------------------------------------------------------------------------------------
+    @skip_missing(['features'])
+    def probe_ephys_atlas(self) -> dict[str, Any]:
+        """
+        Generate a standalone probe plot for each available ephys atlas feature.
+
+        Unlike :meth:`feature_ephys_atlas`, which tiles every feature into one combined
+        view, each feature here is registered individually so it can be selected on its
+        own from the probe plot menu, with the usual probe-plot colorbar/level controls.
+
+        Returns
+        -------
+        Dict
+            A dict containing one ProbeData object per available ephys atlas feature.
+        """
+        if not EPHYS_ATLAS:
+            return {}
+
+        feature_data, sites = self._ephys_atlas_sites()
+        available_cols = feature_data.columns
+
+        data = {}
+        for feature in ephysatlas.features.voltage_features_set():
+            if feature not in available_cols:
+                continue
+            data[f'Ephys Atlas - {feature}'] = self._ephys_atlas_feature_probe(
+                feature, feature_data, sites
+            )
+
+        return data

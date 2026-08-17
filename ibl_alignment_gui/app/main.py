@@ -1,3 +1,15 @@
+import os
+
+# The spatial-encoder (torch) and inference (xgboost, via ephysatlas.regionclassifier) plugins
+# each bundle their own OpenMP runtime. On macOS, having both loaded in one process leaves two
+# independent libomp.dylib copies mapped in-process; as soon as either does a parallel OpenMP
+# region (e.g. XGBoost's model loading), their internal thread-pool state collides and segfaults
+# - confirmed via crash log + reproduction, independent of xgboost's own n_jobs setting. Forcing
+# a single OpenMP thread avoids the thread-pool bring-up that triggers the corruption. Must be
+# set before torch/xgboost are ever imported (they're lazily imported by the plugins later), so
+# this needs to happen at process start, before those imports occur anywhere.
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
 import argparse
 
 from qtpy import QtWidgets

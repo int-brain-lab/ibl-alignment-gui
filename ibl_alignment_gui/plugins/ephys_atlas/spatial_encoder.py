@@ -28,6 +28,11 @@ from ephysatlas.spatial_encoder.model import (
     ProbeSequenceConfidenceTransformer,
     predict_probe_confidence_classes,
 )
+from ephysatlas.spatial_encoder.model_registry import (
+    EphysAtlasReleaseRegistry,
+    RegistryError,
+    split_manifest_to_builder_format,
+)
 from ephysatlas.spatial_encoder.utils import (
     AtlasPCAConfig,
     ContextAtlasManager,
@@ -58,13 +63,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MODEL_VINTAGE = '2026_W12'
+MODEL_VINTAGE = '2026_W26'
+HF_REPO_ID = 'AlonSaguy/ephys-atlas-models'
 MODEL_NAME = 'Encoding'  # key under which the alignment engine is cached on the plugin
 PREDICTION_KEY = 'Spatial Encoder'  # per-shank cache key for the spatial-encoder prediction
 
-S3_MODEL_NAMES = [
-    f'encoding_models/{MODEL_VINTAGE}',
-]
+S3_MODEL_NAMES = [MODEL_VINTAGE]  # kept name for GUI compatibility; releases now come from Hugging Face
 
 # -----------------------------------------------------------------------------
 # GUI interaction
@@ -126,7 +130,7 @@ class _SpatialModelDialog(QtWidgets.QDialog):
         # Row 1 — local encoder model dir (takes precedence over the dropdown when set).
         self._dir_edit = QtWidgets.QLineEdit()
         self._dir_edit.setReadOnly(True)
-        self._dir_edit.setPlaceholderText('directory containing SE_model_*.pt')
+        self._dir_edit.setPlaceholderText('2026_W26 release directory (models/, context/, preprocessing/)')
         if self.enc_dir is not None:
             self._dir_edit.setText(str(self.enc_dir))
         browse1 = QtWidgets.QPushButton('Browse…')
@@ -166,13 +170,13 @@ class _SpatialModelDialog(QtWidgets.QDialog):
     def _browse_model(self) -> None:
         """Pick the encoder model dir, requiring at least one SE_model_*.pt inside."""
         chosen_path = QtWidgets.QFileDialog.getExistingDirectory(
-            self, 'Select Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy)')
+            self, 'Select Spatial Encoder release directory')
         if not chosen_path:
             return
         chosen_path = Path(chosen_path)
         if not validate_encoder_folder(chosen_path):
             QtWidgets.QMessageBox.warning(
-                self, 'Channel Prediction', f'No "SE_model_*.pt" found under:\n{chosen_path}')
+                self, 'Channel Prediction', f'No complete {MODEL_VINTAGE} release found under:\n{chosen_path}')
             return
         self.enc_dir = chosen_path
         self.enc_model = chosen_path.name
@@ -309,20 +313,21 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
 # Validation utils
 # -----------------------------------------------------------------------------
 def validate_encoder_folder(enc_dir: Path) -> bool:
-    """Check the encoder model directory has the expected weights.
-
-    Parameters
-    ----------
-    enc_dir : Path
-        The local encoder model directory to validate.
-
-    Returns
-    -------
-    bool
-        True if ``enc_dir`` contains at least one ``SE_model_*.pt`` file, else False.
-    """
-    return any(enc_dir.glob('SE_model_*.pt'))
-
+    """Check that ``enc_dir`` is a complete spatial-encoder release directory."""
+    enc_dir = Path(enc_dir)
+    return all(
+        p.exists()
+        for p in [
+            enc_dir / 'models' / 'channel' / 'spatial_encoder.pt',
+            enc_dir / 'models' / 'channel' / 'confidence_model.pt',
+            enc_dir / 'context' / 'agea_vol_pca.npy',
+            enc_dir / 'context' / 'merfish_vol_pca.npy',
+            enc_dir / 'preprocessing' / 'channel_stats.npz',
+            enc_dir / 'split.json',
+            enc_dir / 'config.json',
+            enc_dir / 'features.json',
+        ]
+    )
 
 def validate_feature_folder(feature_dir: Path) -> bool:
     """Check the feature data directory holds a per-channel feature table.
@@ -363,7 +368,7 @@ def _selection_error(
         A user-facing warning message when the selection cannot be loaded, else None.
     """
     if enc_dir is not None and not validate_encoder_folder(enc_dir):
-        return f'No "SE_model_*.pt" found under:\n{enc_dir}'
+        return f'No complete {MODEL_VINTAGE} release found under:\n{enc_dir}'
     if enc_data is not None and not validate_feature_folder(enc_data):
         return f'No features table (raw_ephys_features*.pqt) found under:\n{enc_data}'
     # Local folders are all-or-nothing; offline (no dropdown) requires the full pair.
@@ -441,80 +446,45 @@ def _as_device() -> torch.device:
 
 
 def _load_optional_conf_model(*, model_path: Path, device: torch.device, f_ctx: int, f_e: int):
-    # Accept the canonical name or the local encoder dir's `Confidence_model_<VINTAGE>.pt`.
-    conf_path = model_path.joinpath('probe_conf_model.pt')
+    conf_path = Path(model_path) / 'models' / 'channel' / 'confidence_model.pt'
     if not conf_path.exists():
-        alt = sorted(model_path.glob('Confidence_model_*.pt'))
-        if alt:
-            conf_path = alt[0]
-    if not conf_path.exists():
-        print(
-            f'[Alignment engine] No confidence model found at {conf_path}; continuing without it.'
-        )
+        print(f'[Alignment engine] No confidence model found at {conf_path}; continuing without it.')
         return None
-
-    # The confidence model is optional and checkpoint layouts vary (`conf_model_state` vs
-    # `model_state`, with or without a saved `cfg`). Any incompatibility degrades to "no conf
-    # model" rather than failing the whole engine build.
     try:
         ckpt = torch.load(conf_path, map_location=device)
-        conf_cfg = ProbeConfidenceTrainConfig(**ckpt.get('cfg', {}))
+        arch = ckpt.get('architecture', {})
         conf_model = ProbeSequenceConfidenceTransformer(
             f_ctx=f_ctx,
             f_e=f_e,
-            d_model=conf_cfg.d_model,
-            nhead=conf_cfg.nhead,
-            depth=conf_cfg.depth,
-            mlp_ratio=conf_cfg.mlp_ratio,
-            drop=conf_cfg.drop,
+            d_model=int(arch.get('d_model', 64)),
+            nhead=int(arch.get('nhead', 4)),
+            depth=int(arch.get('depth', 2)),
+            mlp_ratio=float(arch.get('mlp_ratio', 2.0)),
+            drop=float(arch.get('drop', 0.1)),
         ).to(device)
-        conf_model.load_state_dict(ckpt.get('conf_model_state', ckpt.get('model_state')))
+        conf_model.load_state_dict(ckpt['model_state'], strict=True)
         conf_model.eval()
         return conf_model
     except Exception as exc:
-        print(
-            f'[Alignment engine] Confidence model at {conf_path} is incompatible ({exc}); '
-            'continuing without it.'
-        )
+        print(f'[Alignment engine] Confidence model at {conf_path} is incompatible ({exc}); continuing without it.')
         return None
 
-
-def _build_context_manager(
-    cfg: AtlasPCAConfig, *, model_name: str, local_path: Path, model_path: Path
-):
-    """Compatibility wrapper for old/new ContextAtlasManager signatures."""
-    try:
-        # Old GUI/debug version sometimes accepted model_name and output_dir=local_path.
-        return ContextAtlasManager(
-            cfg,
-            regenerate_context=False,
-            model_name=model_name,
-            output_dir=local_path,
-        )
-    except TypeError:
-        # New split utils.py signature: ContextAtlasManager(cfg, regenerate_context, output_dir).
-        # The downloaded PCA files are usually inside model_path.
-        return ContextAtlasManager(
-            cfg,
-            regenerate_context=False,
-            output_dir=model_path,
-        )
-
+def _build_context_manager(cfg: AtlasPCAConfig, *, model_name: str | None, local_path: Path, model_path: Path):
+    """Load the frozen PCA context from the release bundle."""
+    return ContextAtlasManager(
+        cfg,
+        regenerate_context=False,
+        output_dir=Path(model_path) / 'context',
+    )
 
 def _unpack_loader_outputs(loaders):
-    """Support both the new 9-item and older 7-item dataset builder returns."""
-    if len(loaders) == 9:
-        (
-            train_loader,
-            _conf_train_loader,
-            _val_loader,
-            _test_loader,
-            e_mean,
-            e_std,
-            ctx_mean,
-            ctx_std,
-            split_info,
-        ) = loaders
+    """Unpack the current release-aware dataset builder, with old fallbacks."""
+    if len(loaders) == 10:
+        (train_loader, _conf_train_loader, _val_loader, _test_loader,
+         e_mean, e_std, ctx_mean, ctx_std, split_info, _stats) = loaders
+    elif len(loaders) == 9:
+        (train_loader, _conf_train_loader, _val_loader, _test_loader,
+         e_mean, e_std, ctx_mean, ctx_std, split_info) = loaders
     elif len(loaders) == 7:
         train_loader, _val_loader, _test_loader, e_mean, e_std, ctx_mean, ctx_std = loaders
         split_info = None
@@ -522,34 +492,18 @@ def _unpack_loader_outputs(loaders):
         raise RuntimeError(f'Unexpected loader return length: {len(loaders)}')
     return train_loader, e_mean, e_std, ctx_mean, ctx_std, split_info
 
-
 def _get_encoder_path_from_s3(one: ONE, model_name: str) -> Path | None:
-    """Download the named encoder model from S3 and return its local directory.
-
-    Parameters
-    ----------
-    one : ONE
-        ONE connection used for the download.
-    model_name : str
-        Name of the encoder model directory to download under the ONE cache.
-
-    Returns
-    -------
-    Path or None
-        The downloaded model directory, or None if the download failed.
-    """
-    cache_root = s3_cache_root(one)
-    cache_root.joinpath(model_name).mkdir(parents=True, exist_ok=True)
+    """Compatibility name: resolve the tagged release from Hugging Face."""
     try:
-        from ephysatlas.regionclassifier import download_model  # noqa: PLC0415
-
-        model_path = download_model(cache_root, model_name, one=one)
+        registry = EphysAtlasReleaseRegistry()
+        return registry.resolve_release(
+            str(model_name or MODEL_VINTAGE),
+            repo_id=HF_REPO_ID,
+            require_weights=True,
+        )
     except Exception as exc:
-        logger.warning('download_model skipped/failed: %s', exc)
+        logger.warning('Hugging Face spatial-encoder release download failed: %s', exc)
         return None
-
-    return model_path
-
 
 def _get_encoder_data_from_s3(one: ONE, feature_vintage: str = MODEL_VINTAGE) -> Path | None:
     """Download the feature tables for a vintage from S3 and return their local directory.
@@ -583,144 +537,122 @@ def load_alignment_engine(
     model_name: str | None = None,
     one: ONE | None = None,
 ) -> None:
-    """Build the Spatial Encoder alignment engine and cache it on the plugin.
+    """Build the GUI engine from the authoritative 2026_W26 release bundle.
 
-    Resolves the encoder weights and feature tables — from local ``model_path`` / ``data_path``
-    when both are provided, otherwise downloading ``model_name`` (and its feature vintage) from S3
-    via ``one`` — then builds the model, context manager and reference-bank handles and stores the
-    resulting :class:`AlignmentEngine` under
-    ``controller.plugins['Channel Prediction'][MODEL_NAME]['model']``.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    model_path : Path or None
-        Local encoder model directory. When given together with ``data_path``, the engine loads
-        from disk and S3 is not used.
-    data_path : Path or None
-        Local feature data directory (see ``model_path``).
-    model_name : str or None
-        S3 model name to download when both local directories are not provided.
-    one : ONE or None
-        ONE connection used for the S3 download.
-
-    Raises
-    ------
-    RuntimeError
-        If the source cannot be resolved (no ONE and both local directories missing), or a
-        provided local directory fails validation.
+    Alignment, histology usage and channel-order handling below this loader are unchanged.
     """
     print('Data loading and model initialization (one-time)')
     t0 = time.time()
     device = _as_device()
-
     plugin = plugin_state(controller)[MODEL_NAME]
 
-    if one is None and (data_path is None or model_path is None):
-        raise RuntimeError(
-            'No ONE connection found, must specify both local encoder and local feature directories')
+    if model_path is None:
+        model_path = _get_encoder_path_from_s3(one, model_name or MODEL_VINTAGE)
+        if model_path is None:
+            raise RuntimeError(f'Could not resolve Hugging Face release {MODEL_VINTAGE}')
+    model_path = Path(model_path)
+    if not validate_encoder_folder(model_path):
+        raise RuntimeError(f'Incomplete spatial-encoder release under: {model_path}')
 
-    if data_path is not None and model_path is not None:
-        # TODO do we need this validation here given that we have done it before?
-        if not validate_encoder_folder(model_path):
-            raise RuntimeError(f'No "SE_model_*.pt" found under the given model path: {model_path}')
+    if data_path is None:
+        if one is None:
+            one = ONE(base_url='https://alyx.internationalbrainlab.org')
+        data_path = _get_encoder_data_from_s3(one, MODEL_VINTAGE)
+        if data_path is None:
+            raise RuntimeError(f'Could not load feature tables for {MODEL_VINTAGE}')
+    data_path = Path(data_path)
 
-        if not validate_feature_folder(data_path):
-            raise RuntimeError(f'No features table (raw_ephys_features*.pqt) found under the given data path: {data_path}')
+    plugin['local_encoder_dir'] = model_path
+    plugin['local_encoder_data'] = data_path
+    plugin['model_name'] = str(model_name or MODEL_VINTAGE)
 
-        plugin['local_encoder_dir'] = model_path
-        plugin['local_encoder_data'] = data_path
-        plugin['model_name'] = None
-    else:
+    registry = EphysAtlasReleaseRegistry()
+    # model_path may be a manually-selected copy rather than registry.release_dir().
+    # Read its release artifacts directly.
+    import json
+    with (model_path / 'config.json').open('r', encoding='utf-8') as f:
+        release_config = json.load(f)
+    with (model_path / 'split.json').open('r', encoding='utf-8') as f:
+        release_split = json.load(f)
+    with (model_path / 'features.json').open('r', encoding='utf-8') as f:
+        release_features = json.load(f)['features']
+    if list(release_features) != list(FEATURE_LIST):
+        raise RuntimeError('FEATURE_LIST does not match the ordered feature list in the release.')
+    with np.load(model_path / 'preprocessing' / 'channel_stats.npz', allow_pickle=False) as z:
+        preprocessing_stats = {k: z[k].copy() for k in z.files}
 
-        data_path = _get_encoder_data_from_s3(one, _get_date_from_vintage(model_name))
-        model_path = _get_encoder_path_from_s3(one, model_name)
-
-        plugin['local_encoder_dir'] = model_path
-        plugin['local_encoder_data'] = data_path
-        plugin['model_name'] = model_name
-
-
-    optimization_features = np.arange(len(FEATURE_LIST), dtype=int)
-
-    cfg = AtlasPCAConfig()
+    context_cfg = release_config.get('context', {})
+    channel_cfg = release_config.get('channel_level', {})
+    arch = channel_cfg.get('architecture', {})
+    neigh = channel_cfg.get('neighbors', {})
+    cfg = AtlasPCAConfig(
+        n_cell_pcs=int(context_cfg.get('n_cell_pcs', 50)),
+        n_gene_pcs=int(context_cfg.get('n_gene_pcs', 50)),
+    )
     ctx_manager = _build_context_manager(
-        cfg,
-        model_name=model_name,
-        local_path=model_path,
-        model_path=model_path,
+        cfg, model_name=model_name, local_path=model_path, model_path=model_path
     )
 
     pid_str, ephys, probe_positions, _ = LoadInsertionData(
+        project=release_config.get('data', {}).get('project', 'ea_active'),
+        agg=release_config.get('data', {}).get('agg', 'agg_full'),
         VINTAGE=MODEL_VINTAGE,
         path_data=data_path,
     )
+    pid_str = [str(x) for x in pid_str]
 
-    M_MAX = 8
-    RADIUS_UM = 500
+    M_MAX = int(neigh.get('m_max', 8))
+    RADIUS_UM = float(neigh.get('radius_um', 500))
+    split_manifest = split_manifest_to_builder_format(release_split)
 
-    loaders = build_channels_plus_emptyvoxels_with_neighbors(
-        ctx_manager=ctx_manager,
-        ephys=ephys,
-        probe_positions=probe_positions,
-        RADIUS_UM=RADIUS_UM,
-        M_MAX=M_MAX,
-        pid_names=pid_str,
-    )
+    try:
+        loaders = build_channels_plus_emptyvoxels_with_neighbors(
+            ctx_manager=ctx_manager,
+            ephys=ephys,
+            probe_positions=probe_positions,
+            RADIUS_UM=RADIUS_UM,
+            M_MAX=M_MAX,
+            pid_names=pid_str,
+            split_manifest=split_manifest,
+            preprocessing_stats=preprocessing_stats,
+            return_preprocessing_stats=True,
+        )
+    except TypeError as exc:
+        raise RuntimeError(
+            'The checked-out ephysatlas branch is too old for the 2026_W26 release-aware '
+            'builder API. Switch to the branch containing split_manifest/preprocessing_stats support.'
+        ) from exc
 
     train_loader, e_mean, e_std, ctx_mean, ctx_std, _split_info = _unpack_loader_outputs(loaders)
     handles = alignment_handles_from_loader(train_loader)
-
     F_ctx = int(ctx_mean.numel())
-    F_e = int(ephys.shape[-1])
+    F_e = int(e_mean.numel())
 
     model = NeighborInpaintingModel(
-        f_ctx=F_ctx,
-        f_ephys=F_e,
-        f_out=F_e,
-        e_mean=e_mean,
-        e_std=e_std,
-        ctx_mean=ctx_mean,
-        ctx_std=ctx_std,
-        d_model=128,
-        nhead=8,
-        depth=2,
-        drop=0.15,
+        f_ctx=F_ctx, f_ephys=F_e, f_out=F_e,
+        e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
+        d_model=int(arch.get('d_model', 128)),
+        nhead=int(arch.get('nhead', 8)),
+        depth=int(arch.get('depth', 2)),
+        drop=float(arch.get('drop', 0.15)),
     ).to(device)
-
-    ckpt_path = model_path / f'SE_model_{MODEL_VINTAGE}.pt'
-    model.load_state_dict(torch.load(ckpt_path, map_location=device)['model_state'])
+    ckpt = torch.load(model_path / 'models' / 'channel' / 'spatial_encoder.pt', map_location=device)
+    model.load_state_dict(ckpt['model_state'], strict=True)
     model.eval()
     torch.set_grad_enabled(False)
 
     conf_model = _load_optional_conf_model(
-        model_path=model_path,
-        device=device,
-        f_ctx=F_ctx,
-        f_e=F_e,
+        model_path=model_path, device=device, f_ctx=F_ctx, f_e=F_e
     )
+    optimization_features = np.arange(len(FEATURE_LIST), dtype=int)
 
     print(f'[Alignment engine ready] build time: {time.time() - t0:.2f}s')
-
     plugin['model'] = AlignmentEngine(
-        device=device,
-        cfg=cfg,
-        ctx_manager=ctx_manager,
-        model=model,
-        handles=handles,
-        e_mean=e_mean,
-        e_std=e_std,
-        ctx_mean=ctx_mean,
-        ctx_std=ctx_std,
-        M_MAX=M_MAX,
-        RADIUS_UM=RADIUS_UM,
-        optimization_features=optimization_features,
-        model_name=model_name,
-        local_path=model_path,
-        conf_model=conf_model,
+        device=device, cfg=cfg, ctx_manager=ctx_manager, model=model, handles=handles,
+        e_mean=e_mean, e_std=e_std, ctx_mean=ctx_mean, ctx_std=ctx_std,
+        M_MAX=M_MAX, RADIUS_UM=RADIUS_UM, optimization_features=optimization_features,
+        model_name=str(model_name or MODEL_VINTAGE), local_path=model_path, conf_model=conf_model,
     )
-
 
 def get_model(controller: AlignmentGUIController) -> AlignmentEngine | None:
     """Return the cached alignment engine, loading or prompting for it on first use.

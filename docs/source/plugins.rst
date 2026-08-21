@@ -68,6 +68,8 @@ When working with multi-shank or dual-configuration data, a radio button selecto
      - Method
    * - Adjust range
      - Drag the min/max sliders for the desired plot type
+   * - Set an exact range
+     - Type the value into the box beside the corresponding slider
    * - Reset single plot range
      - Click **Reset** button next to the corresponding slider
    * - Reset all plot ranges

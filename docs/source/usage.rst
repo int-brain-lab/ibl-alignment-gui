@@ -10,7 +10,7 @@ To launch the alignment GUI with default settings, run:
 
    alignment-gui
 
-This opens the GUI window. You can then load your data by clicking the ``...`` button in the top-right corner and selecting the directory containing your data files.
+This opens the GUI window. You can then load your data by clicking the ``...`` button in the top-right corner, selecting **Open data folder…**, and choosing the directory containing your data files.
 
 .. note::
    This mode assumes that all required data (spike sorting output, raw electrophysiology recordings, probe trajectory files, and histology volumes) are located within the same directory.
@@ -21,11 +21,15 @@ Specifying Data Directories with YAML
 
 For finer control over data locations, you can provide a YAML configuration file that explicitly specifies the paths to required inputs.
 
-Launch the GUI using:
+The YAML can either be passed on the command line when the GUI is launched:
 
 .. code-block:: console
 
    alignment-gui -y path/to/config.yaml
+
+or chosen once the GUI is running, from the ``...`` button in the top right corner by selecting
+**Open session YAML…**. Both are equivalent, and a different session YAML can be selected at any
+time without restarting the GUI.
 
 
 Required and Optional Datasets

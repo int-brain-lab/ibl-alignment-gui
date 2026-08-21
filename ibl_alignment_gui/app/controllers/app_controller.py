@@ -1,4 +1,5 @@
 import gc
+import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -26,6 +27,8 @@ from ibl_alignment_gui.plugins.qc_dialog import display as display_qc_dialog
 from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_dialog
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
+
+logger = logging.getLogger(__name__)
 
 
 class AlignmentGUIController:
@@ -1253,7 +1256,7 @@ class AlignmentGUIController:
         # Reclaim the previous session's figures/data now that its tabs have been cleared and
         # its shank controllers/views dereferenced (pyqtgraph leaves reference cycles behind)
         gc.collect()
-        print(f'Loading time: {time.time() - self._load_start}')
+        logger.info('Loading time: %.2f s', time.time() - self._load_start)
 
     def setup(self, init=True) -> None:
         """

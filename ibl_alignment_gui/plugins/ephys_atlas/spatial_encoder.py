@@ -486,9 +486,7 @@ def _load_optional_conf_model(*, model_path: Path, device: torch.device, f_ctx: 
         if alt:
             conf_path = alt[0]
     if not conf_path.exists():
-        print(
-            f'[Alignment engine] No confidence model found at {conf_path}; continuing without it.'
-        )
+        logger.info('No confidence model found at %s; continuing without it.', conf_path)
         return None
 
     # The confidence model is optional and checkpoint layouts vary (`conf_model_state` vs
@@ -510,9 +508,8 @@ def _load_optional_conf_model(*, model_path: Path, device: torch.device, f_ctx: 
         conf_model.eval()
         return conf_model
     except Exception as exc:
-        print(
-            f'[Alignment engine] Confidence model at {conf_path} is incompatible ({exc}); '
-            'continuing without it.'
+        logger.warning(
+            'Confidence model at %s is incompatible (%s); continuing without it.', conf_path, exc
         )
         return None
 
@@ -650,7 +647,7 @@ def load_alignment_engine(
         If the source cannot be resolved (no ONE and both local directories missing), or a
         provided local directory fails validation.
     """
-    print('Data loading and model initialization (one-time)')
+    logger.info('Loading spatial encoder data and initialising model (one-time)')
     t0 = time.time()
     device = _as_device()
 
@@ -745,7 +742,7 @@ def load_alignment_engine(
         f_e=F_e,
     )
 
-    print(f'[Alignment engine ready] build time: {time.time() - t0:.2f}s')
+    logger.info('Alignment engine ready, build time: %.2f s', time.time() - t0)
 
     plugin['model'] = AlignmentEngine(
         device=device,
@@ -1406,7 +1403,7 @@ def align(
 
     kp_mask = ~np.all(recorded_full == 0.0, axis=1)
     if kp_mask.sum() < 2:
-        print(
+        logger.warning(
             'Need at least 2 recorded (non-zero) channels with non-zero features for '
             'spatial encoding.'
         )
@@ -1456,7 +1453,7 @@ def align(
 
     min_overlap_channels = int(0.9 * int(kp_mask.sum()))
     if (j_end - j_start + 1) < min_overlap_channels:
-        print('Trace too short - resorting to rigid optimization')
+        logger.warning('Trace too short, resorting to rigid optimisation')
         j_start, j_end, path = rigid_assignment(recorded_opt, pred_std_opt)
 
     i_seq, j_seq = np.array(path, dtype=int).T
@@ -1597,7 +1594,7 @@ def _build_warped_region_ids_and_depths(
     valid = np.isfinite(channel_depth_um_gui_order) & np.isfinite(j_map_gui_order)
 
     if np.sum(valid) < 2:
-        print("[Alignment engine] WARNING: not enough valid points for affine warp")
+        logger.warning('Not enough valid points for affine warp')
         trace_idx = np.arange(trace_len, dtype=float)
         depth_um = trace_idx * 10.0
         scale_um_per_trace_sample = 10.0
@@ -1735,23 +1732,30 @@ def predict(controller, items):
     )
 
     if len(region_ids) != len(depth_samples):
-        print(
-            "[Alignment engine] WARNING: region_ids/depth_samples length mismatch:",
+        logger.warning(
+            'region_ids/depth_samples length mismatch: %d vs %d',
             len(region_ids),
             len(depth_samples),
         )
 
-    print("[Alignment debug]")
-    print("[Alignment debug]")
-    print("No trace extension used")
-    print("work-order j_start/j_end:", int(out["j_start"]), int(out["j_end"]))
-    print("region_ids len:", len(region_ids))
-    print("depth_samples len:", len(depth_samples))
-    print("channel_depth_um first/last:", channel_depth_um_gui_order[0],
-          channel_depth_um_gui_order[-1])
-    print("j_map GUI-order first/last/min/max:",
-          j_map_gui_order[0], j_map_gui_order[-1],
-          np.min(j_map_gui_order), np.max(j_map_gui_order))
-    print("warp info:", warp_info)
+    logger.debug(
+        'Alignment debug (no trace extension used):\n'
+        '  work-order j_start/j_end: %d/%d\n'
+        '  region_ids len: %d, depth_samples len: %d\n'
+        '  channel_depth_um first/last: %s/%s\n'
+        '  j_map GUI-order first/last/min/max: %s/%s/%s/%s\n'
+        '  warp info: %s',
+        int(out['j_start']),
+        int(out['j_end']),
+        len(region_ids),
+        len(depth_samples),
+        channel_depth_um_gui_order[0],
+        channel_depth_um_gui_order[-1],
+        j_map_gui_order[0],
+        j_map_gui_order[-1],
+        np.min(j_map_gui_order),
+        np.max(j_map_gui_order),
+        warp_info,
+    )
 
     return region_ids, depth_samples

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -51,6 +52,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ibl_alignment_gui.backends.allen.docdb_api import DocDB
+
+logger = logging.getLogger(__name__)
 
 try:
     import ephysatlas.data
@@ -870,8 +873,9 @@ class ProbeHandlerONE(ProbeHandler):
 
     def load_data(self, progress_callback: Callable[[str, int, int], None] | None = None) -> None:
         """Load data for all configs and shanks."""
-        print(f'******** Loading session {self.chosen_sess} {self.chosen_probe} ********')
-        print(f'******** pid: {self.pid} ********')
+        logger.info(
+            'Loading session %s %s (pid: %s)', self.chosen_sess, self.chosen_probe, self.pid
+        )
         super().load_data(progress_callback=progress_callback)
 
 

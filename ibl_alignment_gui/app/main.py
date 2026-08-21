@@ -25,6 +25,18 @@ from ibl_alignment_gui.utils.optional import (
     has_allen,
     has_ibllib,
 )
+from iblutil.util import setup_logger
+
+
+def _setup_logging() -> None:
+    """Attach a stream handler to the package logger so progress messages are visible.
+
+    Without this the package's ``logger.info`` calls go nowhere: a library configures no
+    handlers of its own, and Python's fallback handler only emits WARNING and above. Every
+    launcher calls this so the GUI always reports what it is loading. Scoped to the
+    ``ibl_alignment_gui`` logger so third-party log levels are left alone.
+    """
+    setup_logger('ibl_alignment_gui', level='INFO')
 
 
 def _require_extra(available: bool, hint: str) -> None:
@@ -54,6 +66,7 @@ def launch_app() -> None:
 
     args = parser.parse_args()
 
+    _setup_logging()
     app = QtWidgets.QApplication([])
     mainapp = AlignmentGUIController(offline=True, csv=None, yaml=args.yaml)
     mainapp.view.show()
@@ -82,6 +95,7 @@ def launch_app_ibl() -> None:
     if args.csv is not None and args.pid is not None:
         parser.error('--pid cannot be used together with --csv')
 
+    _setup_logging()
     app = QtWidgets.QApplication([])
     try:
         mainapp = AlignmentGUIController(offline=False, csv=args.csv, yaml=None, pid=args.pid)
@@ -107,6 +121,7 @@ def launch_app_allen() -> None:
 
     args = parser.parse_args()
 
+    _setup_logging()
     app = QtWidgets.QApplication([])
     mainapp = AlignmentGUIController(offline=True, csv=None, yaml=args.yaml, allen=True)
     mainapp.view.show()

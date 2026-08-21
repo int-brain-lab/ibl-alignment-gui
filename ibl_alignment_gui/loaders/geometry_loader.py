@@ -459,12 +459,9 @@ class GeometryLoaderLocal(GeometryLoader):
 
     Parameters
     ----------
-    probe_path: Path
-        A path to root folder containing the spike sorting and metadata collections.
-    collections: dloader.CollectionData
-        A CollectionData instance specifying the folders relative to the rootpath that
-        contain the spikesorting
-         and metadata data.
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe. The channels are read from the
+        ``spike_sorting`` folder and the metadata from the ``raw_ephys`` folder.
     """
 
     def __init__(self, data_paths: DatasetPaths):

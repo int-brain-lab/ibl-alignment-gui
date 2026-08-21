@@ -14,6 +14,7 @@ A PyQt GUI for aligning electrophysiology recordings using anatomical landmarks.
    data_preparation
    datasets
    plugins
+   shortcuts
    channel_prediction
    api
    developer_guide

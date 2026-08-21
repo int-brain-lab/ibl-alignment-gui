@@ -3,7 +3,9 @@ Plugins
 
 The IBL Alignment GUI supports a plugin architecture that allows users to extend the GUI with additional functionality. Plugins can be used to add new visualizations, interactive tools, or auxiliary views that integrate with the main GUI.
 
-This section describes the currently available plugins and how to use them.
+This section describes the currently available plugins and how to use them. The Channel
+Prediction plugin, which predicts the brain region of each channel from its electrophysiology
+features, has its own page: see :doc:`channel_prediction`.
 
 Cluster Plugin
 --------------
@@ -113,9 +115,12 @@ If a cluster plot is selected in the image plot, the corresponding cluster locat
 Adding Additional Plots
 -----------------------
 
-Custom plots can be added to the GUI via the plugin system.
+Custom plots can be added to the GUI via the plugin system, without modifying the GUI itself.
 
-To add new plots, implement the plot in the `additional_plots` module located in the `plugins` directory.
+``ibl_alignment_gui/plugins/allen/additional_plots_allen.py`` is a worked example. It shows how a
+plugin adds its own plots by attaching new plot methods to the plot loader, so that they appear in
+the menu bars alongside the built-in plots. ``ibl_alignment_gui/plugins/allen/custom_filters.py``
+does the same for the unit filters, adding new entries to the ``Filter Plots`` menu.
 
 .. note::
    Detailed developer documentation for writing custom plugins and additional plots will be provided in a future release.

@@ -5,10 +5,8 @@ defaults:
     path: /common/histology/subject_001
   spike_sorting:
     path: pykilosort
-    backend: phylib
   raw_ephys:
     path: spikeglx
-    backend: spikeglx
 
 configurations:
   dense:

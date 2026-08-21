@@ -51,12 +51,17 @@
 
 {% block modules %}
 {% if modules %}
+{#- Third-party widgets vendored into the repository; excluded from the api reference in the
+    same way they are excluded from the linter. -#}
+{% set vendored = ['adapted_axis', 'qrange_slider'] %}
 .. autosummary::
    :toctree:
    :template: custom-module-template.rst
    :recursive:
 {% for item in modules %}
+{%- if item.split('.')[-1] not in vendored %}
    {{ item }}
+{%- endif %}
 {%- endfor %}
 {% endif %}
 {% endblock %}

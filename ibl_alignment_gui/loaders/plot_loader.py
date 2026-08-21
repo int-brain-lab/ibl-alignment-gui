@@ -1494,8 +1494,8 @@ class PlotLoader:
 
         Notes
         -----
-        - Although this is a probe plot the data is not split into banks as for the case of other
-         probe plots.
+        - Although this is a probe plot the data is not split into banks as for the case of
+          other probe plots.
         - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
         passive = _get_passive()

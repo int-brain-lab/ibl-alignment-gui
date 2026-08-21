@@ -367,12 +367,12 @@ class AlignmentLoaderLocal(AlignmentLoader):
     that the xyz picks are read from.
 
     For single-shank data, expected filenames:
-        - *xyz_picks.json
-        - prev_alignments.json
+        - ``*xyz_picks.json``
+        - ``prev_alignments.json``
 
     For multi-shank data, expected filenames:
-        - *xyz_picks_shank<N>.json
-        - prev_alignments_shank<N>.json
+        - ``*xyz_picks_shank<N>.json``
+        - ``prev_alignments_shank<N>.json``
 
     Parameters
     ----------

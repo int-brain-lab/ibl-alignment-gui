@@ -115,6 +115,12 @@ The GUI supports visualization of up to four probes simultaneously. This is part
 .. warning::
    When multiple probes are specified, the GUI does not split data automatically. Each probe's data must already be separated on disk.
 
+.. warning::
+   Each probe entry must be given its own ``output`` path. Because each entry is treated as a
+   single-shank probe, the results are written as ``channel_locations.json`` and
+   ``prev_alignments.json`` with no shank suffix, so two entries sharing an ``output`` path will
+   silently overwrite each other's results and read back each other's previous alignments.
+
 **Example: four-probe configuration**
 
 .. code-block:: yaml
@@ -498,10 +504,8 @@ This comprehensive example demonstrates how different path resolution levels wor
        path: /common/histology/subject_001
      spike_sorting:
        path: pykilosort
-       backend: phylib
      raw_ephys:
        path: spikeglx
-       backend: spikeglx
 
    configurations:
      dense:

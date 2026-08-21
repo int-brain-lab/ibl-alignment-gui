@@ -6,7 +6,7 @@ This guide will walk you through the basic usage of the IBL Alignment GUI.
 1. Sample Data
 --------------
 
-We provide a sample dataset to help you quickly get started with the tool. Download the sample data `here <https://ibl.flatironinstitute.org/public/ephys_alignment_sample_data.zip>`_.
+We provide a sample dataset to help you quickly get started with the tool. Download the sample data `here <https://ibl.flatironinstitute.org/public/ephys_alignment_sample_data.zip>`__.
 
 Extract the contents to a location on your computer - you'll need this path when loading data into the GUI.
 
@@ -475,4 +475,4 @@ The data will be saved in the same way as for single-shank data, with each shank
 Resources
 ---------
 
-An introduction to the tool was given at the 2020 UCL Neuropixels course. The lecture can be found `here <https://www.youtube.com/watch?v=8FcbT18vFS8>`_.
+An introduction to the tool was given at the 2020 UCL Neuropixels course. The lecture can be found `here <https://www.youtube.com/watch?v=8FcbT18vFS8>`__.

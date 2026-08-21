@@ -78,8 +78,8 @@ You can add an extra dataset to the probe in the session YAML, for example:
          features:
            path: probe_00/features/raw_ephys_features.pqt
 
-The path is resolved in the same way as every other dataset, so it can be relative to the probe,
-configuration or top-level ``path``. See :doc:`usage` for the resolution rules.
+The path follows the same resolution rules as the other datasets, so it can be relative to the
+probe, configuration or top-level ``path``.
 
 Alternatively a features file can be chosen at runtime from
 ``Plugins -> Channel Prediction -> Load features file…``.

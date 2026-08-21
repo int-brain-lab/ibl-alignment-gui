@@ -540,15 +540,13 @@ class DataLoaderLocal(DataLoader):
     """
     Data loader using local file system.
 
-    Data are loaded from files on disk. Uses a CollectionData object to resolve the paths for
-    the different data directories.
+    Data are loaded from files on disk, from the dataset paths resolved from the session yaml.
 
     Parameters
     ----------
-    probe_path : Path
-        Root directory of probe data
-    collections : CollectionData
-        Object containing subcollection paths for spike, ephys, task, raw_task, and metadata.
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe, holding the spike sorting, processed ephys,
+        task, raw task and raw ephys directories.
     """
 
     def __init__(self, data_paths: DatasetPaths):

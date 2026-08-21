@@ -149,7 +149,7 @@ class ShankController:
         Notes
         -----
         - fig_slice is passed in as a parameter as for the dual config display the channels
-        plotted on a different slice figure than the one stored in the view.
+          plotted on a different slice figure than the one stored in the view.
         """
         data = Bunch()
         jitter = np.random.uniform(-1 * 1e-5, 1 * 1e-5, size=self.model.xyz_channels.shape)

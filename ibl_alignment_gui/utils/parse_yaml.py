@@ -56,14 +56,12 @@ class DatasetPaths(BaseModel):
 
 class Datasets(BaseModel):
     """
-    Dataset configuration with optional path and backend specification.
+    Dataset configuration.
 
     Attributes
     ----------
     path : Path
         Relative or absolute path to the dataset directory
-    backend : str | None
-        Data format backend (e.g., 'phylib', 'spikeglx')
     space : {'ccf', 'anatomical'} | None
         Only meaningful for the ``histology`` entry of the top-level ``defaults`` section: the
         session-level coordinate space to use for histology slice loading. 'ccf' loads via
@@ -72,7 +70,6 @@ class Datasets(BaseModel):
     """
 
     path: Path | None = None
-    backend: str | None = None
     space: Literal['ccf', 'anatomical'] | None = None
 
 

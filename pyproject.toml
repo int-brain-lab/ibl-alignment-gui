@@ -11,7 +11,13 @@ authors = [
 ]
 dependencies = [
   "qtpy>=2.4.1",
+  # qtpy only abstracts over a Qt binding, it does not provide one, so a binding has to be
+  # declared here or the GUI cannot start. PyQt5 rather than PyQt6 because ibllib (the 'ibl'
+  # extra) hard-requires pyqt5, and two bindings in one process is a crash risk.
+  "pyqt5",
   "numpy",
+  "pandas",
+  "scipy",
   "pyqtgraph>=0.13.7",
   "ONE-api>=3.0.0",
   "iblutil>=1.20.0",
@@ -20,6 +26,8 @@ dependencies = [
   "matplotlib",
   "simpleitk",
   "pydantic",
+  "pyyaml",
+  "requests",
   "ibl-datoviz @ git+https://github.com/int-brain-lab/ibl-datoviz.git"
 ]
 readme = "README.md"
@@ -40,7 +48,6 @@ allen = [
   "aind-qcportal-schema",
   "aws-requests-auth",
   "boto3",
-  "requests",
   "antspyx",
 ]
 

@@ -17,18 +17,18 @@ After the GUI opens (the session auto-loads when ``--yaml`` is given), click
 predicted regions on the reference histology.
 
 Run with::
-# Cazettes Lab datasets
-python launch_with_local_prediction.py --yaml /mnt/s0/Data/2026_cazettes/2026_cazettes/Data/VF066/2025_12_04/alignment_gui_probe01.yaml
 
+    python launch_with_local_prediction.py \
+        --yaml /path/to/session/alignment_gui_probe00.yaml \
+        --model-dir /path/to/models/<vintage>_Cosmos_<run-name>
 
-#Using OOP implementation
-python launch_with_local_prediction.py --yaml /mnt/s0/Data/2026_cazettes/2026_cazettes/Data/VF066/2025_12_04/alignment_gui_probe01.yaml
-python launch_with_local_prediction.py --yaml /mnt/s0/Data/2026_cazettes/2026_cazettes/Data/VF066/2025_12_04/alignment_gui_probe00.yaml
-python launch_with_local_prediction.py --yaml /mnt/s0/Data/2026_cazettes/2026_cazettes/Data/VF065/2025_12_17/alignment_gui.yaml
+To pre-wire the Spatial Encoder (automatic alignment) as well, pass both encoder options::
 
-# NuoLi's datasets
-python launch_with_local_prediction.py --yaml /mnt/s0/Data/2026_nuo_li/Munni/20210527_g0_imec0/alignment_gui_DL021.yaml
-python launch_with_local_prediction.py --yaml /mnt/s0/Data/2026_nuo_li/Munni/20210620_g0_imec0/alignment_gui_DL025.yaml
+    python launch_with_local_prediction.py \
+        --yaml /path/to/session/alignment_gui_probe00.yaml \
+        --model-dir /path/to/models/<vintage>_Cosmos_<run-name> \
+        --encoder-dir /path/to/encoding_models/<vintage> \
+        --encoder-data /path/to/analysis/features
 
 """
 
@@ -42,25 +42,12 @@ from pathlib import Path
 
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 from ibl_alignment_gui.plugins.channel_prediction import PLUGIN_NAME
 
-# Default model dir (session-independent). Features now live in the session YAML, so --features is
-# only an optional override for YAMLs that do not specify a `features` dataset.
-DEFAULT_MODEL_DIR = Path(
-    '/home/pranavrai/Work/int-brain-lab/projects/cazettes_sample_data_check'
-    '/analysis/features/ea_active/models/2026_W12_Cosmos_careless-clover-dingo'
-)
-
-# Spatial Encoder (automatic alignment): local encoder model dir + reference-bank root. The bank
-# root is the dir that contains <project>/<vintage>/agg_full/*.pqt (here ea_active/2026_W12).
-DEFAULT_ENCODER_DIR = Path(
-    '/home/pranavrai/Work/int-brain-lab/projects/allen_sample_data_check'
-    '/analysis/temp_model/encoding_models/2026_W12'
-)
-DEFAULT_ENCODER_DATA = Path(
-    '/home/pranavrai/Work/int-brain-lab/projects/cazettes_sample_data_check/analysis/features'
-)
+# Model locations are machine-specific, so they are passed on the command line rather than
+# defaulted here. Features normally live in the session YAML, so --features is only an override
+# for YAMLs that do not specify a `features` dataset.
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -74,21 +61,24 @@ def parse_args() -> argparse.Namespace:
         '--yaml', '-y', type=Path, default=None,
         help='Path to a session YAML config (same format as `alignment-gui -y`).')
     parser.add_argument(
-        '--model-dir', type=Path, default=DEFAULT_MODEL_DIR,
-        help=f'Trained model directory (containing folds/FOLD00/). Default: {DEFAULT_MODEL_DIR}')
+        '--model-dir', type=Path, required=True,
+        help='Trained inference model directory (containing folds/FOLD00/ or FOLD00/).')
     parser.add_argument(
         '--features', type=Path, default=None,
         help='Optional per-channel features parquet override (only needed if the YAML has no '
              '`features` dataset).')
     parser.add_argument(
-        '--encoder-dir', type=Path, default=DEFAULT_ENCODER_DIR,
-        help=f'Local Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy). '
-             f'Default: {DEFAULT_ENCODER_DIR}')
+        '--encoder-dir', type=Path, default=None,
+        help='Local Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy). Only needed to '
+             'pre-wire the Spatial Encoder; must be given together with --encoder-data.')
     parser.add_argument(
-        '--encoder-data', type=Path, default=DEFAULT_ENCODER_DATA,
-        help=f'Spatial Encoder reference-bank root (<project>/<vintage>/agg_full/). '
-             f'Default: {DEFAULT_ENCODER_DATA}')
-    return parser.parse_args()
+        '--encoder-data', type=Path, default=None,
+        help='Spatial Encoder reference-bank root, i.e. the dir containing '
+             '<project>/<vintage>/agg_full/*.pqt. Must be given together with --encoder-dir.')
+    args = parser.parse_args()
+    if (args.encoder_dir is None) != (args.encoder_data is None):
+        parser.error('--encoder-dir and --encoder-data must be given together')
+    return args
 
 
 # %% Path validation
@@ -128,11 +118,12 @@ def main() -> None:
     plugin_state['Inference'] = {'local_inference_dir': args.model_dir, 'model_name': None, 'model': None}
     if args.features is not None:
         plugin_state['features_path'] = args.features
-    # Pre-wire the Spatial Encoder (automatic alignment) at local paths too, so it runs offline.
-    plugin_state['Encoding'] = {'local_encoder_dir': args.encoder_dir,
-                                'local_encoder_data': args.encoder_data,
-                                'model_name': None,
-                                'model': None}
+    # Pre-wire the Spatial Encoder (automatic alignment) too, when its paths were supplied.
+    if args.encoder_dir is not None:
+        plugin_state['Encoding'] = {'local_encoder_dir': args.encoder_dir,
+                                    'local_encoder_data': args.encoder_data,
+                                    'model_name': None,
+                                    'model': None}
     logger.info(
         'Pre-populated %r plugin. Click Plugins -> %s -> Inference Model to run inference.',
         PLUGIN_NAME, PLUGIN_NAME)

@@ -1,4 +1,5 @@
 import os
+import sys
 
 # The spatial-encoder (torch) and inference (xgboost, via ephysatlas.regionclassifier) plugins
 # each bundle their own OpenMP runtime. On macOS, having both loaded in one process leaves two
@@ -8,7 +9,10 @@ import os
 # a single OpenMP thread avoids the thread-pool bring-up that triggers the corruption. Must be
 # set before torch/xgboost are ever imported (they're lazily imported by the plugins later), so
 # this needs to happen at process start, before those imports occur anywhere.
-os.environ.setdefault('OMP_NUM_THREADS', '1')
+# Only macOS is affected; applying the limit elsewhere would needlessly single-thread the
+# OpenMP-backed numpy/scipy work that the rest of the GUI depends on.
+if sys.platform == 'darwin':
+    os.environ.setdefault('OMP_NUM_THREADS', '1')
 
 import argparse
 

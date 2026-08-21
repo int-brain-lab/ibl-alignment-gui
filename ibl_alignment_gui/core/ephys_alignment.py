@@ -245,8 +245,8 @@ class EphysAlignment:
         entry = entry_lims[entry_top_lim, :]
         if speedy:
             exit_lims = traj_exit.eval_z(self.brain_atlas.bc.zlim)
-            exit_top_lim = np.argmin(entry_lims[:, 2])
-            exit = exit_lims[exit_top_lim, :]
+            exit_bottom_lim = np.argmin(exit_lims[:, 2])
+            exit = exit_lims[exit_bottom_lim, :]
         else:
             exit = atlas.Insertion.get_brain_exit(traj_exit, self.brain_atlas)
             # The exit is just below the bottom surfacce of the brain

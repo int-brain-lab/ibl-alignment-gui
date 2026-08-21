@@ -20,6 +20,10 @@ from one.webclient import http_download_file
 
 logger = logging.getLogger(__name__)
 
+# Timeout for the histology directory-listing request. Without one, an unreachable data
+# server leaves the load running behind a progress dialog that has no cancel button.
+HTTP_TIMEOUT_SECS = 30
+
 
 class LazySliceDict(dict):
     """
@@ -495,7 +499,9 @@ def download_histology_data(
         url = f'{par.HTTP_DATA_SERVER}/{"/".join(flatiron_path.parts)}/'
         try:
             response = requests.get(
-                url, auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD)
+                url,
+                auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD),
+                timeout=HTTP_TIMEOUT_SECS,
             )
             response.raise_for_status()
             return flatiron_path, response.text
@@ -521,7 +527,9 @@ def download_histology_data(
     rel_path, html_text = histology_folder
     base_url = f'{par.HTTP_DATA_SERVER}/{"/".join(rel_path.parts)}'
 
-    tif_files = [match + '.tif' for match in re.findall(r'href="(.*).tif"', html_text)]
+    # Match within a single href value ([^"]*) rather than greedily across the line, so two
+    # links on one line yield two filenames instead of one mangled one.
+    tif_files = [f'{match}.tif' for match in re.findall(r'href="([^"]*)\.tif"', html_text)]
 
     cache_dir.mkdir(exist_ok=True, parents=True)
     path_to_files = []
@@ -529,13 +537,31 @@ def download_histology_data(
         img_path = Path(cache_dir, file)
         if not img_path.exists():
             file_url = f'{base_url}/{file}'
-            http_download_file(
-                file_url,
-                target_dir=cache_dir,
-                username=par.HTTP_DATA_SERVER_LOGIN,
-                password=par.HTTP_DATA_SERVER_PWD,
-            )
-        path_to_files.append(tif2nrrd(img_path))
+            try:
+                downloaded = http_download_file(
+                    file_url,
+                    target_dir=cache_dir,
+                    username=par.HTTP_DATA_SERVER_LOGIN,
+                    password=par.HTTP_DATA_SERVER_PWD,
+                )
+            except Exception as e:
+                logger.error(f'Failed to download histology file {file_url}: {e}')
+                continue
+            if downloaded is None or not Path(downloaded).exists():
+                logger.error(f'Histology file was not downloaded: {file_url}')
+                continue
+            # Trust the path the downloader reports rather than reconstructing it, so a href
+            # that carries directory parts cannot point the conversion at a missing file.
+            img_path = Path(downloaded)
+
+        try:
+            path_to_files.append(tif2nrrd(img_path))
+        except Exception as e:
+            logger.error(f'Failed to convert histology file {img_path} to nrrd: {e}')
+
+    if not path_to_files:
+        logger.error(f'No histology files could be retrieved for subject={subject}')
+        return None, cache_dir
 
     if len(path_to_files) > 3:
         path_to_files = path_to_files[1:3]

@@ -35,10 +35,8 @@ time without restarting the GUI.
 Required and Optional Datasets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each probe must define at least one of the following two datasets. The probe trajectory is read
-from the ``picks`` directory, falling back to the ``spike_sorting`` directory, and the alignment
-results are written to the ``output`` directory, falling back to either of them, so with neither
-given there is nowhere to read the trajectory from or write the results to.
+Each probe must have at least two paths to datasets defined. The ``picks`` directory containing the probe trajectory
+and the ``spike_sorting`` directory containing the spike sorting output.
 
 .. list-table::
    :header-rows: 1
@@ -47,14 +45,14 @@ given there is nowhere to read the trajectory from or write the results to.
    * - Dataset
      - Description
    * - ``spike_sorting``
-     - Directory containing spike sorting output (e.g., Kilosort, PyKilosort). May be left out
-       for datasets that have no spike sorting, in which case the shank count is read from the
-       SpikeGLX metadata
+     - Directory containing spike sorting output (e.g., Kilosort, PyKilosort).
    * - ``picks``
-     - Directory containing probe trajectory pick files. If not given, the pick files are read
-       from the ``spike_sorting`` directory
+     - Directory containing probe trajectory pick files.
 
-The following datasets are optional:
+.. note::
+   For the format of the files each of these folders is expected to contain, see :doc:`datasets`.
+
+The following paths to datasets are optional:
 
 .. list-table::
    :header-rows: 1

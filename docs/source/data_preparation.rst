@@ -9,6 +9,9 @@ The GUI requires:
 - Extracted raw electrophysiology features
 - Probe trajectory coordinates in the brain atlas
 
+For the exact format of every dataset the GUI reads and writes, and which folder each one belongs
+in, see :doc:`datasets`.
+
 
 Preparing Electrophysiology Data
 ---------------------------------
@@ -39,6 +42,10 @@ If you recorded data using SpikeGLX and spike-sorted using Kilosort or pykilosor
     out_path = Path('/path/to/output')
 
     extract_data(ks_path, ephys_path, out_path)
+
+This writes the spike sorting datasets (``spikes.*``, ``clusters.*`` and ``channels.*``) and the
+RMS and spectral density files (``_iblqc_ephysTimeRms*`` and ``_iblqc_ephysSpectralDensityLF``)
+into the output path. See :doc:`datasets` for what each of them contains.
 
 .. warning::
     Ensure the output path is **not** the same as the Kilosort path to avoid overwriting existing files.

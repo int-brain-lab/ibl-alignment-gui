@@ -38,33 +38,14 @@ Clicking this button opens a menu with two ways to choose the data to align:
 **Open session YAML…**
     Choose a YAML file that lists where each of the datasets lives
 
-Loading a Data Folder
-~~~~~~~~~~~~~~~~~~~~~
 
-Select **Open data folder…**, navigate to the folder containing your extracted sample data and
-choose Sample data 1. The data is loaded as soon as the folder is selected.
+Sample data 1 can be loaded using the select **Open data folder…**. Navigate to the folder containing your
+extracted sample data and choose Sample data 1 folder. The data is loaded as soon as the folder is selected.
 
 .. note::
     This assumes all of the data for the session (spike sorting output, raw electrophysiology
     recordings, probe trajectory files, and histology volumes) is in the one folder. Use a session
     YAML if the datasets are spread across several folders.
-
-Loading a Session YAML
-~~~~~~~~~~~~~~~~~~~~~~
-
-Select **Open session YAML…** and choose the YAML file for the session. As with a data folder, the
-session is loaded as soon as the file is selected.
-
-A session YAML lists the folder each dataset lives in, so the data does not have to be gathered
-into one place, and it can describe several probes or two configurations at once. See
-:doc:`usage` for the format and worked examples.
-
-The two sources are interchangeable while the GUI is running, so you can switch from a data folder
-to a YAML session, or between YAML sessions, without restarting.
-
-.. note::
-    The ``Load`` button beside the dropdowns reloads whatever is currently selected. You do not
-    need to press it after choosing a data folder or a session YAML.
 
 
 4. Overview of Layout
@@ -108,7 +89,7 @@ You can switch between plots using either the ``Image Plots``, ``Line Plots``, a
 Filtering Units
 """""""""""""""
 
-By default, the Ephys plots display all units classified as Good and MUA during spike sorting.
+By default, the Ephys plots display all of the units returned by the spike sorting.
 
 To restrict which units are shown, use the ``Filter Plots`` option in the menu bar. This allows you to selectively display specific unit classes, making it easier to focus on well-isolated units during alignment.
 
@@ -428,12 +409,13 @@ With multi-shank data you are asked which shanks to save, in the same way as for
 ----------------------------
 
 Sample Data 2 contains recordings from a four-shank NP2.4 probe, and can be used to demonstrate the multi-shank capabilities of the GUI.
+We will also use the multi-shank data to demonstrate the use of a session YAML file, which allows datasets to be spread across multiple folders.
 
 To load the data:
 
-1. Click the ``...`` button in the top-right corner of the GUI and select **Open data folder…**.
+1. Click the ``...`` button in the top-right corner of the GUI and select **Open session YAML…**.
 2. Navigate to the directory containing Sample Data 2.
-3. Select the folder.
+3. Select the yaml file.
 
 Once loaded, four panels will appear in the GUI window, one for each shank.
 

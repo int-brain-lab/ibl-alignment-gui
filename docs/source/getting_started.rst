@@ -142,7 +142,7 @@ The intensity of the slice image can be adjusted using the **intensity scale bar
 Slice Display Options
 """""""""""""""""""""
 
-There are four available slice types, selectable via the ``Slice Plots`` menu bar or the following shortcuts:
+The available slice types are selectable via the ``Slice Plots`` menu bar or the following shortcuts:
 
 .. list-table::
    :widths: 40 60
@@ -150,18 +150,22 @@ There are four available slice types, selectable via the ``Slice Plots`` menu ba
 
    * - Shortcut
      - Action
-   * - :kbd:`Alt+3` / :kbd:`Shift+Alt+3`
+   * - :kbd:`Alt+4` / :kbd:`Shift+Alt+4`
      - Cycle through slice types (forward / backward)
 
-The options are:
+The Allen Brain Atlas average template and annotation template are always available. Alongside
+them, one option is added for each histology volume found for the session, so the number of
+options depends on the data provided:
 
-- Red channel of the histology image
-- Green channel of the histology image
 - Allen Brain Atlas average template
 - Allen Brain Atlas annotation template
+- Red channel of the histology image
+- Green channel of the histology image
 
 .. note::
-   The red and green histology channels are optional inputs and will not be displayed if not provided.
+   The red and green histology channels are optional inputs and will not be displayed if not
+   provided. Sessions registered with the anatomical pipeline instead get one option per volume
+   produced by the registration.
 
 
 Figure 4: Fit Figure
@@ -216,7 +220,7 @@ Once both lines are positioned on corresponding features or landmarks, apply the
      - Action
    * - Click **Fit** button
      - Apply fit
-   * - :kbd:`Enter` / :kbd:`Shift+Right`
+   * - :kbd:`Enter`
      - Apply fit
 
 
@@ -319,7 +323,7 @@ This saves the following files in the output data directory:
 **prev_alignments.json**
     Stores the reference lines used for alignment, allowing previous alignments to be reloaded later
 
-You will notice in the dropdown menu next to the ``Load`` button in the top left corner of the GUI that this new alignment is now available to load.
+You will notice in the dropdown menu next to the ``Load`` button in the top right corner of the GUI that this new alignment is now available to load.
 
 
 7. Loading Multi-Shank Data
@@ -369,9 +373,9 @@ You can toggle between these modes:
 
    * - Shortcut
      - Action
-   * - Click **Tabbed View** in Display menu
+   * - Click **Toggle layout** in Display menu
      - Toggle view mode
-   * - :kbd:`Shift+T`
+   * - :kbd:`T`
      - Toggle view mode
 
 In the non-tabbed view:
@@ -386,7 +390,7 @@ Uploading Alignments
 
 After pressing the ``Upload`` button, a dialog will appear asking whether to upload alignments for all shanks or only the active shank.
 
-The data will be saved in the same way as for single-shank data, with each shank's results saved in separate files with appropriate suffixes (e.g., `channel_locations_shank_1.json`).
+The data will be saved in the same way as for single-shank data, with each shank's results saved in separate files with appropriate suffixes (e.g., `channel_locations_shank1.json`).
 
 Resources
 ---------

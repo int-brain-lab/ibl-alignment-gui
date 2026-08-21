@@ -184,7 +184,9 @@ known-first-party = ["brainbox*", "ibl*", "one*" ]
 
 [tool.mypy]
 packages = ["ibl_alignment_gui", "tests"]
-python_version = "3.10"
+# 3.12 rather than the 3.10 floor of requires-python: the installed numpy stubs use 3.12 syntax,
+# and targeting 3.10 makes mypy fail while reading them, before it checks anything.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 

@@ -33,10 +33,10 @@ A new window will open showing:
 
    * - Shortcut
      - Action
-   * - :kbd:`Ctrl+M`
-     - Minimize the plugin window
-   * - :kbd:`Ctrl+X`
-     - Close the plugin window
+   * - :kbd:`M`
+     - Minimise / show the plugin windows
+   * - :kbd:`Alt+X`
+     - Close the plugin windows
 
 
 Range Controller
@@ -103,9 +103,9 @@ If a cluster plot is selected in the image plot, the corresponding cluster locat
      - Function
    * - Cluster marker size slider
      - Adjust size of cluster markers
-   * - **3D Regions** checkbox
+   * - **Show regions** checkbox
      - Show / hide anatomical brain regions
-   * - **Picks** checkbox
+   * - **Show picks** checkbox
      - Show / hide probe trajectory picks
 
 Adding Additional Plots

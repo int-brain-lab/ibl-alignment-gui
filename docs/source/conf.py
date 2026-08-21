@@ -28,7 +28,7 @@ html_context = {
     'display_github': False,
     'github_user': 'int-brain-lab',
     'github_repo': 'ibl-alignment-gui',
-    'github_version': 'master',
+    'github_version': 'main',
     'conf_py_path': '/docs/source/',
 }
 

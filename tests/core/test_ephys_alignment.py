@@ -1,9 +1,11 @@
 import unittest
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+
 from ibl_alignment_gui.core.ephys_alignment import (
-    EphysAlignment,
     TIP_SIZE_UM,
+    EphysAlignment,
     _cumulative_distance,
 )
 from iblatlas.atlas import AllenAtlas

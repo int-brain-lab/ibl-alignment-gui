@@ -1,0 +1,10 @@
+path: /mnt/data
+
+defaults:
+  spike_sorting:
+    path: pykilosort
+
+probes:
+  probe_00:
+    path: probe_00
+    datasets: {}

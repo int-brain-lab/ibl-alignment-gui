@@ -1,0 +1,17 @@
+defaults:
+  histology:
+    path: /path/to/histology
+
+probes:
+  probe_00:
+    datasets:
+      spike_sorting:
+        path: /path/to/probe_00/spike_sorting
+      processed_ephys:
+        path: /path/to/probe_00/processed_ephys
+      raw_ephys:
+        path: /path/to/probe_00/raw_ephys
+      picks:
+        path: /path/to/probe_00/picks
+      output:
+        path: /path/to/probe_00/alignment_outputs

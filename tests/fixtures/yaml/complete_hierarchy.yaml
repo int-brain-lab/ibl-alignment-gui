@@ -1,0 +1,40 @@
+path: /mnt/s0/Data
+
+defaults:
+  histology:
+    path: /common/histology/subject_001
+  spike_sorting:
+    path: pykilosort
+    backend: phylib
+  raw_ephys:
+    path: spikeglx
+    backend: spikeglx
+
+configurations:
+  dense:
+    path: dense_session
+    probes:
+      probe_00:
+        path: probe_00
+        datasets:
+          processed_ephys:
+            path: pykilosort
+          picks:
+            path: /custom/path/to/picks  # Absolute path overrides
+          output:
+            path: alignment_outputs
+
+  sparse:
+    path: sparse_session
+    probes:
+      probe_00:
+        path: probe_00
+        datasets:
+          spike_sorting:
+            path: kilosort
+          processed_ephys:
+            path: raw_ephys_data
+          raw_ephys: {}
+          picks:
+            path: kilosort
+          output: {}  # Defaults to spike_sorting path

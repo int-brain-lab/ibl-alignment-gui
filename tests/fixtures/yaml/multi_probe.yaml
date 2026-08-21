@@ -1,0 +1,59 @@
+path: /path/to/session_data
+
+defaults:
+  histology:
+    path: /common/path/to/histology
+
+probes:
+
+  shank_0:
+    datasets:
+      spike_sorting:
+        path: shank_0/spike_sorting
+      processed_ephys:
+        path: shank_0/processed_ephys
+      raw_ephys:
+        path: shank_0/raw_ephys
+      picks:
+        path: shank_0/picks
+      output:
+        path: shank_0/output
+
+  shank_1:
+    datasets:
+      spike_sorting:
+        path: shank_1/spike_sorting
+      processed_ephys:
+        path: shank_1/processed_ephys
+      raw_ephys:
+        path: shank_1/raw_ephys
+      picks:
+        path: shank_1/picks
+      output:
+        path: shank_1/output
+
+  shank_2:
+    datasets:
+      spike_sorting:
+        path: shank_2/spike_sorting
+      processed_ephys:
+        path: shank_2/processed_ephys
+      raw_ephys:
+        path: shank_2/raw_ephys
+      picks:
+        path: shank_2/picks
+      output:
+        path: shank_2/output
+
+  shank_3:
+    datasets:
+      spike_sorting:
+        path: shank_3/spike_sorting
+      processed_ephys:
+        path: shank_3/processed_ephys
+      raw_ephys:
+        path: shank_3/raw_ephys
+      picks:
+        path: shank_3/picks
+      output:
+        path: shank_3/output

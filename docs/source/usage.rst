@@ -31,7 +31,10 @@ Launch the GUI using:
 Required and Optional Datasets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each YAML file must define paths for the following datasets:
+Each probe must define at least one of the following two datasets. The probe trajectory is read
+from the ``picks`` directory, falling back to the ``spike_sorting`` directory, and the alignment
+results are written to the ``output`` directory, falling back to either of them, so with neither
+given there is nowhere to read the trajectory from or write the results to.
 
 .. list-table::
    :header-rows: 1
@@ -40,9 +43,12 @@ Each YAML file must define paths for the following datasets:
    * - Dataset
      - Description
    * - ``spike_sorting``
-     - Directory containing spike sorting output (e.g., Kilosort, PyKilosort)
+     - Directory containing spike sorting output (e.g., Kilosort, PyKilosort). May be left out
+       for datasets that have no spike sorting, in which case the shank count is read from the
+       SpikeGLX metadata
    * - ``picks``
-     - Directory containing probe trajectory pick files
+     - Directory containing probe trajectory pick files. If not given, the pick files are read
+       from the ``spike_sorting`` directory
 
 The following datasets are optional:
 
@@ -248,7 +254,8 @@ Combining Dual Configuration and Multi-Probe Modes
 Dual configuration mode can be combined with multi-probe mode to compare multiple probes across two configurations simultaneously.
 
 .. important::
-   Both configurations must contain the same number of probes with matching probe identifiers.
+   Both configurations must contain the same probes, with matching probe identifiers. An error is
+   raised if they do not.
 
 **Example: dual + multi-probe YAML**
 
@@ -358,17 +365,21 @@ The YAML configuration supports ``path`` keys at multiple hierarchical levels to
 
 **Path Resolution Priority**
 
-When a relative path is specified for a dataset, the system searches for a base directory in the following order:
+A dataset's path is taken from its own ``path`` field, or from the matching entry in the ``defaults`` section if the dataset does not give one. Giving an empty specification (``{}``) and leaving the dataset out altogether both fall back to the default.
 
-1. **Dataset-level path** — explicitly defined within the dataset's ``path`` field
-2. **Default path** — defined in the ``defaults`` section
-3. **Per-probe path** — defined within an individual probe configuration
-4. **Per-configuration path** — defined within an individual configuration
-5. **Top-level path** — defined at the root of the YAML file
+If that path is absolute it is used as it is. If it is relative, it is resolved against the first absolute base directory found, in the following order:
 
-During the search for the base directory it will join together relative paths to build the final absolute path.
+1. **Per-probe path** — defined within an individual probe configuration
+2. **Per-configuration path** — defined within an individual configuration
+3. **Top-level path** — defined at the root of the YAML file
 
-If a dataset uses an empty specification (``{}``), the default path is appended to the resolved base path.
+Each level is prepended in turn, joining the relative paths together, until the path is absolute. If none of them make it absolute an error is raised.
+
+.. note::
+   The ``defaults`` section supplies dataset paths, not base directories. A default is used in
+   place of a dataset's own ``path``, never as a root to resolve one against, so a dataset that
+   gives its own relative path is resolved against the base directories above and its default is
+   not used at all.
 
 .. note::
    Absolute paths (those starting with ``/`` on Unix/Linux/macOS or a drive letter on Windows) always take precedence and are used as-is, ignoring any base paths defined at higher levels.

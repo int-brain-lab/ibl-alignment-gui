@@ -50,8 +50,9 @@ This allows all shanks to be displayed simultaneously within the same GUI window
 
 .. code-block:: yaml
 
+   path: /path/to/session_data
+
    probes:
-     path: /path/to/session_data
      shank_0:
        datasets:
          spike_sorting:
@@ -78,7 +79,7 @@ This allows all shanks to be displayed simultaneously within the same GUI window
          output:
            path: shank_1/output
 
-      shank_2:
+     shank_2:
        datasets:
          spike_sorting:
            path: shank_2/spike_sorting

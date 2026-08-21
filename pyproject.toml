@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "ibl_alignment_gui"
-version = "0.1.0"
+version = "1.0.0"
 description = "Electrophysiology alignment tool"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},

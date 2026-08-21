@@ -45,7 +45,8 @@ extracted sample data and choose Sample data 1 folder. The data is loaded as soo
 .. note::
     This assumes all of the data for the session (spike sorting output, raw electrophysiology
     recordings, probe trajectory files, and histology volumes) is in the one folder. Use a session
-    YAML if the datasets are spread across several folders.
+    YAML if the datasets are spread across several folders, as shown with Sample data 2 in
+    :ref:`section 7 <loading-multi-shank>`.
 
 
 4. Overview of Layout
@@ -202,13 +203,6 @@ options depends on the data provided:
 
 - Allen Brain Atlas average template
 - Allen Brain Atlas annotation template
-- Red channel of the histology image
-- Green channel of the histology image
-
-.. note::
-   The red and green histology channels are optional inputs and will not be displayed if not
-   provided. Sessions registered with the anatomical pipeline instead get one option per volume
-   produced by the registration.
 
 
 Figure 4: Fit Figure
@@ -405,11 +399,28 @@ the starting alignment. It is deleted once the alignment has been uploaded.
 With multi-shank data you are asked which shanks to save, in the same way as for uploading.
 
 
+.. _loading-multi-shank:
+
 7. Loading Multi-Shank Data
 ----------------------------
 
 Sample Data 2 contains recordings from a four-shank NP2.4 probe, and can be used to demonstrate the multi-shank capabilities of the GUI.
 We will also use the multi-shank data to demonstrate the use of a session YAML file, which allows datasets to be spread across multiple folders.
+
+The YAML shipped with Sample Data 2 lists the datasets relative to a folder given by the ``path``
+entry at the top of the file, so before loading it this must be changed to point at the Sample
+Data 2 folder on your own computer:
+
+.. code-block:: yaml
+
+   path: /path/to/sample_data_2      # <- change this to where you extracted Sample Data 2
+
+   probes:
+     probe00a:
+       datasets:
+         spike_sorting:
+           path: spike_sorting/probe00a
+
 
 To load the data:
 

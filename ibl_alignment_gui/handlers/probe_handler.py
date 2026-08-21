@@ -206,7 +206,6 @@ class ProbeHandler(ABC):
         for config in self.configs:
             self.get_selected_shank()[config].set_init_alignment()
 
-
     def sync_config_alignments(self) -> None:
         """
         Make the configurations of a shank share one set of alignments.
@@ -226,7 +225,6 @@ class ProbeHandler(ABC):
         """
         if self.non_default_config is None:
             return
-
 
         for shank in self.shanks:
             default = self.shanks[shank].get(self.default_config)
@@ -1098,8 +1096,7 @@ class ProbeHandlerLocal(ProbeHandler):
         if self.n_shanks == 1:
             self.shank_labels = ['shank_1']
         else:
-            self.shank_labels = [f'shank_{iShank + 1}'
-                                 for iShank in range(self.n_shanks)]
+            self.shank_labels = [f'shank_{iShank + 1}' for iShank in range(self.n_shanks)]
 
         self.initialise_shanks()
 

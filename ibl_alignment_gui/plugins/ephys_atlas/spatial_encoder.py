@@ -1264,9 +1264,7 @@ def _scatter_recorded_onto_trace(
     C_rec, F = recorded_full.shape
     L = int(trace_len)
 
-    kp_mask = (
-        np.ones((C_rec,), dtype=bool) if kp_mask is None else np.asarray(kp_mask, dtype=bool)
-    )
+    kp_mask = np.ones((C_rec,), dtype=bool) if kp_mask is None else np.asarray(kp_mask, dtype=bool)
 
     sums = np.zeros((L, F), dtype=np.float64)
     counts = np.zeros((L,), dtype=np.int64)
@@ -1578,8 +1576,8 @@ def _build_warped_region_ids_and_depths(
 
     if channel_depth_um_gui_order.shape[0] != n_channels:
         raise ValueError(
-            f"channel_depth_um length {channel_depth_um_gui_order.shape[0]} "
-            f"does not match j_map length {n_channels}"
+            f'channel_depth_um length {channel_depth_um_gui_order.shape[0]} '
+            f'does not match j_map length {n_channels}'
         )
 
     # work channel order was flipped relative to GUI channel order.
@@ -1684,9 +1682,7 @@ def predict(controller, items):
     # Therefore flip BOTH the histology trace and the recorded ephys table
     # before calling align().
     # ------------------------------------------------------------------
-    xyz_samples_gui_order = (
-        items.model.align_handle.xyz_samples.copy().astype(np.float32)
-    )
+    xyz_samples_gui_order = items.model.align_handle.xyz_samples.copy().astype(np.float32)
 
     xyz_samples_work_order = xyz_samples_gui_order[::-1].copy()
     recorded_full_work_order = recorded_full_gui_order[::-1].copy()
@@ -1720,15 +1716,13 @@ def predict(controller, items):
     # Missing/out-of-range samples are set to 0.
     # ------------------------------------------------------------------
     # Channel depth axis: should be 0 at tip and ~3840 at top.
-    channel_depth_um_gui_order = df["axial_um"].to_numpy(dtype=float)
+    channel_depth_um_gui_order = df['axial_um'].to_numpy(dtype=float)
 
-    region_ids, depth_samples, j_map_gui_order, warp_info = (
-        _build_warped_region_ids_and_depths(
-            xyz_samples_gui_order=xyz_samples_gui_order,
-            j_map_work_order=out["j_map_all_i"],
-            channel_depth_um_gui_order=channel_depth_um_gui_order,
-            brain_atlas=controller.model.brain_atlas,
-        )
+    region_ids, depth_samples, j_map_gui_order, warp_info = _build_warped_region_ids_and_depths(
+        xyz_samples_gui_order=xyz_samples_gui_order,
+        j_map_work_order=out['j_map_all_i'],
+        channel_depth_um_gui_order=channel_depth_um_gui_order,
+        brain_atlas=controller.model.brain_atlas,
     )
 
     if len(region_ids) != len(depth_samples):

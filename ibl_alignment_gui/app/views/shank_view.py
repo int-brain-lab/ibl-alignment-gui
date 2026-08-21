@@ -625,9 +625,9 @@ class ShankView:
             brush = cbar.get_brush(data_feature.data, levels=list(data_feature.levels))
             pen = None
 
-        self.slice_chns = pg.ScatterPlotItem(x=data['xyz_channels'][:, 0],
-                                             y=data['xyz_channels'][:, 2],
-                                             brush=brush, pen=pen)
+        self.slice_chns = pg.ScatterPlotItem(
+            x=data['xyz_channels'][:, 0], y=data['xyz_channels'][:, 2], brush=brush, pen=pen
+        )
         fig_slice.addItem(self.slice_chns)
 
         # Mark the probe tip with a larger magenta point to distinguish it from the channels

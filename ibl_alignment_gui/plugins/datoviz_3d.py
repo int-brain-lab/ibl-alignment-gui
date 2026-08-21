@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from ibl_alignment_gui.app.widgets.custom_widgets import PopupWindow
 from ibl_alignment_gui.utils.helpers import shank_loop
 
-PLUGIN_NAME = "3D features"
+PLUGIN_NAME = '3D features'
 
 SHANK_COLOURS = {
     'a': [0, 255, 0, 255],
@@ -56,7 +56,6 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['plot_probe_panels'] = feature3d_plugin.plot_channels
     controller.plugins[PLUGIN_NAME]['plot_scatter_panels'] = feature3d_plugin.plot_clusters
 
-
     action = QtWidgets.QAction(PLUGIN_NAME, controller.view)
     action.triggered.connect(lambda: callback(controller))
     controller.plugin_options.addAction(action)
@@ -67,7 +66,6 @@ def callback(controller: 'AlignmentGUIController') -> None:
     if not controller.plugins[PLUGIN_NAME]['activated']:
         controller.plugins[PLUGIN_NAME]['activated'] = True
         controller.plugins[PLUGIN_NAME]['loader'].setup()
-
 
 
 class Viewer3D(PopupWindow):
@@ -125,9 +123,7 @@ class Viewer3D(PopupWindow):
         slider_widget = QtWidgets.QWidget()
         slider_widget.setLayout(slider_layout)
 
-
         self.layout.addWidget(slider_widget)
-
 
         # TODO show trajectories
         # TODO show xyz picks
@@ -195,15 +191,15 @@ class Features3D:
         self.view.picks.clicked.connect(lambda: self.toggle_picks(self.view.picks.isChecked()))
         self.viewer = Viewer(self.view.qt_server, self.view.panel)
         # Add an additional points controller for picks
-        self.viewer.picks = PointsController(self.view.qt_server, self.view.panel,
-                                             self.viewer.offset, scale=self.viewer.scale)
+        self.viewer.picks = PointsController(
+            self.view.qt_server, self.view.panel, self.viewer.offset, scale=self.viewer.scale
+        )
         self.point_size = 3
 
         self.regions: list | np.ndarray = []
         self.texts: list = []
 
         self.data_button_pressed()
-
 
     def on_close(self) -> None:
         """
@@ -357,8 +353,9 @@ class Features3D:
 
     def update_plots(self) -> None:
         """Update the plots in the 3D view based on the current selection."""
-        self.plot_channels(self.plot_type) if self.plot == 'channels' \
-            else self.plot_clusters(self.plot_type)
+        self.plot_channels(self.plot_type) if self.plot == 'channels' else self.plot_clusters(
+            self.plot_type
+        )
 
     def plot_channels(self, plot_key: str, *args) -> None:
         """
@@ -417,7 +414,6 @@ class Features3D:
         positions = []
 
         for dat in data:
-
             if dat['xyz'] is None:
                 continue
 
@@ -443,19 +439,21 @@ class Features3D:
         """
         self.plot_type = plot_key
 
-        if (self.controller.model.selected_config == 'both'
-                or not self.controller.model.selected_config):
+        if (
+            self.controller.model.selected_config == 'both'
+            or not self.controller.model.selected_config
+        ):
             data = update_function(self.controller, plot_key)
         else:
-            data = update_function(self.controller, plot_key,
-                                   configs=[self.controller.model.selected_config])
+            data = update_function(
+                self.controller, plot_key, configs=[self.controller.model.selected_config]
+            )
 
         colours = []
         positions = []
         markers = []
 
         for dat in data:
-
             if dat['xyz'] is None:
                 continue
 
@@ -465,13 +463,15 @@ class Features3D:
             # Find the position to put the shank indicators
             min_idx = np.argmax(dat['xyz'][:, 2])
 
-            sh_info = {'name': dat['shank'][-1],
-                       'pos': [
-                           dat['xyz'][min_idx, 0],
-                           dat['xyz'][min_idx, 1],
-                           dat['xyz'][min_idx, 2] + 200 / 1e6,
-                       ],
-                       'col': SHANK_COLOURS.get(dat['shank'][-1], create_random_color())}
+            sh_info = {
+                'name': dat['shank'][-1],
+                'pos': [
+                    dat['xyz'][min_idx, 0],
+                    dat['xyz'][min_idx, 1],
+                    dat['xyz'][min_idx, 2] + 200 / 1e6,
+                ],
+                'col': SHANK_COLOURS.get(dat['shank'][-1], create_random_color()),
+            }
             if self.controller.model.selected_config != 'both' or dat['config'] == 'quarter':
                 markers.append(sh_info)
 
@@ -499,12 +499,7 @@ def create_random_color() -> str:
     # return rgb2hex((r / 255, g / 255, b / 255))
 
 
-def data_to_colors(
-        data: list | np.ndarray,
-        cmap: str,
-        vmin: float,
-        vmax: float
-) -> list:
+def data_to_colors(data: list | np.ndarray, cmap: str, vmin: float, vmax: float) -> list:
     """
     Convert data values to RGBA color codes.
 
@@ -545,6 +540,7 @@ def get_regions(_, items: 'ShankController', **kwargs):
         An array of unique region names.
     """
     return np.unique(items.model.hist_data['axis_label'][:, 1])
+
 
 @shank_loop
 def get_xyz_picks(_, items: 'ShankController', **kwargs) -> dict[str, Any]:

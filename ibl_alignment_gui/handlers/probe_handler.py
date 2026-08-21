@@ -454,7 +454,6 @@ class ProbeHandler(ABC):
         in ``initialise_shanks`` hold a reference to the atlas; because the atlas may not exist yet
         at that point, this method (re)assigns the freshly built atlas onto each of them.
         """
-
         if progress_callback is not None:
             progress_callback('Building atlas…', 0, 0)
 

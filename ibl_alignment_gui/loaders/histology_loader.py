@@ -1,9 +1,9 @@
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import requests
@@ -46,6 +46,7 @@ class LazySliceDict(dict):
             super().__setitem__(key, None)  # placeholder so key appears in .keys()
 
     def __getitem__(self, key):
+        """Return the slice for ``key``, loading and caching it on first access."""
         value = super().__getitem__(key)
         if value is None and key in self._callbacks:
             value = self._callbacks[key]()
@@ -53,6 +54,7 @@ class LazySliceDict(dict):
         return value
 
     def get(self, key, default=None):
+        """Return the slice for ``key``, or ``default`` when it is not present."""
         # CPython's dict.get() bypasses __getitem__, so override to trigger lazy load.
         if key in self:
             return self[key]
@@ -213,15 +215,17 @@ class NrrdSliceLoader(SliceLoader):
 @dataclass(frozen=True)
 class ImageSpacePaths:
     """
-    Paths to the NRRD files produced by the histology registration pipeline,
-    all living in a single folder.
+    Paths to the NRRD files produced by the histology registration pipeline.
+
+    All of the files live in a single folder.
 
     atlas_image_path : Path
         CCF template warped into anatomical space (``ccf_in_*.nrrd``).
     atlas_labels_path : Path
         CCF labels warped into anatomical space (``labels_in_*.nrrd``).
     pipeline_image_path : Path
-        Pipeline reference image used by the registration (``histology_registration_pipeline.nrrd``).
+        Pipeline reference image used by the registration
+        (``histology_registration_pipeline.nrrd``).
     histology_image_path : Path
         Main registered histology channel (``histology_registration.nrrd``).
     other_channel_paths : list[Path]
@@ -289,6 +293,7 @@ class AnatomicalSliceLoader(SliceLoader):
             self.brain_atlas = self._build_anatomical_atlas()
 
     def get_paths(self) -> None:
+        """Resolve the anatomical-space volume paths and record them on the loader."""
         self.image_space_paths = ImageSpacePaths.from_folder(self.file_path)
         self.hist_paths: dict[str, Path] = {
             'Histology registration': self.image_space_paths.histology_image_path,

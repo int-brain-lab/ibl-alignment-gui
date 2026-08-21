@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import scipy
 
-import iblatlas.atlas as atlas
+from iblatlas import atlas
 from iblatlas.atlas import BrainAtlas
 from iblutil.util import Bunch
 
@@ -246,16 +246,16 @@ class EphysAlignment:
         if speedy:
             exit_lims = traj_exit.eval_z(self.brain_atlas.bc.zlim)
             exit_bottom_lim = np.argmin(exit_lims[:, 2])
-            exit = exit_lims[exit_bottom_lim, :]
+            brain_exit = exit_lims[exit_bottom_lim, :]
         else:
-            exit = atlas.Insertion.get_brain_exit(traj_exit, self.brain_atlas)
-            # The exit is just below the bottom surfacce of the brain
-            exit[2] = exit[2] - 200 / 1e6
+            brain_exit = atlas.Insertion.get_brain_exit(traj_exit, self.brain_atlas)
+            # The exit is just below the bottom surface of the brain
+            brain_exit[2] = brain_exit[2] - 200 / 1e6
 
         # Fall back to the atlas z-limit if the surface intersection failed
-        if any(np.isnan(exit)):
-            exit = (traj_exit.eval_z(self.brain_atlas.bc.zlim))[1, :]
-        xyz_track = np.r_[exit[np.newaxis, :], xyz_picks, entry[np.newaxis, :]]
+        if any(np.isnan(brain_exit)):
+            brain_exit = (traj_exit.eval_z(self.brain_atlas.bc.zlim))[1, :]
+        xyz_track = np.r_[brain_exit[np.newaxis, :], xyz_picks, entry[np.newaxis, :]]
         # Sort so that most ventral coordinate is first
         xyz_track = xyz_track[np.argsort(xyz_track[:, 2]), :]
 
@@ -599,14 +599,14 @@ class EphysAlignment:
 
         vector = atlas.Insertion.from_track(xyz_coords, brain_atlas=brain_atlas).trajectory.vector
         nearest_bound = dict()
-        nearest_bound['dist'] = np.zeros((xyz_coords.shape[0]))
-        nearest_bound['id'] = np.zeros((xyz_coords.shape[0]))
+        nearest_bound['dist'] = np.zeros(xyz_coords.shape[0])
+        nearest_bound['id'] = np.zeros(xyz_coords.shape[0])
         # nearest_bound['adj_id'] = np.zeros((xyz_coords.shape[0]))
         nearest_bound['col'] = []
 
         if parent:
-            nearest_bound['parent_dist'] = np.zeros((xyz_coords.shape[0]))
-            nearest_bound['parent_id'] = np.zeros((xyz_coords.shape[0]))
+            nearest_bound['parent_dist'] = np.zeros(xyz_coords.shape[0])
+            nearest_bound['parent_id'] = np.zeros(xyz_coords.shape[0])
             # nearest_bound['parent_adj_id'] = np.zeros((xyz_coords.shape[0]))
             nearest_bound['parent_col'] = []
 
@@ -713,10 +713,7 @@ class EphysAlignment:
             all_y.append(y)
             all_x.append(x)
             col = region_colours[bound[iB]]
-            if not isinstance(col, str):
-                col = '#FFFFFF'
-            else:
-                col = '#' + col
+            col = '#' + col if isinstance(col, str) else '#FFFFFF'
             all_colour.append(col)
 
         return all_x, all_y, all_colour
@@ -748,7 +745,7 @@ class EphysAlignment:
         """
         region_orig = region_orig if region_orig is not None else self.region
         scale = []
-        for iR, (reg, reg_orig) in enumerate(zip(region, region_orig * 1e6)):
+        for reg, reg_orig in zip(region, region_orig * 1e6, strict=False):
             scale = np.r_[scale, (reg[1] - reg[0]) / (reg_orig[1] - reg_orig[0])]
         boundaries = np.where(np.diff(np.around(scale, 3)))[0]
         if boundaries.size == 0:

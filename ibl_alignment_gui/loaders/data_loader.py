@@ -4,7 +4,6 @@ import logging
 import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,12 +14,9 @@ import spikeglx
 
 import ibldsp.voltage
 import one.alf.io as alfio
-from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
-from one.api import ONE
-from one.remote import aws
 
 try:
     import ephysatlas.data
@@ -30,7 +26,11 @@ except ImportError:
     EPHYS_ATLAS = False
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from brainbox.io.spikeglx import Streamer
+    from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
+    from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
@@ -793,7 +793,7 @@ class SpikeGLXLoader(ABC):
 
         data = defaultdict(Bunch)
 
-        for i, t in enumerate(times):
+        for t in times:
             raw = self._get_lf_snippet(sr, t, twin=twin)
 
             data['images'][t] = raw

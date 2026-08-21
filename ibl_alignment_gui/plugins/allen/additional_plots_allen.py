@@ -15,7 +15,7 @@ PLUGIN_NAME = 'Additional Plots Allen'
 
 def setup(controller: 'AlignmentGUIController') -> None:
     """
-    Example to show how to add additional plots to the GUI.
+    Show how to add additional plots to the GUI.
 
     Parameters
     ----------
@@ -68,19 +68,47 @@ def add_plots(_, items: 'ShankController', **kwargs) -> None:
 
 @skip_missing(['rms_AP_main'])
 def image_rms_ap_main(self) -> dict[str, Any]:
+    """Generate image-plot data for the main-band AP RMS.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dict containing an ImageData object keyed by 'rms AP Main'.
+    """
     return self._image_rms('rms_AP_main', plot_key='rms AP Main')
 
 
 @skip_missing(['rms_LF_main'])
 def image_rms_lf_main(self) -> dict[str, Any]:
+    """Generate image-plot data for the main-band LF RMS.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dict containing an ImageData object keyed by 'rms LF Main'.
+    """
     return self._image_rms('rms_LF_main', plot_key='rms LF Main')
 
 
 @skip_missing(['rms_AP_main'])
 def probe_rms_ap_main(self) -> dict[str, Any]:
+    """Generate probe-plot data for the main-band AP RMS.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dict containing a ProbeData object keyed by 'rms AP Main'.
+    """
     return self._probe_rms('rms_AP_main', plot_key='rms AP Main')
 
 
 @skip_missing(['rms_LF_main'])
 def probe_rms_lf_main(self) -> dict[str, Any]:
+    """Generate probe-plot data for the main-band LF RMS.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dict containing a ProbeData object keyed by 'rms LF Main'.
+    """
     return self._probe_rms('rms_LF_main', plot_key='rms LF Main')

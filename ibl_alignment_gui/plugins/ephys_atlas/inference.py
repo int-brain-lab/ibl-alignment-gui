@@ -29,13 +29,13 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.numerical import ismember
-from one.api import ONE
 
 if TYPE_CHECKING:
     import pandas as pd
 
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+    from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +254,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
             QtWidgets.QMessageBox.warning(
                 controller.view,
                 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+                'No features found for this probe. Set via '
+                'Plugins -> Channel Prediction -> Load features file...',
             )
             return False
         dialog = _InferenceModelDialog(
@@ -267,7 +268,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
             QtWidgets.QMessageBox.warning(
                 controller.view,
                 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+                'No features found for this probe. Set via '
+                'Plugins -> Channel Prediction -> Load features file...',
             )
             return False
         dialog = _InferenceModelDialog(
@@ -419,7 +421,6 @@ def load_inference_model(
     RuntimeError
         If an S3 download is requested but no ONE/Alyx connection is available.
     """
-
     plugin = plugin_state(controller)[MODEL_NAME]
 
     if model_dir is not None:
@@ -664,7 +665,8 @@ def _fold_mean_probas(
         QtWidgets.QMessageBox.warning(
             controller.view,
             'Channel Prediction',
-            'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+            'No features found for this probe. Set via '
+            'Plugins -> Channel Prediction -> Load features file...',
         )
         return None
 

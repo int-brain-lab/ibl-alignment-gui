@@ -17,7 +17,7 @@ PLUGIN_NAME = 'Additional Plots'
 
 def setup(controller: 'AlignmentGUIController') -> None:
     """
-    Example to show how to add additional plots to the GUI.
+    Show how to add additional plots to the GUI.
 
     Parameters
     ----------

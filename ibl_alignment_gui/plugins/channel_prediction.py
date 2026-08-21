@@ -11,7 +11,6 @@ from qtpy import QtWidgets
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas._common import is_model_loaded
 from ibl_alignment_gui.utils.helpers import shank_loop
-from iblatlas.atlas import AllenAtlas
 from iblutil.util import Bunch
 
 # NB: ``spatial_encoder`` (torch) and ``inference`` (ephysatlas) are imported lazily inside the
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+    from iblatlas.atlas import AllenAtlas
 
 PLUGIN_NAME = 'Channel Prediction'
 
@@ -77,7 +77,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
 def _set_local_features(controller: 'AlignmentGUIController') -> None:
     """Prompt for a per-channel features parquet and use it for inference."""
-    import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+    from ibl_alignment_gui.plugins.ephys_atlas import inference
 
     parent = controller.view
     chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -109,7 +109,7 @@ def _set_local_features(controller: 'AlignmentGUIController') -> None:
 
 def _load_inference_model(controller: 'AlignmentGUIController') -> None:
     """Load inference model via GUI dialog; reveal its region options and refresh on success."""
-    import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+    from ibl_alignment_gui.plugins.ephys_atlas import inference
 
     if inference.load_model_dialog(controller):
         # Reveal the now-loaded model's region options (offline only adds them once loaded).
@@ -262,7 +262,7 @@ def compute_mapping_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController', mapping: str = 'Beryl'
 ) -> Bunch[str, np.ndarray]:
     """
-    Example prediction model that returns brain regions based on a specified atlas mapping.
+    Return brain regions based on a specified atlas mapping, as an example prediction model.
 
     Parameters
     ----------
@@ -278,7 +278,6 @@ def compute_mapping_predictions(
     Bunch
         A bunch containing the predicted brain regions.
     """
-
     # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
     xyz_samples = items.model.align_handle.xyz_samples
     # depths of these coordinates along the track
@@ -377,7 +376,7 @@ def compute_inference_predictions(
         The predicted brain regions along the probe, or None if no prediction is available.
     """
     # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
-    import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+    from ibl_alignment_gui.plugins.ephys_atlas import inference
 
     result = inference.predict(controller, items)
     if result is None:
@@ -409,7 +408,7 @@ def compute_cumulative_predictions(
         no prediction is available.
     """
     # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
-    import ibl_alignment_gui.plugins.ephys_atlas.inference as inference
+    from ibl_alignment_gui.plugins.ephys_atlas import inference
 
     result = inference.predict_cumulative(controller, items)
     if result is None:

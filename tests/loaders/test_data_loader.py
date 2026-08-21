@@ -179,9 +179,11 @@ class TestDataLoader(unittest.TestCase):
                 side_effect=[Bunch(exists=True), Bunch(exists=True), ALFObjectNotFound]
             )
             loader.load_raw_passive_data = MagicMock(return_value={'raw': '/tmp/fake.bin'})
-            with self.assertLogs('ibl_alignment_gui.loaders.data_loader', level='WARNING') as log:
-                with patch('numpy.fromfile', return_value=np.arange(15 * 15 * 2, dtype=np.uint8)):
-                    rf_data, stim_data, gabor_data = loader.get_passive_data()
+            with (
+                self.assertLogs('ibl_alignment_gui.loaders.data_loader', level='WARNING') as log,
+                patch('numpy.fromfile', return_value=np.arange(15 * 15 * 2, dtype=np.uint8)),
+            ):
+                rf_data, stim_data, gabor_data = loader.get_passive_data()
             self.assertTrue(rf_data['exists'])
             self.assertTrue(stim_data['exists'])
             self.assertFalse(gabor_data['exists'])
@@ -649,10 +651,12 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
             data = self.loader.load_meta_data()
             self.assertEqual(data, mock_meta.return_value)
 
-        with self.subTest('Meta data does not exist'):
-            with patch.object(Path, 'glob', return_value=iter([])):
-                data = self.loader.load_meta_data()
-                self.assertIsNone(data)
+        with (
+            self.subTest('Meta data does not exist'),
+            patch.object(Path, 'glob', return_value=iter([])),
+        ):
+            data = self.loader.load_meta_data()
+            self.assertIsNone(data)
 
     @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.Reader')
     def test_load_ap_data(self, mock_reader):
@@ -668,7 +672,9 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
             data = self.loader.load_ap_data()
             self.assertEqual(data, mock_reader.return_value)
 
-        with self.subTest('AP data does not exist'):
-            with patch.object(Path, 'glob', return_value=iter([])):
-                data = self.loader.load_ap_data()
-                self.assertIsNone(data)
+        with (
+            self.subTest('AP data does not exist'),
+            patch.object(Path, 'glob', return_value=iter([])),
+        ):
+            data = self.loader.load_ap_data()
+            self.assertIsNone(data)

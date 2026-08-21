@@ -15,7 +15,7 @@ PLUGIN_NAME = 'Custom Filters'
 
 def setup(controller: 'AlignmentGUIController') -> None:
     """
-    Example to show how to add custom unit filters to the GUI.
+    Show how to add custom unit filters to the GUI.
 
     The filters registered here appear as extra options in the 'Filter units' dropdown menu,
     alongside the built-in 'All', 'KS good', 'KS mua' and 'IBL good' filters. Selecting one keeps
@@ -54,12 +54,48 @@ def add_filters(controller: 'AlignmentGUIController') -> None:
 
 
 def filter_aind_qc(metrics: pd.DataFrame) -> np.ndarray:
+    """Keep the units that pass the AIND default QC.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+        The per-cluster metrics table.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean mask of the units that pass ``default_qc``.
+    """
     return metrics['default_qc'].values
 
 
 def filter_unit_refine_sua(metrics: pd.DataFrame) -> np.ndarray:
+    """Keep only the units UnitRefine labelled as single-unit activity.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+        The per-cluster metrics table.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean mask of the units whose ``unitrefine_label`` is 'sua'.
+    """
     return metrics['unitrefine_label'] == 'sua'
 
 
 def filter_unit_refine_neural(metrics: pd.DataFrame) -> np.ndarray:
+    """Keep the units UnitRefine considered neural, i.e. everything but noise.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+        The per-cluster metrics table.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean mask of the units whose ``unitrefine_label`` is not 'noise'.
+    """
     return metrics['unitrefine_label'] != 'noise'

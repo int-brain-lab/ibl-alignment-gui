@@ -1155,6 +1155,7 @@ class PlotLoader:
         ----------
         band : str
             The frequency band of the raw data snippets to plot. Ap or Lf
+
         Returns
         -------
         Dict

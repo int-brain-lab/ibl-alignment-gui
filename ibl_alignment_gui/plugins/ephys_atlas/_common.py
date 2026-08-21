@@ -16,15 +16,15 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pandas as pd
-
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
-from iblutil.util import Bunch
 from one.api import ONE
 
 if TYPE_CHECKING:
+    import pandas as pd
+
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+    from iblutil.util import Bunch
 
 logger = logging.getLogger(__name__)
 

@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -39,7 +39,6 @@ from qtpy import QtWidgets
 from torch.utils.data import DataLoader
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
-    _get_features_df,
     clear_predictions,
     has_features,
     has_one_connection,
@@ -49,11 +48,11 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblatlas.atlas import AllenAtlas
-from one.api import ONE
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+    from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +194,8 @@ class _SpatialModelDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(
                 self,
                 'Channel Prediction',
-                f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) found under:\n{chosen_path}',
+                f'No "{MODEL_VINTAGE}" feature tables (raw_ephys_features*.pqt) '
+                f'found under:\n{chosen_path}',
             )
             return
         self.enc_data = chosen_path
@@ -271,7 +271,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
             QtWidgets.QMessageBox.warning(
                 controller.view,
                 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+                'No features found for this probe. Set via '
+                'Plugins -> Channel Prediction -> Load features file...',
             )
             return False
         dialog = _SpatialModelDialog(
@@ -287,7 +288,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
             QtWidgets.QMessageBox.warning(
                 controller.view,
                 'Channel Prediction',
-                'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+                'No features found for this probe. Set via '
+                'Plugins -> Channel Prediction -> Load features file...',
             )
             return False
         dialog = _SpatialModelDialog(
@@ -397,10 +399,9 @@ def _selection_error(
 
 
 def _get_date_from_vintage(model_name: str) -> str:
-    """Get the date from the model vintage string
+    """Extract the vintage date from a model name.
 
-    which is expected to be in the format '<vintage>_SE_Model'. or xxxx/<vintage>
-
+    Handles both the ``<vintage>_SE_Model`` and ``xxxx/<vintage>`` forms.
     """
     if len(model_name.split('/')) > 1:
         return model_name.split('/')[1]
@@ -432,6 +433,8 @@ def invalidate_predictions(
 # -----------------------------------------------------------------------------
 @dataclass
 class AlignmentEngine:
+    """Everything needed to run the spatial encoder, cached on the plugin after loading."""
+
     device: torch.device
     cfg: AtlasPCAConfig
     ctx_manager: ContextAtlasManager
@@ -446,10 +449,22 @@ class AlignmentEngine:
     optimization_features: np.ndarray
     model_name: str | None
     local_path: Path | None
-    conf_model: Optional[torch.nn.Module] = None
+    conf_model: torch.nn.Module | None = None
 
 
 def alignment_handles_from_loader(train_loader):
+    """Pull the reference-bank arrays off a train loader's collate function.
+
+    Parameters
+    ----------
+    train_loader : torch.utils.data.DataLoader
+        Loader whose ``collate_fn`` carries the reference bank.
+
+    Returns
+    -------
+    dict
+        The bank xyz, features, pids and nearest-neighbour index.
+    """
     collate = train_loader.collate_fn
     return dict(
         bank_xyz=collate.bank_xyz,
@@ -643,7 +658,8 @@ def load_alignment_engine(
 
     if one is None and (data_path is None or model_path is None):
         raise RuntimeError(
-            'No ONE connection found, must specify both local encoder and local feature directories'
+            'No ONE connection found, must specify both local encoder and local feature '
+            'directories'
         )
 
     if data_path is not None and model_path is not None:
@@ -655,7 +671,8 @@ def load_alignment_engine(
 
         if not validate_feature_folder(data_path):
             raise RuntimeError(
-                f'No features table (raw_ephys_features*.pqt) found under the given data path: {data_path}'
+                f'No features table (raw_ephys_features*.pqt) found under the given data '
+                f'path: {data_path}'
             )
 
         plugin['local_encoder_dir'] = model_path
@@ -845,6 +862,20 @@ def _depths_for_extended_trace_fixed(*, df, sampling_trk, j_start, j_end, trace_
 
 
 def gui_region_ids_from_xyz(xyz_m, brain_atlas):
+    """Look up the atlas region id for each xyz position.
+
+    Parameters
+    ----------
+    xyz_m : np.ndarray
+        An (N, 3) array of positions in metres.
+    brain_atlas : BrainAtlas
+        Atlas used for the lookup.
+
+    Returns
+    -------
+    np.ndarray
+        Flat (N,) array of integer region ids.
+    """
     return np.asarray(brain_atlas.get_labels(xyz_m, mode='clip')).astype(int).reshape(-1)
 
 
@@ -857,8 +888,10 @@ def extend_xyz_samples_to_brain(
     mapping: str = 'Cosmos',
 ) -> np.ndarray:
     """
-    Extends xyz_samples on both ends by estimating a CONSTANT step (gradient) separately
-    for the top and bottom edges, then linearly extrapolating until leaving the brain (rid==0).
+    Extend xyz_samples on both ends until the track leaves the brain.
+
+    Estimates a constant step (gradient) separately for the top and bottom edges, then
+    linearly extrapolates until leaving the brain (rid==0).
 
     This is tailored to probes where positions repeat in pairs (e.g. every two channels
     share the exact same xyz), so the "effective" step is captured by robustly averaging
@@ -899,9 +932,10 @@ def extend_xyz_samples_to_brain(
 
     def _estimate_constant_step(edge_xyz: np.ndarray) -> np.ndarray:
         """
-        Estimate constant step from a window of points [K,3] by averaging non-zero
-        consecutive deltas. If everything is repeated (all deltas zero), fall back to
-        the farthest difference / (K-1).
+        Estimate the constant step from a window of points.
+
+        Averages the non-zero consecutive deltas of a [K,3] window. If every delta is zero
+        (all positions repeated), falls back to the farthest difference / (K-1).
         """
         edge_xyz = np.asarray(edge_xyz, dtype=np.float64)
         if edge_xyz.shape[0] < 2:
@@ -945,8 +979,7 @@ def extend_xyz_samples_to_brain(
         if _first_rid0_index(cur) is not None:
             break
         pre.append(cur.copy())
-    if len(pre) > 0:
-        pre = pre[::-1]  # earliest -> latest
+    pre.reverse()  # earliest -> latest
 
     # ---- extend AFTER (append): go "downwards" following bottom-step direction ----
     post = []
@@ -1016,6 +1049,13 @@ def predict_features_at_xyz(
     M_max: int,
     device: torch.device,
 ) -> torch.Tensor:
+    """Predict the standardised ephys features the model expects at each xyz position.
+
+    Returns
+    -------
+    torch.Tensor
+        An (N, F) tensor of predicted features, one row per position in ``xyz_m``.
+    """
     model.eval()
 
     xyz_m = np.asarray(xyz_m, dtype=np.float32)
@@ -1069,6 +1109,20 @@ def predict_features_at_xyz(
 
 
 def build_cost_matrix(A, B):
+    """Build the pairwise squared-euclidean cost matrix between two feature sets.
+
+    Parameters
+    ----------
+    A : np.ndarray
+        An (N, F) array of features.
+    B : np.ndarray
+        An (M, F) array of features.
+
+    Returns
+    -------
+    np.ndarray
+        An (N, M) array of squared distances, clipped at zero.
+    """
     A = np.asarray(A, dtype=np.float64)
     B = np.asarray(B, dtype=np.float64)
 
@@ -1080,6 +1134,25 @@ def build_cost_matrix(A, B):
 
 
 def dynamic_time_warping_debug(C, lam_d=0.0, lam_u=0.1, lam_l=0.1, band=None, open_begin=True):
+    """Warp the recorded channels onto the predicted trace with dynamic time warping.
+
+    Parameters
+    ----------
+    C : np.ndarray
+        An (N, M) cost matrix; non-finite entries are treated as infinite.
+    lam_d, lam_u, lam_l : float
+        Penalties applied to diagonal, up and left steps respectively.
+    band : np.ndarray or None
+        Optional (N, M) boolean mask restricting the allowed paths.
+    open_begin : bool
+        If True the path may start anywhere along the trace rather than at its first sample.
+
+    Returns
+    -------
+    tuple
+        ``(j_start, j_end, path, total_cost, D, P)`` - the trace span the recording maps onto,
+        the warping path, its total cost, and the accumulated-cost and back-pointer matrices.
+    """
     C = np.asarray(C, dtype=np.float64)
     C = np.where(np.isfinite(C), C, np.inf)
 
@@ -1087,10 +1160,7 @@ def dynamic_time_warping_debug(C, lam_d=0.0, lam_u=0.1, lam_l=0.1, band=None, op
     D = np.full((N, M), np.inf, dtype=np.float64)
     P = np.full((N, M), -1, dtype=np.int8)
 
-    if band is None:
-        band = np.ones((N, M), dtype=bool)
-    else:
-        band = np.asarray(band, dtype=bool)
+    band = np.ones((N, M), dtype=bool) if band is None else np.asarray(band, dtype=bool)
 
     if band[0, 0]:
         D[0, 0] = C[0, 0]
@@ -1138,9 +1208,9 @@ def dynamic_time_warping_debug(C, lam_d=0.0, lam_u=0.1, lam_l=0.1, band=None, op
         if k == 0:
             i, j = i - 1, j - 1
         elif k == 1:
-            i, j = i - 1, j
+            i -= 1
         elif k == 2:
-            i, j = i, j - 1
+            j -= 1
         else:
             break
 
@@ -1153,10 +1223,26 @@ def dynamic_time_warping_debug(C, lam_d=0.0, lam_u=0.1, lam_l=0.1, band=None, op
 
 
 def rigid_assignment(A, B):
+    """Find the best rigid (no-stretch) offset of A along B by mean squared error.
+
+    Used as the fallback when the trace is too short for dynamic time warping.
+
+    Parameters
+    ----------
+    A : np.ndarray
+        An (N, F) array of recorded features.
+    B : np.ndarray
+        An (M, F) array of predicted trace features, with M >= N.
+
+    Returns
+    -------
+    tuple
+        ``(j_start, j_end, path)`` - the span of B that A maps onto, and the 1:1 path.
+    """
     best_k, best_mse = 0, np.inf
     Nr = A.shape[0]
 
-    for k in range(0, B.shape[0] - Nr + 1):
+    for k in range(B.shape[0] - Nr + 1):
         m = ((B[k : k + Nr] - A) ** 2).mean()
         if m < best_mse:
             best_mse, best_k = m, k
@@ -1173,7 +1259,7 @@ def _scatter_recorded_onto_trace(
     j_map_all_i: np.ndarray,
     trace_len: int,
     *,
-    kp_mask: Optional[np.ndarray] = None,
+    kp_mask: np.ndarray | None = None,
 ):
     recorded_full = np.asarray(recorded_full)
     j_map_all_i = np.asarray(j_map_all_i, dtype=int)
@@ -1181,10 +1267,9 @@ def _scatter_recorded_onto_trace(
     C_rec, F = recorded_full.shape
     L = int(trace_len)
 
-    if kp_mask is None:
-        kp_mask = np.ones((C_rec,), dtype=bool)
-    else:
-        kp_mask = np.asarray(kp_mask, dtype=bool)
+    kp_mask = (
+        np.ones((C_rec,), dtype=bool) if kp_mask is None else np.asarray(kp_mask, dtype=bool)
+    )
 
     sums = np.zeros((L, F), dtype=np.float64)
     counts = np.zeros((L,), dtype=np.int64)
@@ -1218,6 +1303,13 @@ def classify_aligned_probe_channels(
     mu_std_est: np.ndarray | torch.Tensor,
     device: torch.device,
 ):
+    """Classify the aligned channels with the optional confidence model.
+
+    Returns
+    -------
+    tuple
+        ``(pred_cls, probs)`` - the predicted class per channel and the class probabilities.
+    """
     conf_model.eval()
 
     rec_raw = np.asarray(recorded_full, dtype=np.float32)
@@ -1291,13 +1383,32 @@ def align(
     return_debug: bool = True,
     brain_atlas=None,
 ):
+    """Align the recorded channels to the predicted feature trace along the extended track.
+
+    Predicts features along ``xyz_samples_ext``, builds a cost matrix against the recorded
+    features and warps one onto the other (dynamic time warping, or a rigid offset when the
+    trace is too short).
+
+    Parameters
+    ----------
+    return_debug : bool
+        If False only the estimated positions are returned.
+
+    Returns
+    -------
+    dict or np.ndarray or None
+        With ``return_debug`` the full set of alignment outputs (estimated xyz, warping path,
+        costs, per-channel classes and the full-trace predictions); otherwise just the
+        estimated xyz. None when fewer than two channels carry non-zero features.
+    """
     C_full = recorded_full.shape[0]
     L_trace = xyz_samples_ext.shape[0]
 
     kp_mask = ~np.all(recorded_full == 0.0, axis=1)
     if kp_mask.sum() < 2:
         print(
-            'Need at least 2 recorded (non-zero) channels with non-zero features for spatial encoding.'
+            'Need at least 2 recorded (non-zero) channels with non-zero features for '
+            'spatial encoding.'
         )
         return None
 
@@ -1345,7 +1456,7 @@ def align(
 
     min_overlap_channels = int(0.9 * int(kp_mask.sum()))
     if (j_end - j_start + 1) < min_overlap_channels:
-        print(f'Trace too short - resorting to rigid optimization')
+        print('Trace too short - resorting to rigid optimization')
         j_start, j_end, path = rigid_assignment(recorded_opt, pred_std_opt)
 
     i_seq, j_seq = np.array(path, dtype=int).T
@@ -1539,6 +1650,21 @@ def _build_warped_region_ids_and_depths(
 
 
 def predict(controller, items):
+    """Run the spatial encoder for one shank and return its predicted region trace.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    items : ShankController
+        The shank the prediction is run for.
+
+    Returns
+    -------
+    tuple of np.ndarray, or None
+        ``(region_ids, depth_samples)`` warped into probe-depth space, or None when the model
+        or the features are unavailable (a warning is shown to the user in that case).
+    """
     engine = get_model(controller)
     if engine is None:
         # User cancelled the load dialog; nothing to predict with.
@@ -1549,7 +1675,8 @@ def predict(controller, items):
         QtWidgets.QMessageBox.warning(
             controller.view,
             'Channel Prediction',
-            'No features found for this probe. Set via Plugins -> Channel Prediction -> Load features file...',
+            'No features found for this probe. Set via '
+            'Plugins -> Channel Prediction -> Load features file...',
         )
         return None
 

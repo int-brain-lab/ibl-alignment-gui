@@ -129,7 +129,9 @@ class ShankController:
         data['depth'] = self.view.depth
         self.view.plot_fit(data)
 
-    def plot_channels(self, fig_slice: pg.ViewBox, plot_key: str, colour: str | None = None) -> None:
+    def plot_channels(
+        self, fig_slice: pg.ViewBox, plot_key: str, colour: str | None = None
+    ) -> None:
         """
         Plot channels on a slice plot.
 

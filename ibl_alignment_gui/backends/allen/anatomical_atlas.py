@@ -1,7 +1,7 @@
 import logging
 
 import numpy as np
-import SimpleITK as sitk
+import SimpleITK as sitk  # noqa: N813
 
 from iblatlas.atlas import BrainAtlas, BrainCoordinates
 from iblatlas.regions import BrainRegions
@@ -15,6 +15,7 @@ _BLESSED_DIRECTION: str = 'IRP'
 class BrainAtlasAnatomical(BrainAtlas):
     """
     BrainAtlas subclass for anatomical atlases built from anatomical images.
+
     In addition to the BrainAtlas intensity and label arrays, this class also
     stores the SimpleITK images for potential further processing.
 
@@ -56,7 +57,6 @@ class BrainAtlasAnatomical(BrainAtlas):
             of the voxel indices to the physical domain of the pipeline-computed
             CCF transforms.
         """
-
         # Validate that intensity and label images have the same shape and physical space
         methods_to_check = [
             'GetOrigin',
@@ -175,7 +175,7 @@ class BrainAtlasAnatomical(BrainAtlas):
         self.pipeline_sitk_image = pipeline_img_blessed
 
     def physical_points_to_indices(
-        self, channel_ndxs: np.ndarray, round: bool = False
+        self, channel_ndxs: np.ndarray, round_indices: bool = False
     ) -> np.ndarray:
         """
         Convert physical points in the atlas space to voxel indices in this atlas.
@@ -190,7 +190,7 @@ class BrainAtlasAnatomical(BrainAtlas):
         np.ndarray
             An (N, 3) array of voxel indices in this atlas.
         """
-        return self.bc.xyz2i(channel_ndxs, round=round, mode='clip')[:, self.xyz2dims]
+        return self.bc.xyz2i(channel_ndxs, round=round_indices, mode='clip')[:, self.xyz2dims]
 
     def indices_to_physical_points(self, channel_ndxs: np.ndarray) -> np.ndarray:
         """

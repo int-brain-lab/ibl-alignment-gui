@@ -1,17 +1,15 @@
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from datoviz.backends.pyqt6 import QtServer
-from ibl_datoviz.viewer import Viewer
-from ibl_datoviz.points import PointsController
-
 
 import matplotlib as mpl
 import numpy as np
+from datoviz.backends.pyqt6 import QtServer
 from matplotlib import cm
-from matplotlib.colors import Normalize, rgb2hex
+from matplotlib.colors import Normalize
 from qtpy import QtCore, QtWidgets
 
+from ibl_datoviz.points import PointsController
+from ibl_datoviz.viewer import Viewer
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
@@ -19,8 +17,8 @@ if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
     from iblatlas.atlas import AllenAtlas
 
-from ibl_alignment_gui.utils.helpers import shank_loop
 from ibl_alignment_gui.app.widgets.custom_widgets import PopupWindow
+from ibl_alignment_gui.utils.helpers import shank_loop
 
 PLUGIN_NAME = "3D features"
 
@@ -73,6 +71,16 @@ def callback(controller: 'AlignmentGUIController') -> None:
 
 
 class Viewer3D(PopupWindow):
+    """
+    Popup window hosting the datoviz 3D scene and its display controls.
+
+    Parameters
+    ----------
+    title : str
+        Title shown in the popup's title bar.
+    controller : AlignmentGUIController
+        The main application controller.
+    """
 
     def __init__(self, title: str, controller: 'AlignmentGUIController'):
         self.controller: AlignmentGUIController = controller
@@ -80,7 +88,7 @@ class Viewer3D(PopupWindow):
         super().__init__(title, controller.view, size=(500, 600), graphics=False)
 
     def setup(self):
-
+        """Create the datoviz server and figure, and add the display controls."""
         self.qt_server = QtServer(background='black')
         w, h = 800, 600
         self.qfig = self.qt_server.figure(w, h)
@@ -176,11 +184,14 @@ class Features3D:
 
     def setup(self):
         """Launch the 3D Urchin viewer and display the initial probe channels."""
-
         self.view = Viewer3D(PLUGIN_NAME, self.controller)
         self.view.closed.connect(self.on_close)
-        self.view.slider.sliderReleased.connect(lambda s=self.view.slider: self.on_point_size_changed(s))
-        self.view.regions.clicked.connect(lambda: self.toggle_regions(self.view.regions.isChecked()))
+        self.view.slider.sliderReleased.connect(
+            lambda s=self.view.slider: self.on_point_size_changed(s)
+        )
+        self.view.regions.clicked.connect(
+            lambda: self.toggle_regions(self.view.regions.isChecked())
+        )
         self.view.picks.clicked.connect(lambda: self.toggle_picks(self.view.picks.isChecked()))
         self.viewer = Viewer(self.view.qt_server, self.view.panel)
         # Add an additional points controller for picks
@@ -208,7 +219,6 @@ class Features3D:
 
         Called when the data button is pressed in the main application.
         """
-
         self.remove_markers()
         self.remove_regions()
 
@@ -217,7 +227,7 @@ class Features3D:
         regions = np.unique(np.concatenate(regions))
         region_ids = self.controller.model.brain_atlas.regions.acronym2id(regions)
         keep_regions = []
-        for rid, acr in zip(region_ids, regions):
+        for rid, acr in zip(region_ids, regions, strict=False):
             region_info = self.controller.model.brain_atlas.regions.ancestors(rid)
             if 'fiber tracts' not in region_info['acronym']:
                 keep_regions.append(acr)
@@ -456,7 +466,11 @@ class Features3D:
             min_idx = np.argmax(dat['xyz'][:, 2])
 
             sh_info = {'name': dat['shank'][-1],
-                       'pos': [dat['xyz'][min_idx, 0], dat['xyz'][min_idx, 1], dat['xyz'][min_idx, 2] + 200 / 1e6],
+                       'pos': [
+                           dat['xyz'][min_idx, 0],
+                           dat['xyz'][min_idx, 1],
+                           dat['xyz'][min_idx, 2] + 200 / 1e6,
+                       ],
                        'col': SHANK_COLOURS.get(dat['shank'][-1], create_random_color())}
             if self.controller.model.selected_config != 'both' or dat['config'] == 'quarter':
                 markers.append(sh_info)
@@ -605,4 +619,9 @@ def update_channels(_, items: 'ShankController', plot_key: str, **kwargs) -> dic
 
     values = data_to_colors(data.data, data.cmap, data.levels[0], data.levels[1])
 
-    return {'xyz': xyz + jitter, 'values': values, 'shank': kwargs['shank'], 'config': kwargs['config']}
+    return {
+        'xyz': xyz + jitter,
+        'values': values,
+        'shank': kwargs['shank'],
+        'config': kwargs['config'],
+    }

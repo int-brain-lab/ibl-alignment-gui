@@ -870,23 +870,22 @@ class EphysFeatures:
         idx: int
             The index of the clicked area.
         """
-        if not self.normalised:
-            # Highlight the background of the selected area, ignoring empty trailing columns
-            if idx < len(self.current_pids):
-                for i, area in enumerate(self.view.fig_areas):
-                    if i == idx:
-                        area.setBackground('lightblue')
-                    else:
-                        area.setBackground('white')
+        # Highlight the background of the selected area, ignoring empty trailing columns
+        if not self.normalised and idx < len(self.current_pids):
+            for i, area in enumerate(self.view.fig_areas):
+                if i == idx:
+                    area.setBackground('lightblue')
+                else:
+                    area.setBackground('white')
 
-                self.selected_idx = idx
-                self.selected_pid = self.current_pids[idx]
+            self.selected_idx = idx
+            self.selected_pid = self.current_pids[idx]
 
-                # Update the colorbar slider to the values of the selected probe
-                data = self.feature_data[self.plot_name][self.selected_pid]
-                self.view.slider.set_slider_values(data['levels'])
-                # Update the pid label
-                self.view.pid_label.setText(f'PID: {self.selected_pid}')
+            # Update the colorbar slider to the values of the selected probe
+            data = self.feature_data[self.plot_name][self.selected_pid]
+            self.view.slider.set_slider_values(data['levels'])
+            # Update the pid label
+            self.view.pid_label.setText(f'PID: {self.selected_pid}')
 
     # -------------------------------------------------------------------------
     # Slider

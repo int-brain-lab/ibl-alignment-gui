@@ -1429,7 +1429,8 @@ class AlignmentGUIController:
     def _on_upload_finished(self, info: dict[str, str]) -> None:
         """Refresh the alignment dropdown and report results once saving completes."""
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load in the latest alignment (the one that was just saved) so the display reflects the saved state
+        # Load in the latest alignment (the one that was just saved) so the display
+        # reflects the saved state
         self.model.get_starting_alignment(0)
         self.view.set_selection_dropdown('align', 0)
 

@@ -263,7 +263,10 @@ def load_alignment_yaml(
 
             def get_path(dname: str) -> str | None:
                 """Get path for a specific dataset from probe configuration."""
-                dataset = datasets.get(dname)
+                # noqa is safe: this closure is only ever called within the same loop iteration
+                # (see the dataset_name loop below), so the late binding B023 warns about cannot
+                # be observed.
+                dataset = datasets.get(dname)  # noqa: B023
                 return dataset.path if dataset else None
 
             def get_default_path(dname: str) -> str | None:

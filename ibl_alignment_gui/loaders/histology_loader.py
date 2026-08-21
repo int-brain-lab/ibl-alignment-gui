@@ -75,11 +75,14 @@ class SliceLoader(ABC):
         Reference brain atlas.
     """
 
-    def __init__(self, file_path: Path, brain_atlas: BrainAtlas):
-        self.file_path: Path = file_path
+    def __init__(self, file_path: Path | None, brain_atlas: BrainAtlas):
+        self.file_path: Path | None = file_path
         self.brain_atlas: BrainAtlas = brain_atlas
         self.hist_paths: dict[str, Path] = {}
-        self.get_paths()
+        # A session need not have any histology: the atlas template and annotation slices are
+        # still available, there are simply no histology volumes to offer alongside them.
+        if self.file_path is not None:
+            self.get_paths()
 
     @abstractmethod
     def get_paths(self) -> None:
@@ -339,8 +342,9 @@ def make_slice_loader(file_path: Path, brain_atlas: BrainAtlas, space: str = 'cc
 
     Parameters
     ----------
-    file_path : Path
-        Folder containing histology files.
+    file_path : Path or None
+        Folder containing histology files. When None, no histology volumes are loaded and only
+        the atlas template and annotation slices are available.
     brain_atlas : BrainAtlas
         Brain atlas passed to the loader (used directly by NrrdSliceLoader;
         ignored by AnatomicalSliceLoader which builds its own atlas from the
@@ -354,8 +358,15 @@ def make_slice_loader(file_path: Path, brain_atlas: BrainAtlas, space: str = 'cc
     Returns
     -------
     SliceLoader
-        NrrdSliceLoader for 'ccf', AnatomicalSliceLoader for 'anatomical'.
+        NrrdSliceLoader for 'ccf', AnatomicalSliceLoader for 'anatomical'. A NrrdSliceLoader with
+        no histology volumes when ``file_path`` is None.
     """
+    if file_path is None:
+        # Neither loader can inspect a folder that was not given. The atlas slices come from the
+        # brain atlas rather than from files, so they are unaffected.
+        logger.info('No histology path given, only the atlas slices will be available')
+        return NrrdSliceLoader(None, brain_atlas)
+
     if space == 'anatomical':
         return AnatomicalSliceLoader(file_path, brain_atlas)
     return _build_slice_loader(file_path, brain_atlas)

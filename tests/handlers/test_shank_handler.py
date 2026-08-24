@@ -73,7 +73,6 @@ class TestShankHandler(unittest.TestCase):
 
         # Make a mock alignment handler
         self.mock_align_handle = MagicMock()
-        self.mock_align_handle.offset_hist_data.return_value = None
         self.mock_align_handle.scale_hist_data.return_value = None
         self.mock_align_handle.get_scaled_histology.return_value = ('hist', 'hist_ref', 'scale')
         self.mock_align_handle.ephysalign.feature2track_lin.return_value = np.array([100, 200])
@@ -97,12 +96,6 @@ class TestShankHandler(unittest.TestCase):
         np.testing.assert_array_equal(
             self.shank_handler.feature_prev, self.mock_align.feature_prev
         )
-
-    def test_offset_hist_data(self):
-        """Test the offset_hist_data method."""
-        self.shank_handler.offset_hist_data(10)
-        self.mock_align_handle.offset_hist_data.assert_called_with(10)
-        self.mock_align_handle.offset_hist_data.assert_called_once()
 
     def test_scale_hist_data(self):
         """Test the scale_hist_data method."""
@@ -214,3 +207,23 @@ class TestShankHandler(unittest.TestCase):
         self.shank_handler.load_data()
         result = self.shank_handler.upload_data()
         self.assertEqual(result, 'uploaded')
+
+        # A recovered alignment is a local record of work in progress, it must not be uploaded
+        data = self.mock_upload.upload_data.call_args.args[0]
+        self.assertIs(data['alignments'], self.mock_align.uploadable_alignments)
+
+        # The saved progress is no longer needed, and must stop being offered for this shank
+        self.mock_upload.delete_progress.assert_called_once()
+        self.mock_align.load_progress.assert_called_once()
+        self.mock_align.get_previous_alignments.assert_called_once()
+
+    @patch('ibl_alignment_gui.handlers.shank_handler.AlignmentHandler')
+    def test_upload_data_not_uploaded(self, mock_align_handle):
+        """Test that saved progress is kept when nothing was uploaded."""
+        self.mock_upload.upload_data.return_value = None
+        self.shank_handler.load_data()
+        self.shank_handler.upload_data()
+
+        # Nothing reached the database, so the progress must survive to be recovered
+        self.mock_upload.delete_progress.assert_not_called()
+        self.mock_align.load_progress.assert_not_called()

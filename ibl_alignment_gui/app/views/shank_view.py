@@ -4,14 +4,14 @@ import numpy as np
 import pyqtgraph as pg
 from qtpy import QtCore, QtGui, QtWidgets
 
+from ibl_alignment_gui.app.widgets.adapted_axis import replace_axis
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar, set_axis
 from ibl_alignment_gui.loaders.plot_loader import (
     ImageData,
     LineData,
     ProbeData,
     ScatterData,
 )
-from ibl_alignment_gui.utils.qt.adapted_axis import replace_axis
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar, set_axis
 from iblutil.util import Bunch
 
 
@@ -122,6 +122,7 @@ class ShankView:
         self.slice_plot: pg.ImageItem = None
         self.traj_line: pg.PlotCurveItem | None = None
         self.slice_chns: pg.ScatterPlotItem | None = None
+        self.slice_tip: pg.ScatterPlotItem | None = None
 
         # Plot items for the fit plot
         self.fit_plot: pg.PlotCurveItem | None = None
@@ -498,6 +499,10 @@ class ShankView:
         colours = cbar.cmap.mapToQColor(data.scale_factor)
         cbar.set_levels((0, 1.5), label='Scale')
 
+        # Visible y-bounds (matching set_yaxis_range) used to keep region labels on-screen
+        y_min = self.yrange[0] - self.ylim_extra
+        y_max = self.yrange[1] + self.ylim_extra
+
         for ir, region in enumerate(data.region):
             item = pg.LinearRegionItem(
                 values=region,
@@ -508,6 +513,12 @@ class ShankView:
             self.fig_scale.addItem(item)
             self.fig_scale.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen=colours[ir]))
             self.scale_regions.append(item)
+
+            # Label each region with its scale factor, centred within its visible span
+            text_y = (max(y_min, region[0]) + min(y_max, region[1])) / 2
+            text_item = pg.TextItem(text=f'{data.scale[ir]:.2f}', anchor=(0.5, 0.5), color='black')
+            text_item.setPos(-0.05, text_y)
+            self.fig_scale.addItem(text_item)
 
         # Add additional boundary for final region
         self.fig_scale.addItem(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen=colours[-1]))
@@ -581,8 +592,15 @@ class ShankView:
         """
         self.slice_lines = self.remove_items(fig_slice, self.slice_lines)
         self.slice_chns = self.remove_items(fig_slice, self.slice_chns)
+        self.slice_tip = self.remove_items(fig_slice, self.slice_tip)
 
-    def plot_channels(self, fig_slice: pg.ViewBox, data: Bunch, colour: str = 'r') -> None:
+    def plot_channels(
+        self,
+        fig_slice: pg.ViewBox,
+        data: Bunch,
+        data_feature: ProbeData | None,
+        colour: str = 'r',
+    ) -> None:
         """
         Plot the locations of electrode channels and track reference lines on the histology slice.
 
@@ -599,10 +617,24 @@ class ShankView:
         """
         self.clear_channels(fig_slice)
 
+        if data_feature is None or data_feature.data is None:
+            brush = pg.mkBrush(colour)
+            pen = pg.mkPen(colour, width=0.2)
+        else:
+            cbar = ColorBar(data_feature.cmap)
+            brush = cbar.get_brush(data_feature.data, levels=list(data_feature.levels))
+            pen = None
+
         self.slice_chns = pg.ScatterPlotItem(
-            x=data['xyz_channels'][:, 0], y=data['xyz_channels'][:, 2], pen=colour, brush=colour
+            x=data['xyz_channels'][:, 0], y=data['xyz_channels'][:, 2], brush=brush, pen=pen
         )
         fig_slice.addItem(self.slice_chns)
+
+        # Mark the probe tip with a larger magenta point to distinguish it from the channels
+        self.slice_tip = pg.ScatterPlotItem(
+            x=[data['tip'][0]], y=[data['tip'][2]], pen='m', brush='m', size=10
+        )
+        fig_slice.addItem(self.slice_tip)
 
         self.slice_lines = []
         for ref_line in data['track_lines']:
@@ -910,9 +942,11 @@ class ShankView:
         fig: pg.PlotItem
             The figure whose y-axis range will be updated
         """
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
         fig.setYRange(
-            min=self.yrange[0] - self.ylim_extra,
-            max=self.yrange[1] + self.ylim_extra,
+            min=float(self.yrange[0] - self.ylim_extra),
+            max=float(self.yrange[1] + self.ylim_extra),
             padding=self.yaxis_pad,
         )
 
@@ -928,7 +962,9 @@ class ShankView:
             The xrange values to use. If None, the default values are used.
         """
         xrange = xrange if xrange is not None else self.xrange
-        fig.setXRange(*xrange, padding=0)
+        # Cast to Python float: float32 range values trigger a numpy overflow warning when
+        # pyqtgraph compares them against its default ViewBox limit of +/-1E307.
+        fig.setXRange(float(xrange[0]), float(xrange[1]), padding=0)
 
     @staticmethod
     def make_transform(scale: list | np.ndarray, offset: list | np.ndarray) -> QtGui.QTransform:
@@ -988,6 +1024,8 @@ class ShankView:
         if self.traj_line:
             func(self.traj_line)
         func(self.slice_chns)
+        if self.slice_tip:
+            func(self.slice_tip)
         for line in self.slice_lines:
             func(line)
 

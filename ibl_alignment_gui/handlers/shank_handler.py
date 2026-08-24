@@ -27,9 +27,12 @@ class ShankHandler:
         self.shank_idx: int = shank_idx
         self.loaders: Bunch = loaders
         self.loaders['align'].load_previous_alignments()
-        self.loaders['align'].get_starting_alignment(0)
+        self.loaders['align'].get_starting_alignment(
+            self.loaders['align'].get_start_alignment_idx()
+        )
         self.align_exists: bool = True
         self.data_loaded: bool = False
+        self.align_handle = None
 
     # -------------------------------------------------------------------------
     # Alignment loader - attributes and methods in loaders['align']
@@ -52,13 +55,21 @@ class ShankHandler:
         """
         return self.loaders['align'].feature_prev
 
+    @property
+    def xyz_picks(self) -> np.ndarray:
+        """
+        Return the xyz picks from the alignment loader for the currently active shank.
+
+        Returns
+        -------
+        np.ndarray
+            An array of xyz pick coordinates.
+        """
+        return self.loaders['align'].xyz_picks
+
     # -------------------------------------------------------------------------
     # Alignment handler - attributes and methods in align_handle
     # -------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`AlignmentHandler.offset_hist_data` for details."""
-        self.align_handle.offset_hist_data(*args)
-
     def scale_hist_data(self, *args, **kwargs) -> None:
         """See :meth:`AlignmentHandler.scale_hist_data` for details."""
         self.align_handle.scale_hist_data(*args, **kwargs)
@@ -114,6 +125,11 @@ class ShankHandler:
     def xyz_track(self) -> np.ndarray:
         """See :meth:`AlignmentHandler.xyz_track` for details."""
         return self.align_handle.xyz_track
+
+    @property
+    def tip_location(self) -> np.ndarray:
+        """See :meth:`AlignmentHandler.tip_location` for details."""
+        return self.align_handle.tip_location
 
     @property
     def track_lines(self) -> list[np.ndarray]:
@@ -283,11 +299,12 @@ class ShankHandler:
         self.raw_data = self.loaders['data'].get_data(shank_sites)
 
         # Load in the raw data snippets
-        self.raw_data['raw_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_ap_snippets'] = self.loaders['ephys'].load_ap_snippets()
+        self.raw_data['raw_lf_snippets'] = self.loaders['ephys'].load_lf_snippets()
 
         # Load in the features data
         if self.loaders.get('features', None) is not None:
-            self.raw_data['features'] = self.loaders['features'].load_features()
+            self.raw_data['features'] = self.loaders['features'].load_features(shank_sites)
         else:
             self.raw_data['features'] = Bunch(exists=False)
 
@@ -329,6 +346,9 @@ class ShankHandler:
         """
         Filter the spikesorting data by selected unit type and recompute plot data.
 
+        The levels applied to the plots are kept, so that changing the filter doesn't discard
+        the levels chosen by the user.
+
         Parameters
         ----------
         filter_type: str
@@ -336,7 +356,20 @@ class ShankHandler:
         """
         self.loaders['plots'].filter_units(filter_type)
         self.loaders['plots'].compute_rasters()
-        self.loaders['plots'].get_plots()
+        self.loaders['plots'].get_plots(keep_levels=True)
+
+    def save_progress(self) -> str:
+        """
+        Save the current alignment to file so it can be recovered if the GUI crashes.
+
+        Returns
+        -------
+        str
+            Message containing information about the save result.
+        """
+        return self.loaders['upload'].save_progress(
+            self.align_handle.feature.tolist(), self.align_handle.track.tolist()
+        )
 
     def upload_data(self) -> str:
         """Upload the data, save the channels and the alignments."""
@@ -345,10 +378,21 @@ class ShankHandler:
             'xyz_channels': self.align_handle.xyz_channels,
             'feature': self.align_handle.feature.tolist(),
             'track': self.align_handle.track.tolist(),
-            'alignments': self.loaders['align'].alignments,
+            # Any recovered alignment is left out, it is a local record of work in progress
+            'alignments': self.loaders['align'].uploadable_alignments,
             'cluster_chns': self.cluster_chns,
             'probe_collection': self.loaders['data'].probe_collection,
             'chn_depths': self.chn_depths,
             'xyz_picks': self.loaders['align'].xyz_picks,
         }
-        return self.loaders['upload'].upload_data(data, shank_sites=self.chn_sites)
+        info = self.loaders['upload'].upload_data(data, shank_sites=self.chn_sites)
+
+        # The alignment is now uploaded, so any saved progress is no longer needed
+        if info is not None:
+            self.loaders['upload'].delete_progress()
+            # Reload so that the recovered alignment, whose file has just been deleted, is no
+            # longer offered for this shank
+            self.loaders['align'].load_progress()
+            self.loaders['align'].get_previous_alignments()
+
+        return info

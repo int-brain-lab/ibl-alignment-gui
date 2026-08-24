@@ -34,41 +34,32 @@ the ``pyproject.toml`` file, including development dependencies:
 
 
 .. _unit_tests:
+
 Testing and Code Quality
 ------------------------
 
-We use `tox <https://tox.wiki/>`_ to automate all testing and code quality checks.
-Running tox will execute the full suite of checks across several Python versions:
+Two tools are used to check the code:
 
 * `pytest <https://docs.pytest.org/>`_ — unit-tests (located in the ``tests`` directory)
-* `mypy <https://mypy-lang.org/>`_ — static type checking
 * `ruff <https://docs.astral.sh/ruff/>`_ — linting and formatting checks
 
-To run all checks, execute:
-
-.. code-block:: console
-
-    uv run tox -p
-
-Tox will create isolated environments for each check and Python version. The terminal
-output will indicate whether the checks passed or failed.
-
-To run individual tools against your current environment:
+Run them against your current environment with:
 
 .. code-block:: console
 
     uv run pytest          # run unit-tests
-    uv run mypy            # run type checking
     uv run ruff check      # check for linting issues
     uv run ruff format     # auto-format code
 
-Adding ``--fix`` to ``ruff check`` will automatically correct fixable issues.
+Adding ``--fix`` to ``ruff check`` will automatically correct fixable issues. Both should be
+clean before a pull request is opened.
 
-After running ``tox`` or ``pytest``, you can generate a coverage report to assess how
-much of the code is covered by the unit-tests:
+To measure how much of the code is covered by the unit-tests, run the tests with coverage
+enabled and then report on the result:
 
 .. code-block:: console
 
+    uv run pytest --cov
     uv run coverage report
 
 For a more detailed representation, generate an HTML report:
@@ -79,6 +70,11 @@ For a more detailed representation, generate an HTML report:
 
 You'll find the HTML report in the folder ``htmlcov``, where you can open ``index.html``
 in a web browser to view detailed coverage statistics.
+
+.. note::
+   `mypy <https://mypy-lang.org/>`_ is available in the ``typing`` dependency group and can be
+   run with ``uv run mypy``, but the code base is not yet free of type errors, so it is not part
+   of the checks above.
 
 
 Pull Requests

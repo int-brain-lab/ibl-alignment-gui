@@ -1,9 +1,9 @@
 import numpy as np
 import pyqtgraph as pg
 
-from ibl_alignment_gui.app.shank_view import ShankView
+from ibl_alignment_gui.app.views.shank_view import ShankView
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
 from iblutil.util import Bunch
 
 
@@ -129,26 +129,35 @@ class ShankController:
         data['depth'] = self.view.depth
         self.view.plot_fit(data)
 
-    def plot_channels(self, fig_slice: pg.ViewBox, colour: str | None = None) -> None:
+    def plot_channels(
+        self, fig_slice: pg.ViewBox, plot_key: str, colour: str | None = None
+    ) -> None:
         """
         Plot channels on a slice plot.
+
+        Add jitter to channel positions to avoid overlap.
 
         Parameters
         ----------
         fig_slice: pg.ViewBox
             The slice fig to add the channel items to
+        plot_key: str
+            The key of the plot to display
         colour: str
             The colour of the scatter points used to plot the channels
 
         Notes
         -----
         - fig_slice is passed in as a parameter as for the dual config display the channels
-        plotted on a different slice figure than the one stored in the view.
+          plotted on a different slice figure than the one stored in the view.
         """
         data = Bunch()
-        data['xyz_channels'] = self.model.xyz_channels
+        jitter = np.random.uniform(-1 * 1e-5, 1 * 1e-5, size=self.model.xyz_channels.shape)
+        data['xyz_channels'] = self.model.xyz_channels + jitter
         data['track_lines'] = self.model.track_lines
-        self.view.plot_channels(fig_slice, data, colour=colour)
+        data['tip'] = self.model.tip_location
+        data_feature = self.model.probe_plots.get(plot_key, None)
+        self.view.plot_channels(fig_slice, data, data_feature, colour)
 
     def plot_scatter(self, plot_key: str, levels: list | None = None) -> ColorBar | None:
         """
@@ -330,10 +339,6 @@ class ShankController:
     # --------------------------------------------------------------------------------------------
     # Fitting functions
     # --------------------------------------------------------------------------------------------
-    def offset_hist_data(self, *args) -> None:
-        """See :meth:`ShankHandler.offset_hist_data` for details."""
-        self.model.offset_hist_data(*args)
-
     def scale_hist_data(self, extend_feature: float, lin_fit: bool) -> None:
         """
         Scale brain regions along the probe track based on reference lines.

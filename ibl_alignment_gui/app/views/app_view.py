@@ -5,7 +5,7 @@ import numpy as np
 import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
-from ibl_alignment_gui.utils.qt import custom_widgets
+from ibl_alignment_gui.app.widgets import custom_widgets
 from iblutil.util import Bunch
 
 pg.setConfigOption('background', 'w')
@@ -22,11 +22,14 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
     config: bool
         Whether multiple configs are to be used
+    allen: bool
+        Whether to run the Allen/Code Ocean (anatomical) workflow, which adds a DocDB checkbox
     """
 
-    def __init__(self, offline: bool = False, config: bool = False):
+    def __init__(self, offline: bool = False, config: bool = False, allen: bool = False):
         super().__init__()
         self.config = config
+        self.allen = allen
 
         self.resize(1600, 800)
         self.setWindowTitle('IBL alignment GUI')
@@ -35,7 +38,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         # Create custom widgets that will be added to the main window
         self.button_widgets = custom_widgets.ButtonWidget(parent=self)
         self.selection_widgets = custom_widgets.SelectionWidget(
-            offline=offline, config=self.config, parent=self
+            offline=offline, config=self.config, allen=self.allen, parent=self
         )
         self.menu_widgets = custom_widgets.MenuWidget(self)
         self.setMenuBar(self.menu_widgets)
@@ -302,6 +305,24 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         if option:
             self.menu_widgets.find_actions(option, self.menu_widgets.tabs[tab]['group']).trigger()
 
+    def has_menu_option(self, tab: str, option: str) -> bool:
+        """Return whether an option already exists in a menu tab's action group.
+
+        Parameters
+        ----------
+        tab : str
+            The name of the tab.
+        option : str
+            The option label to look for.
+
+        Returns
+        -------
+        bool
+            True if the option is present in the tab, else False.
+        """
+        mw = self.menu_widgets
+        return mw.find_actions(option, mw.tabs[tab]['group']) is not None
+
     def toggle_menu_option(self, tab: str, direction: int) -> None:
         """
         Toggle through the options in an action group stored in the menubar.
@@ -423,6 +444,49 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """
         self.selection_widgets.buttons[name]['button'].clicked.connect(callback)
 
+    def connect_selection_menu(self, name: str, actions: dict[str, Callable]) -> None:
+        """Attach a popup menu of actions to an offline selection tool button.
+
+        Turns the tool button into an instant-popup menu so a single button can offer several
+        sources (e.g. open a data folder or a session yaml).
+
+        Parameters
+        ----------
+        name : str
+            The name of the tool button (e.g. 'folder').
+        actions : dict of str to Callable
+            Mapping of menu-item label to the callback triggered when it is selected.
+        """
+        button = self.selection_widgets.buttons[name]['button']
+        menu = QtWidgets.QMenu(button)
+        for label, callback in actions.items():
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _=False, cb=callback: cb())
+        button.setMenu(menu)
+        button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+    def connect_docdb_checkbox(self, callback: Callable) -> None:
+        """
+        Connect the DocDB checkbox to a callback (Allen workflow only).
+
+        Parameters
+        ----------
+        callback: Callable
+            The callback function to connect to the checkbox ``stateChanged`` signal.
+        """
+        self.selection_widgets.docdb_checkbox.stateChanged.connect(callback)
+
+    def is_docdb_checked(self) -> bool:
+        """
+        Return whether the DocDB checkbox is ticked (Allen workflow only).
+
+        Returns
+        -------
+        bool
+            True if the DocDB checkbox is checked, False otherwise.
+        """
+        return self.selection_widgets.docdb_checkbox.isChecked()
+
     def activate_selection_button(self) -> None:
         """Change the stylesheet of the data button to show it is activated."""
         self.selection_widgets.activate_data_button()
@@ -431,16 +495,19 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """Change the stylesheet of the data button to show it is deactivated."""
         self.selection_widgets.deactivate_data_button()
 
-    def get_selected_path(self) -> Path:
+    def get_selected_path(self) -> Path | None:
         """
         Get the user selected path and set the text line edit to show the selected folder path.
 
         Returns
         -------
-        selected_path: Path
-            The user selected path that contains data to load
+        Path or None
+            The user selected path that contains data to load, or None if the dialog was cancelled.
         """
-        selected_path = Path(QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder'))
+        selected = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder')
+        if not selected:
+            return None
+        selected_path = Path(selected)
         self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
         return selected_path
 
@@ -455,12 +522,30 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """
         self.selection_widgets.buttons['folder']['line'].setText(str(selected_path))
 
+    def get_selected_yaml(self) -> Path | None:
+        """
+        Open a file dialog to select a session yaml file.
+
+        Returns
+        -------
+        Path or None
+            The selected yaml file path, or None if the dialog was cancelled.
+        """
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Select session YAML', filter='YAML (*.yaml *.yml)'
+        )
+        return Path(selected) if selected else None
+
     # --------------------------------------------------------------------------------------------
     # LUT widget
     # --------------------------------------------------------------------------------------------
     def set_levels(self, levels) -> None:
         """See :meth:`LutWidget.set_lut_levels` for details."""
         self.lut_widget.set_lut_levels(levels)
+
+    def reset_levels(self) -> None:
+        """See :meth:`LutWidget.reset_lut_levels` for details."""
+        self.lut_widget.reset_lut_levels()
 
     def set_lut(self, images: list, cbar: custom_widgets.ColorBar) -> None:
         """
@@ -543,17 +628,23 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     # --------------------------------------------------------------------------------------------
     # Upload dialog boxes
     # --------------------------------------------------------------------------------------------
-    def upload_prompt(self) -> bool:
+    def upload_prompt(self, shank: str | None = None) -> bool:
         """
         Show a message box to ask the user if they want to upload the channels and alignments.
+
+        Parameters
+        ----------
+        shank: str or None
+            The shank label to include in the prompt. If None, the prompt is not shank-specific.
 
         Returns
         -------
         bool:
             True if the user wants to upload the channels and alignments, False otherwise
         """
+        message = f'Upload alignment for {shank}?' if shank else 'Upload alignment?'
         upload = QtWidgets.QMessageBox.question(
-            self, '', 'Upload alignment?', QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            self, '', message, QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
         )
         return upload == QtWidgets.QMessageBox.Yes
 

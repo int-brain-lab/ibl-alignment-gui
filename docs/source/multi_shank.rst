@@ -18,10 +18,10 @@ For example, for a four-shank probe, the picks directory should contain:
 
 .. code-block:: text
 
-    xyz_picks_shank_1.json
-    xyz_picks_shank_2.json
-    xyz_picks_shank_3.json
-    xyz_picks_shank_4.json
+    xyz_picks_shank1.json
+    xyz_picks_shank2.json
+    xyz_picks_shank3.json
+    xyz_picks_shank4.json
 
 Each file corresponds to the trajectory of a single shank.
 
@@ -31,10 +31,13 @@ The output results will be saved in the output directory with a suffix indicatin
 
 .. code-block:: text
 
-    channel_locations_shank_1.json
-    channel_locations_shank_2.json
-    channel_locations_shank_3.json
-    channel_locations_shank_4.json
+    channel_locations_shank1.json
+    channel_locations_shank2.json
+    channel_locations_shank3.json
+    channel_locations_shank4.json
+
+Because the shank number is part of the filename, every shank can share the one output directory.
+This is not the case for Method 2 below, where each shank is its own probe entry.
 
 
 Method 2: Each Shank in a Separate Directory
@@ -46,12 +49,19 @@ To load this type of data, use the **multi-probe configuration** described in th
 
 This allows all shanks to be displayed simultaneously within the same GUI window, while still handling them as independent probes internally.
 
+.. warning::
+   Each probe entry must be given its own ``output`` path. Because each entry is treated as a
+   single-shank probe, the results are written as ``channel_locations.json`` and
+   ``prev_alignments.json`` with no shank suffix, so two entries sharing an ``output`` path will
+   silently overwrite each other's results and read back each other's previous alignments.
+
 **Example YAML configuration:**
 
 .. code-block:: yaml
 
+   path: /path/to/session_data
+
    probes:
-     path: /path/to/session_data
      shank_0:
        datasets:
          spike_sorting:
@@ -78,7 +88,7 @@ This allows all shanks to be displayed simultaneously within the same GUI window
          output:
            path: shank_1/output
 
-      shank_2:
+     shank_2:
        datasets:
          spike_sorting:
            path: shank_2/spike_sorting
@@ -143,9 +153,9 @@ Toggle between display modes:
 
    * - Shortcut
      - Action
-   * - Click **Tabbed View** in Display menu
+   * - Click **Toggle layout** in Display menu
      - Toggle view mode
-   * - :kbd:`Shift+T`
+   * - :kbd:`T`
      - Toggle view mode
 
 

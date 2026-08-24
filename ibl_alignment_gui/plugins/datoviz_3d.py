@@ -1,26 +1,33 @@
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import matplotlib as mpl
 import numpy as np
-import oursin as urchin
+from datoviz.backends.pyqt6 import QtServer
 from matplotlib import cm
-from matplotlib.colors import Normalize, rgb2hex
+from matplotlib.colors import Normalize
 from qtpy import QtCore, QtWidgets
 
+from ibl_datoviz.points import PointsController
+from ibl_datoviz.viewer import Viewer
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
     from iblatlas.atlas import AllenAtlas
 
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.app.widgets.custom_widgets import PopupWindow
+from ibl_alignment_gui.utils.helpers import shank_loop
 
 PLUGIN_NAME = '3D features'
 
-SHANK_COLOURS = {'a': '#000000', 'b': '#30B666', 'c': '#ff0044', 'd': '#0000ff'}
+SHANK_COLOURS = {
+    'a': [0, 255, 0, 255],
+    'b': [48, 182, 102, 255],
+    'c': [255, 0, 0, 255],
+    'd': [0, 0, 255, 255],
+}
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -49,55 +56,78 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['plot_probe_panels'] = feature3d_plugin.plot_channels
     controller.plugins[PLUGIN_NAME]['plot_scatter_panels'] = feature3d_plugin.plot_clusters
 
-    # Add a submenu to the main menu
-    plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
-    controller.plugin_options.addMenu(plugin_menu)
-
-    # Show the 3D viewer setup
-    show_action = QtWidgets.QAction('Show 3D Viewer', controller.view)
-    show_action.triggered.connect(lambda _, c=controller: callback(_, c))
-    show_action.setCheckable(True)
-    show_action.setChecked(False)
-    plugin_menu.addAction(show_action)
-
-    # Toggle action to show / hide regions
-    region_action = QtWidgets.QAction('Show Regions', controller.view)
-    region_action.setCheckable(True)
-    region_action.setChecked(False)
-    region_action.triggered.connect(
-        lambda a=region_action: feature3d_plugin.toggle_regions(region_action.isChecked())
-    )
-    plugin_menu.addAction(region_action)
-    feature3d_plugin.region_toggle = region_action
-
-    # Slider widget to change size of displayed points
-    slider_min = QtWidgets.QLabel('0.1')
-    slider_max = QtWidgets.QLabel('1')
-    slider_max.setAlignment(QtCore.Qt.AlignRight)
-    slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-    slider.setMinimum(1)
-    slider.setMaximum(10)
-    slider.setValue(5)
-    slider.setTickPosition(QtWidgets.QSlider.TicksAbove)
-    slider.setTickInterval(1)
-    slider.sliderReleased.connect(lambda s=slider: feature3d_plugin.on_point_size_changed(s))
-    slider_layout = QtWidgets.QGridLayout()
-    slider_layout.setVerticalSpacing(0)
-    slider_layout.addWidget(slider, 0, 0, 1, 10)
-    slider_layout.addWidget(slider_min, 1, 0, 1, 1)
-    slider_layout.addWidget(slider_max, 1, 9, 1, 1)
-    slider_widget = QtWidgets.QWidget()
-    slider_widget.setLayout(slider_layout)
-    slider_action = QtWidgets.QWidgetAction(controller.view)
-    slider_action.setDefaultWidget(slider_widget)
-    plugin_menu.addAction(slider_action)
+    action = QtWidgets.QAction(PLUGIN_NAME, controller.view)
+    action.triggered.connect(lambda: callback(controller))
+    controller.plugin_options.addAction(action)
 
 
-def callback(_, controller: 'AlignmentGUIController') -> None:
+def callback(controller: 'AlignmentGUIController') -> None:
     """Open the 3D viewer."""
     if not controller.plugins[PLUGIN_NAME]['activated']:
         controller.plugins[PLUGIN_NAME]['activated'] = True
         controller.plugins[PLUGIN_NAME]['loader'].setup()
+
+
+class Viewer3D(PopupWindow):
+    """
+    Popup window hosting the datoviz 3D scene and its display controls.
+
+    Parameters
+    ----------
+    title : str
+        Title shown in the popup's title bar.
+    controller : AlignmentGUIController
+        The main application controller.
+    """
+
+    def __init__(self, title: str, controller: 'AlignmentGUIController'):
+        self.controller: AlignmentGUIController = controller
+
+        super().__init__(title, controller.view, size=(500, 600), graphics=False)
+
+    def setup(self):
+        """Create the datoviz server and figure, and add the display controls."""
+        self.qt_server = QtServer(background='black')
+        w, h = 800, 600
+        self.qfig = self.qt_server.figure(w, h)
+        self.panel = self.qfig.panel((0, 0), (w, h))
+        self.panel.arcball()
+        self.panel.gui()
+        self.layout.addWidget(self.qfig)
+
+        # Checkbox to show / hide regions
+        self.regions = QtWidgets.QCheckBox('Show regions')
+        self.regions.setChecked(True)
+
+        # Checkbox to show / hide picks
+        self.picks = QtWidgets.QCheckBox('Show picks')
+        self.picks.setChecked(False)
+
+        # Slider widget to change size of displayed points
+        slider_min = QtWidgets.QLabel('0.1')
+        slider_max = QtWidgets.QLabel('1')
+        slider_max.setAlignment(QtCore.Qt.AlignRight)
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider.setMinimum(1)
+        self.slider.setMaximum(10)
+        self.slider.setValue(5)
+        self.slider.setTickPosition(QtWidgets.QSlider.TicksAbove)
+        self.slider.setTickInterval(1)
+        slider_layout = QtWidgets.QGridLayout()
+        slider_layout.setVerticalSpacing(0)
+        slider_layout.addWidget(self.slider, 0, 0, 1, 10)
+        slider_layout.addWidget(slider_min, 1, 0, 1, 1)
+        slider_layout.addWidget(slider_max, 1, 9, 1, 1)
+        slider_layout.addWidget(self.regions, 2, 0)
+        slider_layout.addWidget(self.picks, 3, 0)
+        slider_widget = QtWidgets.QWidget()
+        slider_widget.setLayout(slider_layout)
+
+        self.layout.addWidget(slider_widget)
+
+        # TODO show trajectories
+        # TODO show xyz picks
+        # TODO add the gui elements to the view
 
 
 class Features3D:
@@ -139,31 +169,45 @@ class Features3D:
         self.controller = controller
 
         # Initialize variables
-        self.particles: urchin.particles.ParticleSystem | None = None
-        self.markers: urchin.particles.ParticleSystem | None = None
         self.regions: list | np.ndarray = []
         self.texts: list = []
-        self.point_size: float = 0.05
+        self.point_size: float = 3
         self.plot: str = 'channels'
         self.plot_type: str | None = None
-        self.side: urchin.utils.Side = urchin.utils.Side.LEFT
+        self.side: str = 'left'
         self.region_toggle: QtWidgets.QAction | None = None
         self.ba: AllenAtlas = self.controller.model.brain_atlas
 
     def setup(self):
         """Launch the 3D Urchin viewer and display the initial probe channels."""
-        # Initialize urchin
-        urchin.setup()
-        time.sleep(5)
-        # Load the CCF25 brain atlas
-        urchin.ccf25.load()
-        time.sleep(5)
-        # Add the brain root
-        urchin.ccf25.root.set_visibility(True)
-        urchin.ccf25.root.set_material('transparent-lit')
-        urchin.ccf25.root.set_alpha(0.5)
+        self.view = Viewer3D(PLUGIN_NAME, self.controller)
+        self.view.closed.connect(self.on_close)
+        self.view.slider.sliderReleased.connect(
+            lambda s=self.view.slider: self.on_point_size_changed(s)
+        )
+        self.view.regions.clicked.connect(
+            lambda: self.toggle_regions(self.view.regions.isChecked())
+        )
+        self.view.picks.clicked.connect(lambda: self.toggle_picks(self.view.picks.isChecked()))
+        self.viewer = Viewer(self.view.qt_server, self.view.panel)
+        # Add an additional points controller for picks
+        self.viewer.picks = PointsController(
+            self.view.qt_server, self.view.panel, self.viewer.offset, scale=self.viewer.scale
+        )
+        self.point_size = 3
+
+        self.regions: list | np.ndarray = []
+        self.texts: list = []
 
         self.data_button_pressed()
+
+    def on_close(self) -> None:
+        """
+        Triggered when the plugin window is closed.
+
+        Deactivate the plugin and callbacks.
+        """
+        self.controller.plugins[PLUGIN_NAME]['activated'] = False
 
     def data_button_pressed(self) -> None:
         """
@@ -171,23 +215,29 @@ class Features3D:
 
         Called when the data button is pressed in the main application.
         """
-        # Remove existing data
-        for text in self.texts:
-            text.delete()
-        self.toggle_regions(False)
-        self.particles = None
-        self.markers = None
-        self.regions = []
-        self.texts = []
+        self.remove_markers()
+        self.remove_regions()
 
         # Find new regions
         regions = get_regions(self.controller)
         regions = np.unique(np.concatenate(regions))
-        self.add_regions(regions)
-        self.region_toggle.setChecked(True)
+        region_ids = self.controller.model.brain_atlas.regions.acronym2id(regions)
+        keep_regions = []
+        for rid, acr in zip(region_ids, regions, strict=False):
+            region_info = self.controller.model.brain_atlas.regions.ancestors(rid)
+            if 'fiber tracts' not in region_info['acronym']:
+                keep_regions.append(acr)
+
+        self.add_regions(keep_regions)
+        self.view.regions.setChecked(True)
 
         # Plot initial channels
         self.plot_channels(self.controller.probe_init)
+        self.plot_picks()
+        self.view.picks.setChecked(False)
+        self.toggle_picks(False)
+
+        self.view.panel.update()
 
     def add_regions(self, regions: list | np.ndarray, hemisphere: int = -1) -> None:
         """
@@ -200,12 +250,13 @@ class Features3D:
         hemisphere: int, optional
             The hemisphere to display the regions in (-1 for left, 1 for right). Default is -1.
         """
-        regions = [r for r in regions if r not in ['void', 'root']]
-        self.side = urchin.utils.Side.LEFT if hemisphere == -1 else urchin.utils.Side.RIGHT
-        self.regions = urchin.ccf25.get_areas(regions)
-        urchin.ccf25.set_visibilities(self.regions, True, self.side)
-        urchin.ccf25.set_materials(self.regions, 'transparent-lit', 'left')
-        urchin.ccf25.set_alphas(self.regions, 0.25, 'left')
+        self.regions = [r for r in regions if r not in ['void', 'root']]
+        self.side = 'left' if hemisphere == -1 else 'right'
+        self.viewer.meshes.add_regions(self.regions, hemisphere=self.side)
+        for reg in self.regions:
+            self.viewer.meshes.set_alpha(60, reg)
+
+        self.view.qfig.update_image()
 
     def toggle_regions(self, display: bool) -> None:
         """
@@ -217,9 +268,22 @@ class Features3D:
             Whether to display the brain regions.
         """
         if len(self.regions) > 0:
-            urchin.ccf25.set_visibilities(self.regions, display, self.side)
+            if display:
+                self.viewer.meshes.show_regions(self.regions)
+            else:
+                self.viewer.meshes.hide_regions(self.regions)
 
-    def set_points(self, points: dict[str, list]) -> None:
+        self.view.qfig.update_image()
+
+    def remove_regions(self):
+        """Remove all brain regions from the 3D view."""
+        if len(self.regions) > 0:
+            self.viewer.meshes.remove_regions(self.regions)
+            self.regions = []
+
+        self.view.qfig.update_image()
+
+    def set_points(self, points: dict[str, np.ndarray]) -> None:
         """
         Add a set of points to the 3D view.
 
@@ -228,11 +292,20 @@ class Features3D:
         points: dict
             The position and color of the points to add.
         """
-        self.particles = urchin.particles.ParticleSystem(n=len(points['pos']))
-        self.particles.set_material('circle')
-        self.particles.set_positions(points['pos'])
-        self.particles.set_colors(points['col'])
-        self.set_point_size(self.point_size)
+        self.viewer.points.add_points(points['pos'], points['col'], self.point_size)
+        self.view.qfig.update_image()
+
+    def set_picks(self, points: dict[str, np.ndarray]) -> None:
+        """
+        Add a set of pick points to the 3D view.
+
+        Parameters
+        ----------
+        points: dict
+            The position and color of the pick points to add.
+        """
+        self.viewer.picks.add_points(points['pos'], points['col'], self.point_size)
+        self.view.qfig.update_image()
 
     def on_point_size_changed(self, slider: QtWidgets.QSlider) -> None:
         """
@@ -243,7 +316,7 @@ class Features3D:
         slider: QtWidgets.QSlider
             A slider widget with values from 1 to 10 representing point size.
         """
-        self.set_point_size(slider.value() / 100)
+        self.set_point_size(slider.value())
 
     def set_point_size(self, point_size: float) -> None:
         """
@@ -254,8 +327,8 @@ class Features3D:
         point_size: float
             The size of the points to set.
         """
-        self.point_size = point_size
-        self.particles.set_sizes(list(np.ones(self.particles.data.n) * self.point_size * 1000))
+        self.viewer.points.set_size(point_size)
+        self.view.qfig.update_image()
 
     def set_markers(self, markers: list) -> None:
         """
@@ -266,21 +339,17 @@ class Features3D:
         markers: dict
             A list of marker positions, colors, and names.
         """
-        self.markers = urchin.particles.ParticleSystem(n=len(markers))
-        self.markers.set_material('circle')
-        self.markers.set_positions([m['pos'] for m in markers])
-        self.markers.set_colors([m['col'] for m in markers])
-        self.markers.set_sizes(list(np.ones(self.markers.data.n) * 250))
+        for marker in markers:
+            self.texts.append(marker['name'])
+            self.viewer.texts.add_text(marker['name'], marker['pos'], marker['col'], 1)
 
-        if len(self.texts) == 0 and len(markers) > 0:
-            text = sorted(markers, key=lambda x: x['name'])
-            self.texts = urchin.text.create(len(text))
-            urchin.text.set_texts(self.texts, [t['name'] for t in text])
-            urchin.text.set_positions(
-                self.texts, [[-0.95, 0.95], [-0.95, 0.9], [-0.95, 0.85], [-0.95, 0.8]]
-            )
-            urchin.text.set_font_sizes(self.texts, [24, 24, 24, 24])
-            urchin.text.set_colors(self.texts, [t['col'] for t in text])
+    def remove_markers(self) -> None:
+        """Remove all markers from the 3D view."""
+        for marker in self.texts:
+            self.viewer.texts.hide_text(marker)
+
+        self.texts = []
+        self.view.qfig.update_image()
 
     def update_plots(self) -> None:
         """Update the plots in the 3D view based on the current selection."""
@@ -314,6 +383,49 @@ class Features3D:
         self.plot = 'clusters'
         self._plot_data(plot_key, update_clusters)
 
+    def toggle_picks(self, display: bool) -> None:
+        """
+        Show or hide the pick points in the 3D view.
+
+        Parameters
+        ----------
+        display: bool
+            Whether to display the pick points.
+        """
+        if display:
+            self.viewer.picks.show_points()
+        else:
+            self.viewer.picks.hide_points()
+
+        self.view.qfig.update_image()
+
+    def plot_picks(self) -> None:
+        """
+        Plot channel data in the 3D view.
+
+        Parameters
+        ----------
+        plot_key: str
+            The name of channel plot to display.
+        """
+        # TODO this only needs to be done onece
+        data = get_xyz_picks(self.controller)
+        colours = []
+        positions = []
+
+        for dat in data:
+            if dat['xyz'] is None:
+                continue
+
+            colours.append(dat['values'])
+            positions.append(dat['xyz'])
+
+        positions = np.ascontiguousarray(np.vstack(positions).astype(np.float32))
+        colours = np.ascontiguousarray(np.vstack(colours).astype(np.uint8))
+
+        self.viewer.picks.add_points(positions, colours, 5)
+        self.view.qfig.update_image()
+
     def _plot_data(self, plot_key: str, update_function: Callable) -> None:
         """
         Plot data in the 3D view.
@@ -345,31 +457,30 @@ class Features3D:
             if dat['xyz'] is None:
                 continue
 
-            cols = dat['values']
-            xyz = dat['xyz']
-            mlapdv = self.ba.xyz2ccf(xyz, mode='clip')
-            shank = dat['shank']
-
-            for i, loc in enumerate(mlapdv):
-                colours.append(cols[i])
-                # convert to ap ml dv order
-                positions.append([loc[1], loc[0], loc[2]])
+            colours.append(dat['values'])
+            positions.append(dat['xyz'])
 
             # Find the position to put the shank indicators
-            min_idx = np.argmin(mlapdv[:, 2])
+            min_idx = np.argmax(dat['xyz'][:, 2])
 
             sh_info = {
-                'name': shank,
-                'pos': [mlapdv[min_idx, 1], mlapdv[min_idx, 0], mlapdv[min_idx, 2] - 200],
-                'col': SHANK_COLOURS.get(shank[-1], create_random_color()),
+                'name': dat['shank'][-1],
+                'pos': [
+                    dat['xyz'][min_idx, 0],
+                    dat['xyz'][min_idx, 1],
+                    dat['xyz'][min_idx, 2] + 200 / 1e6,
+                ],
+                'col': SHANK_COLOURS.get(dat['shank'][-1], create_random_color()),
             }
             if self.controller.model.selected_config != 'both' or dat['config'] == 'quarter':
                 markers.append(sh_info)
 
-        urchin.particles.clear()
-        if len(positions) > 0:
-            self.set_points({'pos': positions, 'col': colours})
-            self.set_markers(markers)
+        if len(positions) != 0:
+            positions = np.ascontiguousarray(np.vstack(positions).astype(np.float32))
+            colours = np.ascontiguousarray(np.vstack(colours).astype(np.uint8))
+            if len(positions) > 0:
+                self.set_points({'pos': positions, 'col': colours})
+                self.set_markers(markers)
 
 
 def create_random_color() -> str:
@@ -384,12 +495,13 @@ def create_random_color() -> str:
     r = np.random.randint(0, 256)
     g = np.random.randint(0, 256)
     b = np.random.randint(0, 256)
-    return rgb2hex((r / 255, g / 255, b / 255))
+    return np.array([r, g, b, 255], dtype=np.uint8)
+    # return rgb2hex((r / 255, g / 255, b / 255))
 
 
 def data_to_colors(data: list | np.ndarray, cmap: str, vmin: float, vmax: float) -> list:
     """
-    Convert data values to hex color codes.
+    Convert data values to RGBA color codes.
 
     Parameters
     ----------
@@ -405,12 +517,11 @@ def data_to_colors(data: list | np.ndarray, cmap: str, vmin: float, vmax: float)
     Returns
     -------
     chex: list
-        A list of hex color codes corresponding to each data value.
+        A list of RGBA color codes corresponding to each data value.
     """
     cmap = cm.ScalarMappable(norm=Normalize(vmin, vmax), cmap=mpl.colormaps[cmap])
-    cvals = cmap.to_rgba(data)
-    chex = [rgb2hex(c) for c in cvals]
-    return chex
+    cvals = (cmap.to_rgba(data) * 255).astype(np.uint8)
+    return cvals
 
 
 @shank_loop
@@ -429,6 +540,27 @@ def get_regions(_, items: 'ShankController', **kwargs):
         An array of unique region names.
     """
     return np.unique(items.model.hist_data['axis_label'][:, 1])
+
+
+@shank_loop
+def get_xyz_picks(_, items: 'ShankController', **kwargs) -> dict[str, Any]:
+    """
+    Get the xyz coordinates of the picks for the shank.
+
+    Parameters
+    ----------
+    items: ShankController
+        A ShankController instance containing model data.
+
+    Returns
+    -------
+    np.ndarray
+        An array of xyz coordinates of the picks.
+    """
+    xyz = items.model.xyz_picks
+    values = np.array([[255, 0, 0, 255]] * xyz.shape[0], dtype=np.uint8)
+
+    return {'xyz': xyz, 'values': values, 'shank': kwargs['shank'], 'config': kwargs['config']}
 
 
 @shank_loop
@@ -476,10 +608,16 @@ def update_channels(_, items: 'ShankController', plot_key: str, **kwargs) -> dic
         A dictionary containing data for 3D plotting.
     """
     xyz = items.model.xyz_channels
+    jitter = np.random.uniform(-1 * 1e-5, 1 * 1e-5, size=xyz.shape)
     data = items.model.probe_plots.get(plot_key, None)
     if data is None or data.data is None:
         return {'xyz': None, 'values': None, 'shank': kwargs['shank'], 'config': kwargs['config']}
 
     values = data_to_colors(data.data, data.cmap, data.levels[0], data.levels[1])
 
-    return {'xyz': xyz, 'values': values, 'shank': kwargs['shank'], 'config': kwargs['config']}
+    return {
+        'xyz': xyz + jitter,
+        'values': values,
+        'shank': kwargs['shank'],
+        'config': kwargs['config'],
+    }

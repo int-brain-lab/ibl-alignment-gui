@@ -1,0 +1,7 @@
+path: /mnt/data
+
+probes:
+  probe_00:
+    datasets:
+      spike_sorting:
+        path: probe_00/kilosort

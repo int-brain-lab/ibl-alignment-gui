@@ -1,0 +1,54 @@
+defaults:
+  histology:
+    path: /path/to/histology
+
+configurations:
+  dense:
+    path: /path/to/dense_session
+    probes:
+      shank_0:
+        datasets:
+          spike_sorting:
+            path: alf/probe00a/kilosort
+          raw_ephys:
+            path: raw_ephys_data/probe00a
+          picks:
+            path: alf/probe00a/kilosort
+          output:
+            path: alignment_outputs/probe00a
+
+      shank_1:
+        datasets:
+          spike_sorting:
+            path: alf/probe00b/kilosort
+          raw_ephys:
+            path: raw_ephys_data/probe00b
+          picks:
+            path: alf/probe00b/kilosort
+          output:
+            path: alignment_outputs/probe00b
+
+  sparse:
+    path: /path/to/sparse_session
+    probes:
+      shank_0:
+        datasets:
+          spike_sorting:
+            path: alf/probe00a/kilosort
+          raw_ephys:
+            path: raw_ephys_data/probe00a
+          picks:
+            path: alf/probe00a/kilosort
+          output:
+            path: alignment_outputs/probe00a
+
+      shank_1:
+        datasets:
+          spike_sorting:
+            path: alf/probe00b/kilosort
+          raw_ephys:
+            path: raw_ephys_data/probe00b
+          picks:
+            path: alf/probe00b/kilosort
+          output:
+            path: alignment_outputs/probe00b

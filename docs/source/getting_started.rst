@@ -6,7 +6,7 @@ This guide will walk you through the basic usage of the IBL Alignment GUI.
 1. Sample Data
 --------------
 
-We provide a sample dataset to help you quickly get started with the tool. Download the sample data `here <https://ibl.flatironinstitute.org/public/ephys_alignment_sample_data.zip>`_.
+We provide a sample dataset to help you quickly get started with the tool. Download the sample data `here <https://ibl.flatironinstitute.org/public/ephys_alignment_sample_data.zip>`__.
 
 Extract the contents to a location on your computer - you'll need this path when loading data into the GUI.
 
@@ -30,9 +30,23 @@ A window containing blank plots should appear.
 
 Once the GUI has launched, you'll see a button in the top right corner with the symbol ``...``
 
-Click this button and navigate to the folder containing your extracted sample data and load in Sample data 1.
+Clicking this button opens a menu with two ways to choose the data to align:
 
-After selecting the folder, click ``Load`` to load the data into the GUI.
+**Open data folder…**
+    Choose a single folder that holds all of the data for one session
+
+**Open session YAML…**
+    Choose a YAML file that lists where each of the datasets lives
+
+
+Sample data 1 can be loaded using the select **Open data folder…**. Navigate to the folder containing your
+extracted sample data and choose Sample data 1 folder. The data is loaded as soon as the folder is selected.
+
+.. note::
+    This assumes all of the data for the session (spike sorting output, raw electrophysiology
+    recordings, probe trajectory files, and histology volumes) is in the one folder. Use a session
+    YAML if the datasets are spread across several folders, as shown with Sample data 2 in
+    :ref:`section 7 <loading-multi-shank>`.
 
 
 4. Overview of Layout
@@ -76,7 +90,7 @@ You can switch between plots using either the ``Image Plots``, ``Line Plots``, a
 Filtering Units
 """""""""""""""
 
-By default, the Ephys plots display all units classified as Good and MUA during spike sorting.
+By default, the Ephys plots display all of the units returned by the spike sorting.
 
 To restrict which units are shown, use the ``Filter Plots`` option in the menu bar. This allows you to selectively display specific unit classes, making it easier to focus on well-isolated units during alignment.
 
@@ -110,6 +124,36 @@ Brain region labels overlaid on the histology can be toggled on and off:
 
 When hovering over a region in the central (scale factor) panel, the **scale factor** is displayed in the title of the colour bar at the top of the figure.
 
+Brain Region Mappings
+"""""""""""""""""""""
+
+The brain regions shown in the Histology figure can be displayed under different mappings,
+selectable from the ``Region Plots`` menu bar or with the following shortcuts:
+
+.. list-table::
+   :widths: 40 60
+   :header-rows: 1
+
+   * - Shortcut
+     - Action
+   * - :kbd:`Alt+5` / :kbd:`Shift+Alt+5`
+     - Region plots (forward / backward)
+
+Three mappings are always available:
+
+**Allen**
+    The full Allen brain region hierarchy
+
+**Beryl**
+    A coarser mapping, grouping the Allen regions into larger areas
+
+**Cosmos**
+    The coarsest mapping, grouping the regions into a small number of major areas
+
+Further options are added by the Channel Prediction plugin once a region prediction model has
+been loaded, so that predicted regions can be compared against the histology. See
+:doc:`plugins` for details.
+
 
 Figure 3: Slice Figure
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -142,7 +186,7 @@ The intensity of the slice image can be adjusted using the **intensity scale bar
 Slice Display Options
 """""""""""""""""""""
 
-There are four available slice types, selectable via the ``Slice Plots`` menu bar or the following shortcuts:
+The available slice types are selectable via the ``Slice Plots`` menu bar or the following shortcuts:
 
 .. list-table::
    :widths: 40 60
@@ -150,18 +194,15 @@ There are four available slice types, selectable via the ``Slice Plots`` menu ba
 
    * - Shortcut
      - Action
-   * - :kbd:`Alt+3` / :kbd:`Shift+Alt+3`
+   * - :kbd:`Alt+4` / :kbd:`Shift+Alt+4`
      - Cycle through slice types (forward / backward)
 
-The options are:
+The Allen Brain Atlas average template and annotation template are always available. Alongside
+them, one option is added for each histology volume found for the session, so the number of
+options depends on the data provided:
 
-- Red channel of the histology image
-- Green channel of the histology image
 - Allen Brain Atlas average template
 - Allen Brain Atlas annotation template
-
-.. note::
-   The red and green histology channels are optional inputs and will not be displayed if not provided.
 
 
 Figure 4: Fit Figure
@@ -194,6 +235,18 @@ To reset the axes to their default limits:
    * - :kbd:`Shift+A`
      - Reset axes to default limits
 
+The colour and data ranges of the plots can be adjusted with the Range Controller plugin (see
+:doc:`plugins`). To return every plot to the range it was loaded with:
+
+.. list-table::
+   :widths: 40 60
+   :header-rows: 1
+
+   * - Shortcut
+     - Action
+   * - :kbd:`R`
+     - Reset all plot ranges to their defaults
+
 5. Alignment Workflow
 ---------------------
 
@@ -216,7 +269,7 @@ Once both lines are positioned on corresponding features or landmarks, apply the
      - Action
    * - Click **Fit** button
      - Apply fit
-   * - :kbd:`Enter` / :kbd:`Shift+Right`
+   * - :kbd:`Enter`
      - Apply fit
 
 
@@ -319,19 +372,61 @@ This saves the following files in the output data directory:
 **prev_alignments.json**
     Stores the reference lines used for alignment, allowing previous alignments to be reloaded later
 
-You will notice in the dropdown menu next to the ``Load`` button in the top left corner of the GUI that this new alignment is now available to load.
+You will notice in the dropdown menu next to the ``Load`` button in the top right corner of the GUI that this new alignment is now available to load.
 
+Saving Work in Progress
+~~~~~~~~~~~~~~~~~~~~~~~
+
+An alignment that is not yet ready to be uploaded can be saved to file, so that it is not lost if
+the GUI is closed or crashes before the upload:
+
+.. list-table::
+   :widths: 40 60
+   :header-rows: 1
+
+   * - Shortcut
+     - Action
+   * - Click **Save Progress** in the Fit Options menu
+     - Save the current alignment to file
+   * - :kbd:`Shift+S`
+     - Save the current alignment to file
+
+The saved alignment is written to **alignment_progress.json** in the output data directory. The
+next time the data is loaded it appears in the alignment dropdown under a ``recovered`` key,
+marked so that it cannot be mistaken for an alignment that has been uploaded, and it is chosen as
+the starting alignment. It is deleted once the alignment has been uploaded.
+
+With multi-shank data you are asked which shanks to save, in the same way as for uploading.
+
+
+.. _loading-multi-shank:
 
 7. Loading Multi-Shank Data
 ----------------------------
 
 Sample Data 2 contains recordings from a four-shank NP2.4 probe, and can be used to demonstrate the multi-shank capabilities of the GUI.
+We will also use the multi-shank data to demonstrate the use of a session YAML file, which allows datasets to be spread across multiple folders.
+
+The YAML shipped with Sample Data 2 lists the datasets relative to a folder given by the ``path``
+entry at the top of the file, so before loading it this must be changed to point at the Sample
+Data 2 folder on your own computer:
+
+.. code-block:: yaml
+
+   path: /path/to/sample_data_2      # <- change this to where you extracted Sample Data 2
+
+   probes:
+     probe00a:
+       datasets:
+         spike_sorting:
+           path: spike_sorting/probe00a
+
 
 To load the data:
 
-1. Click the ``...`` button in the top-right corner of the GUI.
+1. Click the ``...`` button in the top-right corner of the GUI and select **Open session YAML…**.
 2. Navigate to the directory containing Sample Data 2.
-3. Select the folder and click ``Load``.
+3. Select the yaml file.
 
 Once loaded, four panels will appear in the GUI window, one for each shank.
 
@@ -369,9 +464,9 @@ You can toggle between these modes:
 
    * - Shortcut
      - Action
-   * - Click **Tabbed View** in Display menu
+   * - Click **Toggle layout** in Display menu
      - Toggle view mode
-   * - :kbd:`Shift+T`
+   * - :kbd:`T`
      - Toggle view mode
 
 In the non-tabbed view:
@@ -386,9 +481,9 @@ Uploading Alignments
 
 After pressing the ``Upload`` button, a dialog will appear asking whether to upload alignments for all shanks or only the active shank.
 
-The data will be saved in the same way as for single-shank data, with each shank's results saved in separate files with appropriate suffixes (e.g., `channel_locations_shank_1.json`).
+The data will be saved in the same way as for single-shank data, with each shank's results saved in separate files with appropriate suffixes (e.g., `channel_locations_shank1.json`).
 
 Resources
 ---------
 
-An introduction to the tool was given at the 2020 UCL Neuropixels course. The lecture can be found `here <https://www.youtube.com/watch?v=8FcbT18vFS8>`_.
+An introduction to the tool was given at the 2020 UCL Neuropixels course. The lecture can be found `here <https://www.youtube.com/watch?v=8FcbT18vFS8>`__.

@@ -10,7 +10,7 @@ To launch the alignment GUI with default settings, run:
 
    alignment-gui
 
-This opens the GUI window. You can then load your data by clicking the ``...`` button in the top-right corner and selecting the directory containing your data files.
+This opens the GUI window. You can then load your data by clicking the ``...`` button in the top-right corner, selecting **Open data folder…**, and choosing the directory containing your data files.
 
 .. note::
    This mode assumes that all required data (spike sorting output, raw electrophysiology recordings, probe trajectory files, and histology volumes) are located within the same directory.
@@ -21,17 +21,22 @@ Specifying Data Directories with YAML
 
 For finer control over data locations, you can provide a YAML configuration file that explicitly specifies the paths to required inputs.
 
-Launch the GUI using:
+The YAML can either be passed on the command line when the GUI is launched:
 
 .. code-block:: console
 
    alignment-gui -y path/to/config.yaml
 
+or chosen once the GUI is running, from the ``...`` button in the top right corner by selecting
+**Open session YAML…**. Both are equivalent, and a different session YAML can be selected at any
+time without restarting the GUI.
+
 
 Required and Optional Datasets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each YAML file must define paths for the following datasets:
+Each probe must have at least two paths to datasets defined. The ``picks`` directory containing the probe trajectory
+and the ``spike_sorting`` directory containing the spike sorting output.
 
 .. list-table::
    :header-rows: 1
@@ -40,11 +45,14 @@ Each YAML file must define paths for the following datasets:
    * - Dataset
      - Description
    * - ``spike_sorting``
-     - Directory containing spike sorting output (e.g., Kilosort, PyKilosort)
+     - Directory containing spike sorting output (e.g., Kilosort, PyKilosort).
    * - ``picks``
-     - Directory containing probe trajectory pick files
+     - Directory containing probe trajectory pick files.
 
-The following datasets are optional:
+.. note::
+   For the format of the files each of these folders is expected to contain, see :doc:`datasets`.
+
+The following paths to datasets are optional:
 
 .. list-table::
    :header-rows: 1
@@ -106,6 +114,12 @@ The GUI supports visualization of up to four probes simultaneously. This is part
 
 .. warning::
    When multiple probes are specified, the GUI does not split data automatically. Each probe's data must already be separated on disk.
+
+.. warning::
+   Each probe entry must be given its own ``output`` path. Because each entry is treated as a
+   single-shank probe, the results are written as ``channel_locations.json`` and
+   ``prev_alignments.json`` with no shank suffix, so two entries sharing an ``output`` path will
+   silently overwrite each other's results and read back each other's previous alignments.
 
 **Example: four-probe configuration**
 
@@ -248,7 +262,8 @@ Combining Dual Configuration and Multi-Probe Modes
 Dual configuration mode can be combined with multi-probe mode to compare multiple probes across two configurations simultaneously.
 
 .. important::
-   Both configurations must contain the same number of probes with matching probe identifiers.
+   Both configurations must contain the same probes, with matching probe identifiers. An error is
+   raised if they do not.
 
 **Example: dual + multi-probe YAML**
 
@@ -358,17 +373,21 @@ The YAML configuration supports ``path`` keys at multiple hierarchical levels to
 
 **Path Resolution Priority**
 
-When a relative path is specified for a dataset, the system searches for a base directory in the following order:
+A dataset's path is taken from its own ``path`` field, or from the matching entry in the ``defaults`` section if the dataset does not give one. Giving an empty specification (``{}``) and leaving the dataset out altogether both fall back to the default.
 
-1. **Dataset-level path** — explicitly defined within the dataset's ``path`` field
-2. **Default path** — defined in the ``defaults`` section
-3. **Per-probe path** — defined within an individual probe configuration
-4. **Per-configuration path** — defined within an individual configuration
-5. **Top-level path** — defined at the root of the YAML file
+If that path is absolute it is used as it is. If it is relative, it is resolved against the first absolute base directory found, in the following order:
 
-During the search for the base directory it will join together relative paths to build the final absolute path.
+1. **Per-probe path** — defined within an individual probe configuration
+2. **Per-configuration path** — defined within an individual configuration
+3. **Top-level path** — defined at the root of the YAML file
 
-If a dataset uses an empty specification (``{}``), the default path is appended to the resolved base path.
+Each level is prepended in turn, joining the relative paths together, until the path is absolute. If none of them make it absolute an error is raised.
+
+.. note::
+   The ``defaults`` section supplies dataset paths, not base directories. A default is used in
+   place of a dataset's own ``path``, never as a root to resolve one against, so a dataset that
+   gives its own relative path is resolved against the base directories above and its default is
+   not used at all.
 
 .. note::
    Absolute paths (those starting with ``/`` on Unix/Linux/macOS or a drive letter on Windows) always take precedence and are used as-is, ignoring any base paths defined at higher levels.
@@ -485,10 +504,8 @@ This comprehensive example demonstrates how different path resolution levels wor
        path: /common/histology/subject_001
      spike_sorting:
        path: pykilosort
-       backend: phylib
      raw_ephys:
        path: spikeglx
-       backend: spikeglx
 
    configurations:
      dense:

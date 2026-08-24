@@ -1,12 +1,13 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
+from types import ModuleType
 from typing import Any
 
 import numpy as np
-from matplotlib import cm, colors
+from matplotlib import colormaps, colors
 
-from brainbox.task import passive
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
     arrange_channels_into_banks,
@@ -16,9 +17,36 @@ from ibl_alignment_gui.loaders.geometry_loader import (
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
 
+try:
+    import ephysatlas.features
+
+    EPHYS_ATLAS = True
+except ImportError:
+    EPHYS_ATLAS = False
+
 logger = logging.getLogger(__name__)
 
 np.seterr(divide='ignore', invalid='ignore')
+
+
+def _get_passive() -> ModuleType | None:
+    """Import ``brainbox.task.passive`` lazily.
+
+    Passive-stimulus and receptive-field plots rely on ``brainbox`` (shipped with the optional
+    ``ibllib`` dependency). In offline mode this may not be installed, in which case those plots
+    are skipped rather than raising.
+
+    Returns
+    -------
+    ModuleType or None
+        The ``brainbox.task.passive`` module, or None if it is not installed.
+    """
+    try:
+        from brainbox.task import passive  # noqa: PLC0415
+
+        return passive
+    except ImportError:
+        return None
 
 
 def skip_missing(required_keys):
@@ -215,6 +243,12 @@ FILTER_MATCH = {
     'KS mua': ('ks2_label', 'mua'),
 }
 
+# Custom filters that can be added as through plugins
+CUSTOM_FILTERS: dict[str, Callable[[Any], np.ndarray]] = {}
+
+# The plot types whose levels can be changed by the user
+LEVEL_PLOT_TYPES = ['image', 'scatter', 'line', 'probe']
+
 TBIN = 0.05
 DBIN = 5
 BNK_SIZE = 10
@@ -406,9 +440,19 @@ class PlotLoader:
         self.compute_avg_cluster_activity()
         self.compute_rasters()
 
-    def get_plots(self):
+    def get_plots(self, keep_levels: bool = False):
         """
         Get all plot data for the different plot types.
+
+        The plots are generated from scratch, so the levels that have been applied to them are
+        replaced by the defaults for the newly generated data. Set `keep_levels` to reapply
+        them instead, for example when regenerating the plots after changing the unit filter,
+        where the levels chosen by the user should be kept.
+
+        Parameters
+        ----------
+        keep_levels: bool, default=False
+            Whether to reapply the levels that are currently applied to the plots.
 
         Notes
         -----
@@ -423,11 +467,51 @@ class PlotLoader:
         self.probe_plots : Bunch
             All plots of type probe
         """
+        levels = self._get_applied_levels() if keep_levels else {}
+
         self.image_plots = self._get_plots('image')
         self.scatter_plots = self._get_plots('scatter')
         self.line_plots = self._get_plots('line')
         self.probe_plots = self._get_plots('probe')
         self.feature_plots = self._get_plots('feature')
+
+        self._apply_levels(levels)
+
+    def _get_applied_levels(self) -> dict[tuple[str, str], np.ndarray]:
+        """
+        Get the levels currently applied to each of the plots.
+
+        Returns
+        -------
+        dict
+            The current levels, keyed by plot type and plot name. Empty if the plots haven't
+            been generated yet, as there is then nothing to keep.
+        """
+        levels = {}
+        for plot_type in LEVEL_PLOT_TYPES:
+            plots = getattr(self, f'{plot_type}_plots', None) or {}
+            for name, plot in plots.items():
+                levels[plot_type, name] = np.copy(plot.levels)
+
+        return levels
+
+    def _apply_levels(self, levels: dict[tuple[str, str], np.ndarray]) -> None:
+        """
+        Apply levels to the plots that they were previously applied to.
+
+        The default levels are left as newly computed, so that resetting the levels gives the
+        defaults for the data that is currently shown. Plots that weren't there before keep the
+        levels they were generated with.
+
+        Parameters
+        ----------
+        levels: dict
+            The levels to apply, keyed by plot type and plot name.
+        """
+        for (plot_type, name), level in levels.items():
+            plot = getattr(self, f'{plot_type}_plots').get(name, None)
+            if plot is not None:
+                plot.levels = level
 
     def _get_plots(self, plot_prefix: str) -> Bunch[str, Any]:
         """
@@ -559,6 +643,12 @@ class PlotLoader:
             if filter_type == 'All':
                 self.cluster_idx = np.arange(self.data['clusters'].channels.size)
                 self.spike_idx = np.arange(self.data['spikes']['clusters'].size)
+            elif filter_type in CUSTOM_FILTERS:
+                mask = np.asarray(CUSTOM_FILTERS[filter_type](self.data['clusters'].metrics))
+                self.cluster_idx = np.where(mask)[0]
+                self.spike_idx = np.where(
+                    np.isin(self.data['spikes']['clusters'], self.cluster_idx)
+                )[0]
             else:
                 column, condition = FILTER_MATCH[filter_type]
                 self.cluster_idx = np.where(self.data['clusters'].metrics[column] == condition)[0]
@@ -602,7 +692,7 @@ class PlotLoader:
         amps = self.spike_amps[::subsample]
 
         # Amplitude bins (ignore top 10% outliers)
-        amp_range = np.quantile(amps, [0, 0.9])
+        amp_range = np.nanquantile(amps, [0, 0.9])
         amp_bins = np.linspace(amp_range[0], amp_range[1], a_bin)
 
         # Map amplitudes to bin indices
@@ -610,7 +700,7 @@ class PlotLoader:
 
         # Build colormap
         colour_bin = np.linspace(0.0, 1.0, a_bin + 1)
-        colormap = cm.get_cmap('BuPu')(colour_bin)[..., :3]
+        colormap = colormaps['BuPu'](colour_bin)[..., :3]
 
         # Initialize colours and sizes
         spikes_colours = np.array(['#000000'] * amps.size)
@@ -772,7 +862,7 @@ class PlotLoader:
         """
         xscale = (self.times[-1] - self.times[0]) / self.fr.shape[1]
         yscale = (self.depths[-1] - self.depths[0]) / self.fr.shape[0]
-        levels = np.quantile(np.mean(self.fr.T, axis=0), [0, 1])
+        levels = np.nanquantile(np.mean(self.fr.T, axis=0), [0, 1])
 
         img = ImageData(
             img=self.fr.T,
@@ -832,7 +922,7 @@ class PlotLoader:
         Dict
             A dict containing a ImageData object with key 'rms_AP'.
         """
-        return self._image_rms('AP')
+        return self._image_rms('rms_AP')
 
     @skip_missing(['rms_LF'])
     def image_rms_lf(self) -> dict[str, Any]:
@@ -844,16 +934,18 @@ class PlotLoader:
         Dict
             A bunch containing a ImageData object with key 'rms_LF'.
         """
-        return self._image_rms('LF')
+        return self._image_rms('rms_LF')
 
-    def _image_rms(self, band: str) -> dict[str, Any]:
+    def _image_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for an image plot of the RMS for the specified frequency band (AP or LF).
 
         Parameters
         ----------
-        band: str
-            The frequency band to process (AP or LF).
+        alf_object: str
+            The alf object name of the frequency band to process (AP or LF).
+        plot_key: str | None
+            The key to give the plot
 
         Returns
         -------
@@ -869,25 +961,28 @@ class PlotLoader:
           to align with the full channel map.
         """
         # Identify channels at the same depth
+
         img = (
-            average_chns_at_same_depths(self.shank_sites, self.data[f'rms_{band}']['rms']) * 1e6
+            average_chns_at_same_depths(self.shank_sites, self.data[alf_object]['rms']) * 1e6
         )  # convert to µV
 
         # Median subtract across depths (remove horizontal bands)
-        depth_medians = np.median(img, axis=1, keepdims=True)
-        global_median = np.mean(depth_medians)
+        depth_medians = np.nanmedian(img, axis=1, keepdims=True)
+        global_median = np.nanmean(depth_medians)
         img = img - depth_medians + global_median
 
         # Reconstruct full channel map (handles gaps in channel geometry)
         img_full = pad_data_to_full_chn_map(self.shank_sites, img)
 
         # Scaling for plotting
-        timestamps = self.data[f'rms_{band}']['timestamps']
+        timestamps = self.data[alf_object]['timestamps']
         xscale = (timestamps[-1] - timestamps[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
-        cmap = 'plasma' if band == 'AP' else 'inferno'
+        cmap = 'plasma' if 'AP' in alf_object else 'inferno'
+        band = 'AP' if 'AP' in alf_object else 'LF'
+        key = plot_key or f'rms {band}'
 
         img = ImageData(
             img=img_full,
@@ -897,11 +992,11 @@ class PlotLoader:
             offset=np.array([0, self.chn_min]),
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
-            xaxis=self.data[f'rms_{band}']['xaxis'],
+            xaxis=self.data[alf_object]['xaxis'],
             title=f'{band} RMS (uV)',
         )
 
-        return {f'rms {band}': img}
+        return {key: img}
 
     @skip_missing(['psd_LF'])
     def image_lfp_spectrum(self) -> dict[str, Any]:
@@ -939,7 +1034,7 @@ class PlotLoader:
         # Scaling for plotting
         xscale = (freq_range[-1] - freq_range[0]) / img_full.shape[0]
         yscale = (self.chn_max - self.chn_min) / img_full.shape[1]
-        levels = np.quantile(img, [0.1, 0.9])
+        levels = np.nanquantile(img, [0.1, 0.9])
 
         img = ImageData(
             img=img_full,
@@ -952,7 +1047,6 @@ class PlotLoader:
             xaxis='Frequency (Hz)',
             title='PSD (dB)',
         )
-
         return {'LF spectrum': img}
 
     @skip_missing(['spikes'])
@@ -968,7 +1062,12 @@ class PlotLoader:
         Notes
         -----
         - Will only return data for passive events that are present in the data
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            return dict()
+
         # Find the list of passive events that are present in the data
         if not self.data['pass_stim']['exists'] and not self.data['gabor']['exists']:
             return dict()
@@ -1022,10 +1121,40 @@ class PlotLoader:
 
         return passive_imgs
 
-    @skip_missing(['raw_snippets'])
-    def image_raw_data(self) -> dict[str, Any]:
+    @skip_missing(['raw_ap_snippets'])
+    def image_raw_ap_data(self) -> dict[str, Any]:
+        """
+        Generate data for image plots of raw AP band ephys data snippets.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ImageData objects with keys according to the time of the
+            snippet during the recording.
+        """
+        return self._image_raw_data('ap')
+
+    @skip_missing(['raw_lf_snippets'])
+    def image_raw_lf_data(self) -> dict[str, Any]:
+        """
+        Generate data for image plots of raw LFP band ephys data snippets.
+
+        Returns
+        -------
+        Dict
+            A dict containing multiple ImageData objects with keys according to the time of the
+            snippet during the recording.
+        """
+        return self._image_raw_data('lf')
+
+    def _image_raw_data(self, band: str) -> dict[str, Any]:
         """
         Generate data for image plots of raw ephys data snippets.
+
+        Parameters
+        ----------
+        band : str
+            The frequency band of the raw data snippets to plot. Ap or Lf
 
         Returns
         -------
@@ -1035,8 +1164,10 @@ class PlotLoader:
         """
         raw_imgs = dict()
 
-        for i, (t, raw_img) in enumerate(self.data['raw_snippets']['images'].items()):
-            x_range = np.array([0, raw_img.shape[0] - 1]) / self.data['raw_snippets']['fs'] * 1e3
+        for i, (t, raw_img) in enumerate(self.data[f'raw_{band}_snippets']['images'].items()):
+            x_range = (
+                np.array([0, raw_img.shape[0] - 1]) / self.data[f'raw_{band}_snippets']['fs'] * 1e3
+            )
             xscale = (x_range[1] - x_range[0]) / raw_img.shape[0]
             yscale = (self.chn_max - self.chn_min) / raw_img.shape[1]
             levels = 10 ** (-90 / 20) * 4 * np.array([-1, 1])
@@ -1052,7 +1183,7 @@ class PlotLoader:
                 xaxis='Time (ms)',
                 title=f'Power (uV) T={int(t)} s',
             )
-            raw_imgs[f'Raw ap snippet {i}'] = img
+            raw_imgs[f'Raw {band} snippet {i}'] = img
 
         return raw_imgs
 
@@ -1117,7 +1248,7 @@ class PlotLoader:
 
         return {'Amplitude': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_dead_channels(self) -> dict[str, Any]:
         """
         Generate data for a line plot of dead channels across depth.
@@ -1127,7 +1258,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Dead Channels'.
         """
-        data = self.data['raw_snippets']['dead_channels']
+        data = self.data['raw_ap_snippets']['dead_channels']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1147,7 +1278,7 @@ class PlotLoader:
 
         return {'Dead Channels': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_noisy_channels_coherence(self) -> dict[str, Any]:
         """
         Generate data for a line plot of noisy channels across depth.
@@ -1159,7 +1290,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels Coherence'.
         """
-        data = self.data['raw_snippets']['noisy_channels_coherence']
+        data = self.data['raw_ap_snippets']['noisy_channels_coherence']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1179,7 +1310,7 @@ class PlotLoader:
 
         return {'Noisy Channels Coherence': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_noisy_channels_psd(self) -> dict[str, Any]:
         """
         Generate data for a line plot of noisy channels across depth.
@@ -1191,7 +1322,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels PSD'.
         """
-        data = self.data['raw_snippets']['noisy_channels_psd']
+        data = self.data['raw_ap_snippets']['noisy_channels_psd']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1211,7 +1342,7 @@ class PlotLoader:
 
         return {'Noisy Channels PSD': line}
 
-    @skip_missing(['raw_snippets'])
+    @skip_missing(['raw_ap_snippets'])
     def line_outside_channels(self) -> dict[str, Any]:
         """
         Generate data for a line plot of outide channels across depth.
@@ -1221,7 +1352,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Outside Channels'.
         """
-        data = self.data['raw_snippets']['outside_channels']
+        data = self.data['raw_ap_snippets']['outside_channels']
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1254,7 +1385,7 @@ class PlotLoader:
         Dict
             A dict containing a ProbeData object with key 'rms_AP'.
         """
-        return self._probe_rms('AP')
+        return self._probe_rms('rms_AP')
 
     @skip_missing(['rms_LF'])
     def probe_rms_lf(self) -> dict[str, Any]:
@@ -1266,16 +1397,18 @@ class PlotLoader:
         Dict
             A dict containing a ProbeData object with key 'rms_LF'.
         """
-        return self._probe_rms('LF')
+        return self._probe_rms('rms_LF')
 
-    def _probe_rms(self, band: str) -> dict[str, Any]:
+    def _probe_rms(self, alf_object: str, plot_key: str | None = None) -> dict[str, Any]:
         """
         Generate data for a probe plot of the RMS for the specified frequency band (AP or LF).
 
         Parameters
         ----------
-        band: str
-            The frequency band to process (AP or LF).
+        alf_object: str
+            The alf object containing the frequency band to process (AP or LF).
+        plot_key: str | None
+            The key to use for the returned dict. If None, defaults to 'rms_{alf_object}'.
 
         Returns
         -------
@@ -1283,14 +1416,16 @@ class PlotLoader:
             A dict containing a ProbeData object with key 'rms_{band}'.
         """
         # Average data across time
-        rms_avg = np.mean(self.data[f'rms_{band}']['rms'], axis=0) * 1e6
-        levels = np.quantile(rms_avg, [0.1, 0.9])
+        rms_avg = np.mean(self.data[alf_object]['rms'], axis=0) * 1e6
+        levels = np.nanquantile(rms_avg, [0.1, 0.9])
         # Split the data into banks of channels according to the probe geometry
         probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
             self.shank_sites, rms_avg, bnk_width=BNK_SIZE
         )
 
-        cmap = 'plasma' if band == 'AP' else 'inferno'
+        cmap = 'plasma' if 'AP' in alf_object else 'inferno'
+        band = 'AP' if 'AP' in alf_object else 'LF'
+        key = plot_key or f'rms {band}'
 
         probe = ProbeData(
             img=probe_img,
@@ -1304,7 +1439,7 @@ class PlotLoader:
             data=rms_avg,
         )
 
-        return {f'rms {band}': probe}
+        return {key: probe}
 
     @skip_missing(['psd_LF'])
     def probe_lfp_spectrum(self) -> dict[str, Any]:
@@ -1330,7 +1465,7 @@ class PlotLoader:
             probe_img, probe_scale, probe_offset = arrange_channels_into_banks(
                 self.shank_sites, lfp_power, bnk_width=BNK_SIZE
             )
-            levels = np.quantile(lfp_power, [0.1, 0.9])
+            levels = np.nanquantile(lfp_power, [0.1, 0.9])
 
             probe = ProbeData(
                 img=probe_img,
@@ -1359,9 +1494,18 @@ class PlotLoader:
 
         Notes
         -----
-        - Although this is a probe plot the data is not split into banks as for the case of other
-         probe plots.
+        - Although this is a probe plot the data is not split into banks as for the case of
+          other probe plots.
+        - Requires the optional ``ibllib`` dependency; returns an empty dict when it is missing
         """
+        passive = _get_passive()
+        if passive is None:
+            logger.warning(
+                "Receptive field map plots require the optional 'ibllib' dependency; skipping. "
+                "Install it with 'pip install ibl_alignment_gui[ibl]'."
+            )
+            return dict()
+
         # Extract stimulus times and positions
         rf_map_times, rf_map_pos, rf_stim_frames = passive.get_on_off_times_and_positions(
             self.data['rf_map']
@@ -1388,7 +1532,7 @@ class PlotLoader:
         yscale = (self.chn_max - self.chn_min) / img['on'].shape[0]
         xscale = 1
         depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
-        levels = np.quantile(np.c_[img['on'], img['off']], [0, 1])
+        levels = np.nanquantile(np.c_[img['on'], img['off']], [0, 1])
 
         data_img = dict()
         sub_type = ['on', 'off']
@@ -1414,34 +1558,17 @@ class PlotLoader:
     # --------------------------------------------------------------------------------------------
     # Feature plots
     # --------------------------------------------------------------------------------------------
-    @skip_missing(['features'])
-    def feature_ephys_atlas(self):
+    def _ephys_atlas_sites(self) -> tuple[Any, Bunch]:
         """
-        Generate data for ephys atlas feature plots.
+        Build channel-site geometry for the ephys atlas features table.
 
         Returns
         -------
-        Dict
-            A dict containing multiple ProbeData objects with keys according to features.
+        pd.DataFrame
+            The ephys atlas features table.
+        Bunch
+            The channel-site geometry for the (single) shank the features belong to.
         """
-        ignore_cols = [
-            'pid',
-            'axial_um',
-            'lateral_um',
-            'x',
-            'y',
-            'z',
-            'acronym',
-            'atlas_id',
-            'x_target',
-            'y_target',
-            'z_target',
-            'outside',
-            'Allen_id',
-            'Cosmos_id',
-            'Beryl_id',
-        ]
-
         feature_data = self.data['features']['df']
         chn_coords = Bunch()
         chn_coords['localCoordinates'] = np.c_[
@@ -1452,32 +1579,110 @@ class PlotLoader:
         chn_geom.split_sites_per_shank()
         sites = chn_geom._get_sites_for_shank(0)
 
-        features = [k for k in feature_data if k not in ignore_cols]
-        features.sort()
+        return feature_data, sites
+
+    @staticmethod
+    def _ephys_atlas_feature_probe(
+        feature: str, feature_data: Any, sites: Bunch, index: int = 0
+    ) -> ProbeData:
+        """
+        Build a single ephys atlas feature normalised into a ``ProbeData`` image.
+
+        Parameters
+        ----------
+        feature: str
+            The name of the feature to build the plot for.
+        feature_data: pd.DataFrame
+            The ephys atlas features table.
+        sites: Bunch
+            The channel-site geometry for the shank the features belong to.
+        index: int, default=0
+            When non-zero, offsets the plot horizontally by this many bank-widths, so
+            several features can be tiled side by side within a single combined view.
+
+        Returns
+        -------
+        ProbeData
+            The normalised (0-1) feature image, min-max scaled across all channels. Its
+            ``data`` is the same per-channel normalised values, so the plot can also be
+            used to colour the channels shown on the histology slice.
+        """
+        vals = feature_data[feature].values
+        min_val = np.nanmin(vals)
+        max_val = np.nanmax(vals)
+        feature_norm = (vals - min_val) / (max_val - min_val)
+        img, scale, offset = arrange_channels_into_banks(sites, feature_norm)
+
+        offset[0] += index * (10 * sites['n_banks'])
+
+        return ProbeData(
+            img=img,
+            scale=scale,
+            offset=offset,
+            levels=np.array([0, 1]),
+            default_levels=np.array([0, 1]),
+            cmap='viridis',
+            xrange=np.array([0, 10 * sites['n_banks']]),
+            title=feature,
+            data=feature_norm,
+        )
+
+    @skip_missing(['features'])
+    def feature_ephys_atlas(self):
+        """
+        Generate data for the combined ephys atlas feature plot.
+
+        Tiles every available feature side by side into a single view.
+
+        Returns
+        -------
+        Dict
+            A dict with one key, 'Ephys Atlas', containing a Bunch of ProbeData objects
+            keyed by feature.
+        """
+        if not EPHYS_ATLAS:
+            return {}
+
+        feature_data, sites = self._ephys_atlas_sites()
+        available_cols = feature_data.columns
 
         data = Bunch()
-
-        for i, feature in enumerate(features):
-            vals = feature_data[feature].values
-            min_val = np.nanmin(vals)
-            max_val = np.nanmax(vals)
-            feature_norm = (vals - min_val) / (max_val - min_val)
-            img, scale, offset = arrange_channels_into_banks(sites, feature_norm)
-
-            offset[0] += i * (10 * sites['n_banks'])
-
-            feat = ProbeData(
-                img=img,
-                scale=scale,
-                offset=offset,
-                levels=np.array([0, 1]),
-                default_levels=np.array([0, 1]),
-                cmap='viridis',
-                xrange=np.array([0, 10 * sites['n_banks']]),
-                title=feature,
-                data=None,
-            )
-
-            data[feature] = feat
+        for i, feature in enumerate(ephysatlas.features.voltage_features_set()):
+            if feature not in available_cols:
+                continue
+            data[feature] = self._ephys_atlas_feature_probe(feature, feature_data, sites, index=i)
 
         return {'Ephys Atlas': data}
+
+    # --------------------------------------------------------------------------------------------
+    # Probe plots (ephys atlas features, registered individually)
+    # --------------------------------------------------------------------------------------------
+    @skip_missing(['features'])
+    def probe_ephys_atlas(self) -> dict[str, Any]:
+        """
+        Generate a standalone probe plot for each available ephys atlas feature.
+
+        Unlike :meth:`feature_ephys_atlas`, which tiles every feature into one combined
+        view, each feature here is registered individually so it can be selected on its
+        own from the probe plot menu, with the usual probe-plot colorbar/level controls.
+
+        Returns
+        -------
+        Dict
+            A dict containing one ProbeData object per available ephys atlas feature.
+        """
+        if not EPHYS_ATLAS:
+            return {}
+
+        feature_data, sites = self._ephys_atlas_sites()
+        available_cols = feature_data.columns
+
+        data = {}
+        for feature in ephysatlas.features.voltage_features_set():
+            if feature not in available_cols:
+                continue
+            data[f'Ephys Atlas - {feature}'] = self._ephys_atlas_feature_probe(
+                feature, feature_data, sites
+            )
+
+        return data

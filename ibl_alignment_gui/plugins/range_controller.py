@@ -3,13 +3,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.utils.qt.custom_widgets import CheckBoxGroup, PopupWindow, SliderWidget
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.app.widgets.custom_widgets import CheckBoxGroup, PopupWindow, SliderWidget
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
-    from ibl_alignment_gui.app.shank_controller import ShankController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 PLUGIN_NAME = 'Range Controller'
 
@@ -70,7 +70,9 @@ class RangeControllerView(PopupWindow):
     """
 
     def __init__(self, title: str, controller: 'AlignmentGUIController'):
-        self.steps: int = 100
+        # A high number of steps so that dragging the slider is fine grained even when the
+        # extremes of the data are far apart
+        self.steps: int = 1000
         self.controller: AlignmentGUIController = controller
 
         super().__init__(title, controller.view, size=(500, 600), graphics=False)
@@ -81,17 +83,13 @@ class RangeControllerView(PopupWindow):
         self.labels = Bunch()
 
         for plot in ['image', 'probe', 'line']:
-            self.sliders[plot] = SliderWidget(steps=self.steps, slider_type=plot)
+            self.sliders[plot] = SliderWidget(steps=self.steps, slider_type=plot, editable=True)
             self.labels[plot] = QtWidgets.QLabel()
 
-        self.shank_options = CheckBoxGroup()
-        self.shank_options.add_options(['All'] + self.controller.all_shanks)
-        self.shank_options.set_checked([self.controller.model.selected_shank])
+        self.shank_options = self.create_checkbox_group(self.controller.all_shanks, 'All')
         self.shank_options.setup_callback(self.on_shank_button_clicked)
 
-        self.config_options = CheckBoxGroup()
-        self.config_options.add_options(['both'] + self.controller.model.configs)
-        self.config_options.set_checked([self.controller.model.selected_config])
+        self.config_options = self.create_checkbox_group(self.controller.model.configs, 'both')
         self.config_options.setup_callback(self.on_config_button_clicked)
 
         self.layout.addWidget(self.labels['image'])
@@ -104,6 +102,40 @@ class RangeControllerView(PopupWindow):
         self.layout.addWidget(self.shank_options)
         self.layout.addWidget(QtWidgets.QLabel('Configurations:'))
         self.layout.addWidget(self.config_options)
+
+    @staticmethod
+    def create_checkbox_group(options: list[str], select_all: str) -> CheckBoxGroup:
+        """
+        Create a group of checkboxes with all of the options checked by default.
+
+        The extra option that toggles all the others at once is only added if there is more
+        than one option to choose between. If there is only one option, it is checked and
+        disabled, as there is no choice to be made.
+
+        Parameters
+        ----------
+        options: list of str
+            The options to create checkboxes for.
+        select_all: str
+            The text of the extra option that toggles all the others at once.
+
+        Returns
+        -------
+        CheckBoxGroup
+            The group of checkboxes.
+        """
+        checkbox_group = CheckBoxGroup()
+
+        if len(options) > 1:
+            options = [select_all] + options
+
+        checkbox_group.add_options(options)
+        checkbox_group.set_checked(options)
+
+        if len(options) == 1:
+            checkbox_group.checkboxes[options[0]].setEnabled(False)
+
+        return checkbox_group
 
     def on_shank_button_clicked(self, checked: bool, button: str) -> None:
         """
@@ -212,11 +244,10 @@ class RangeController:
         self.view.closed.connect(self.on_close)
         for slider_widget in self.view.sliders.values():
             slider_widget.released.connect(self.on_slider_moved)
+            slider_widget.levels_changed.connect(self.on_slider_moved)
             slider_widget.reset.connect(self.on_reset_button_pressed)
 
         self.set_init_levels()
-        if self.controller.model.selected_config == 'both':
-            self.view.on_config_button_clicked(True, 'both')
 
     def on_close(self) -> None:
         """
@@ -228,14 +259,10 @@ class RangeController:
 
     def disable_sliders(self) -> None:
         """Disable sliders when the view is changed to feature view."""
-        if self.controller.show_feature:
-            for slider_widget in self.view.sliders.values():
-                slider_widget.slider.setEnabled(False)
-                slider_widget.reset_button.setEnabled(False)
-        else:
-            for slider_widget in self.view.sliders.values():
-                slider_widget.slider.setEnabled(True)
-                slider_widget.reset_button.setEnabled(True)
+        for slider_widget in self.view.sliders.values():
+            slider_widget.set_enabled(not self.controller.show_feature)
+
+        if not self.controller.show_feature:
             self.set_init_levels()
 
     def set_init_levels(self) -> None:
@@ -293,12 +320,22 @@ class RangeController:
         key = plot_type if plot_type != 'scatter' else 'image'
         self.plot_keys[key] = plot_key
 
-        # Find the extremes across all shanks and configs
-        data = get_levels(self.controller, plot_key, plot_type)
-        max_levels = np.array([dat['data'].levels for dat in data if dat['data'] is not None])
-        self.view.sliders[key].set_slider_intervals([np.nanmin(max_levels), np.nanmax(max_levels)])
+        # Find the extremes across all shanks and configs. The default levels are used, as these
+        # are the extremes of the data, while the current levels are the ones that have been
+        # applied to the plot. The current levels are included so that levels lying outside of
+        # the data can still be shown on the slider.
+        data = [
+            dat['data']
+            for dat in get_levels(self.controller, plot_key, plot_type)
+            if dat['data'] is not None
+        ]
+        all_levels = np.array([dat.default_levels for dat in data] + [dat.levels for dat in data])
+        bounds = [np.nanmin(all_levels), np.nanmax(all_levels)]
+        self.view.sliders[key].set_slider_intervals(bounds)
 
-        # Find the level for the currently selected shank and configs
+        # Find the levels currently applied to the selected shanks and configs. Where these
+        # differ between shanks, the widest range is shown, so that the levels of no shank lie
+        # outside of the ones displayed.
         data = get_levels(
             self.controller,
             plot_key,
@@ -307,9 +344,7 @@ class RangeController:
             configs=self.view.get_selected_configs(),
         )
         levels = np.array([dat['data'].levels for dat in data if dat['data'] is not None])
-        if len(levels) == 0:
-            levels = np.nanquantile(max_levels, [0.1, 0.9])
-        levels = np.nanquantile(levels, [0.1, 0.9])
+        levels = bounds if len(levels) == 0 else [np.nanmin(levels[:, 0]), np.nanmax(levels[:, 1])]
 
         # Update the slider and label
         self.view.sliders[key].set_slider_values(levels)

@@ -4,28 +4,52 @@ build-backend = "uv_build"
 
 [project]
 name = "ibl_alignment_gui"
-version = "0.1.0"
+version = "1.0.0"
 description = "Electrophysiology alignment tool"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
 dependencies = [
   "qtpy>=2.4.1",
+  # qtpy only abstracts over a Qt binding, it does not provide one, so a binding has to be
+  # declared here or the GUI cannot start. PyQt5 rather than PyQt6 because ibllib (the 'ibl'
+  # extra) hard-requires pyqt5, and two bindings in one process is a crash risk.
+  "pyqt5",
   "numpy",
+  "pandas",
+  "scipy",
   "pyqtgraph>=0.13.7",
   "ONE-api>=3.0.0",
   "iblutil>=1.20.0",
   "ibl-neuropixel>=1.9.0",
-  "ibllib",
   "iblatlas",
   "matplotlib",
   "simpleitk",
   "pydantic",
-  #"ibl-datoviz"
+  "pyyaml",
+  "requests",
+  "ibl-datoviz @ git+https://github.com/int-brain-lab/ibl-datoviz.git"
 ]
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
+
+[project.optional-dependencies]
+ephysatlas = ["ibleatools @ git+https://github.com/int-brain-lab/ibleatools.git"]
+# IBL online mode (ONE/Alyx): raw-data streaming, alignment upload/QC and passive/RF plots.
+# Installs ibllib (which also provides brainbox). Not required for offline mode.
+ibl = ["ibllib"]
+# Allen/Code Ocean (anatomical) mode: read/write alignments to the Allen DocDB and warp channel
+# locations into the Allen CCF. Not required for the local anatomical workflow.
+allen = [
+  "aind-data-schema<2.0",
+  "aind-data-access-api",
+  "aind-data-schema-models",
+  "aind-qcportal-schema",
+  "aws-requests-auth",
+  "boto3",
+  "antspyx",
+]
 
 [project.urls]
 Changelog = "https://github.com/int-brain-lab/ibl-alignment-gui/blob/main/CHANGELOG.md"
@@ -37,6 +61,7 @@ Repository = "https://github.com/int-brain-lab/ibl-alignment-gui.git"
 [project.scripts]
 alignment-gui = "ibl_alignment_gui.app.main:launch_app"
 alignment-gui-ibl = "ibl_alignment_gui.app.main:launch_app_ibl"
+alignment-gui-allen = "ibl_alignment_gui.app.main:launch_app_allen"
 
 
 [dependency-groups]
@@ -103,7 +128,7 @@ source-exclude = [
 [tool.ruff]
 line-length = 99
 include = ["pyproject.toml", "ibl_alignment_gui/**/*.py", "tests/**/*.py", "docs/source/**/*.py"]
-exclude = ["ibl_alignment_gui/utils/qt/adapted_axis.py", "ibl_alignment_gui/utils/qt/qrange_slider.py"]
+exclude = ["ibl_alignment_gui/app/widgets/adapted_axis.py", "ibl_alignment_gui/app/widgets/qrange_slider.py"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -114,6 +139,9 @@ ignore = [
   "D104",    # Missing docstring in public package
   "PLR2004", # Magic value used in comparison
   "PLR0913", # Too many arguments
+  "PLR0911", # Too many return statements
+  "PLR0912", # Too many branches
+  "PLR0915", # Too many statements
 ]
 
 select = [
@@ -138,6 +166,15 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D"] # pydocstyle
+# Numerical code follows the notation of the maths it implements (X, XYZ, F_e, M_MAX); renaming
+# those to snake_case would obscure the formulae rather than clarify them.
+"ibl_alignment_gui/core/ephys_alignment.py" = ["N806"]           # pep8-naming: variable case
+"ibl_alignment_gui/plugins/ephys_atlas/*.py" = ["N803", "N806"]  # pep8-naming: argument/variable
+# Qt event handlers are camelCase overrides of the Qt API and cannot be renamed.
+"ibl_alignment_gui/app/widgets/*.py" = ["N802"]                  # pep8-naming: function case
+# This module is built around deferring the optional ephysatlas/torch backends to the point of
+# use, so that offline startup works without them installed; every import here is lazy by design.
+"ibl_alignment_gui/plugins/channel_prediction.py" = ["PLC0415"]  # import-outside-top-level
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -147,7 +184,9 @@ known-first-party = ["brainbox*", "ibl*", "one*" ]
 
 [tool.mypy]
 packages = ["ibl_alignment_gui", "tests"]
-python_version = "3.10"
+# 3.12 rather than the 3.10 floor of requires-python: the installed numpy stubs use 3.12 syntax,
+# and targeting 3.10 makes mypy fail while reading them, before it checks anything.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 

@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
 from one.api import ONE
+
+logger = logging.getLogger(__name__)
 
 
 class Geometry(ABC):
@@ -241,6 +244,60 @@ class MetaGeometry(Geometry):
         return groups
 
 
+def find_geometry_mismatches(electrodes: Geometry, channels: Geometry) -> list[str]:
+    """
+    Describe the ways the electrode and channel geometries disagree about the probe layout.
+
+    The spike sorting channels are expected to describe a subset of the electrodes, so the
+    number of sites and their exact depths are not required to match - channels that recorded
+    no spikes may be missing entirely. What is checked is that each shank has the same number
+    of banks, and that every channel site falls within the depth range the metadata reports for
+    that shank.
+
+    Note that the x coordinates are deliberately not compared: the metadata x is relative to
+    each shank, so the same values repeat across shanks, whereas the spike sorting
+    localCoordinates are absolute across the whole probe.
+
+    Parameters
+    ----------
+    electrodes : Geometry
+        Geometry built from the ap.meta metadata, split per shank.
+    channels : Geometry
+        Geometry built from the spike sorting channels, split per shank.
+
+    Returns
+    -------
+    list of str
+        One entry per difference found, empty when the two agree.
+    """
+    if electrodes.n_shanks != channels.n_shanks:
+        return [
+            f'number of shanks differs: {electrodes.n_shanks} (metadata) '
+            f'vs {channels.n_shanks} (channels)'
+        ]
+
+    mismatches = []
+    for i in range(electrodes.n_shanks):
+        elec = electrodes.shanks[i]
+        chn = channels.shanks[i]
+
+        if elec['n_banks'] != chn['n_banks']:
+            mismatches.append(
+                f'shank {i}: number of banks differs: {elec["n_banks"]} (metadata) '
+                f'vs {chn["n_banks"]} (channels)'
+            )
+
+        outside = (chn['sites_y'] < elec['sites_min']) | (chn['sites_y'] > elec['sites_max'])
+        if np.any(outside):
+            mismatches.append(
+                f'shank {i}: {np.sum(outside)} of {chn["sites_y"].size} channel sites fall '
+                f'outside the {elec["sites_min"]} to {elec["sites_max"]} depth range of the '
+                f'metadata'
+            )
+
+    return mismatches
+
+
 class GeometryLoader(ABC):
     """
     Abstract base class for loading probe geometry from metadata or channels.
@@ -267,8 +324,18 @@ class GeometryLoader(ABC):
         if self.electrodes is None and self.channels is None:
             raise ValueError('Could not load geometry: metadata and channels both missing')
 
-        # TODO we need to check that metadata and channels are equivalent.
-        #  If they are not then we use the channels and put out a warning
+        # When both sources are available they should describe the same probe. If they do not,
+        # the spike sorting channels are the ones the data is indexed against, so drop the
+        # electrodes and fall back to the channels everywhere (see get_sites_for_shank).
+        if self.electrodes is not None and self.channels is not None:
+            mismatches = find_geometry_mismatches(self.electrodes, self.channels)
+            if mismatches:
+                logger.warning(
+                    'The probe geometry read from the ap.meta metadata does not match the '
+                    'spike sorting channels, using the channels instead. Differences: %s',
+                    '; '.join(mismatches),
+                )
+                self.electrodes = None
 
     @abstractmethod
     def load_meta_data(self) -> Bunch[str, Any] | None:
@@ -392,12 +459,9 @@ class GeometryLoaderLocal(GeometryLoader):
 
     Parameters
     ----------
-    probe_path: Path
-        A path to root folder containing the spike sorting and metadata collections.
-    collections: dloader.CollectionData
-        A CollectionData instance specifying the folders relative to the rootpath that
-        contain the spikesorting
-         and metadata data.
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe. The channels are read from the
+        ``spike_sorting`` folder and the metadata from the ``raw_ephys`` folder.
     """
 
     def __init__(self, data_paths: DatasetPaths):
@@ -415,6 +479,8 @@ class GeometryLoaderLocal(GeometryLoader):
         dict or None
             A dict containing the spikeglx AP band metadata, or None if not found.
         """
+        if self.meta_path is None:
+            return None
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
         return spikeglx.read_meta_data(meta_file) if meta_file else None
 
@@ -529,7 +595,7 @@ def average_chns_at_same_depths(shank_geom: Bunch[str, Any], data: np.ndarray) -
     chn_depth_eq[np.where(chn_count == 2)] += 1
 
     # Average pairs of channels at the same depth
-    averaged_data = np.mean(
+    averaged_data = np.nanmean(
         np.stack([data[:, chn_depth], data[:, chn_depth_eq]], axis=-1),
         axis=-1,
     )

@@ -1,5 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -31,6 +32,13 @@ class DatasetPaths(BaseModel):
         Path to histology volume directory
     output : Path | None
         Path to alignment output directory
+    features : Path | None
+        Path to a per-channel ephys-features parquet file (used by the local channel-prediction
+        plugin so the features travel with the session config).
+    transforms : Path | None
+        Path to a folder of registration transforms used to warp channel locations into the
+        Allen CCF (anatomical workflow only). When set, channel locations are additionally
+        saved in CCF coordinates.
     """
 
     spike_sorting: Path | None = None
@@ -40,23 +48,29 @@ class DatasetPaths(BaseModel):
     raw_task: Path | None = None
     picks: Path | None = None
     histology: Path | None = None
+    histology_space: str = 'ccf'
     output: Path | None = None
+    features: Path | None = None
+    transforms: Path | None = None
 
 
 class Datasets(BaseModel):
     """
-    Dataset configuration with optional path and backend specification.
+    Dataset configuration.
 
     Attributes
     ----------
     path : Path
         Relative or absolute path to the dataset directory
-    backend : str | None
-        Data format backend (e.g., 'phylib', 'spikeglx')
+    space : {'ccf', 'anatomical'} | None
+        Only meaningful for the ``histology`` entry of the top-level ``defaults`` section: the
+        session-level coordinate space to use for histology slice loading. 'ccf' loads via
+        NrrdSliceLoader using the Allen CCF atlas; 'anatomical' loads via AnatomicalSliceLoader
+        using the original image space produced by the histology registration pipeline.
     """
 
     path: Path | None = None
-    backend: str | None = None
+    space: Literal['ccf', 'anatomical'] | None = None
 
 
 class Probe(BaseModel):
@@ -175,12 +189,11 @@ def resolve_path(
 
 def load_alignment_yaml(
     yaml_file: str,
-) -> tuple[list[str], list[str], dict[str, dict[str, DatasetPaths]]]:
+) -> tuple[list[str], list[str], dict[str, dict[str, DatasetPaths]], str]:
     """
     Load and parse alignment configuration YAML file.
 
-    Resolves all dataset paths using hierarchical path resolution and applies
-    defaults. Creates output directories if they don't exist.
+    Resolves all dataset paths using hierarchical path resolution and applies defaults.
 
     Parameters
     ----------
@@ -196,13 +209,24 @@ def load_alignment_yaml(
     data_paths : A dict of dicts of DatasetPaths
         Nested dictionary of resolved paths:
         data_paths[config_name][probe_name] -> DatasetPaths
+    histology_space : str
+        Session-level histology coordinate space, read from the ``space`` field of the
+        ``defaults`` histology entry ('ccf' if unspecified). 'ccf' loads histology via the Allen
+        CCF atlas; 'anatomical' loads the original image space from the registration pipeline.
 
     Notes
     -----
     - If no 'configurations' section exists, creates a 'default' configuration
-    - Falls back to raw_ephys path if processed_ephys is not specified
-    - Falls back to spike_sorting path if output path is not specified
-    - Creates output directories automatically with parents
+    - Falls back to the spike_sorting path if raw_ephys is not specified
+    - Falls back to the raw_ephys path if processed_ephys is not specified
+    - Falls back to the spike_sorting path, and then the picks path, if output is not specified
+
+    Raises
+    ------
+    FileNotFoundError
+        If the yaml file does not exist.
+    ValueError
+        If the yaml file is empty or does not contain a mapping.
     """
     yaml_file = Path(yaml_file)
 
@@ -212,6 +236,13 @@ def load_alignment_yaml(
     with open(yaml_file) as f:
         data = yaml.safe_load(f)
 
+    # An empty file loads as None, and a file holding a bare scalar or list loads as that value;
+    # both would fail further down with an error that says nothing useful
+    if not isinstance(data, dict):
+        raise ValueError(
+            f'YAML file {yaml_file} is empty or does not contain a mapping of configuration keys'
+        )
+
     # Support files without explicit 'configurations' section
     if 'configurations' not in data:
         probes = data.pop('probes', {})
@@ -219,6 +250,11 @@ def load_alignment_yaml(
 
     alignment = AlignmentYAML(**data)
     global_path = alignment.path
+
+    # Histology space is a session-level setting read from the ``defaults`` histology entry and
+    # shared by every probe/config ('ccf' when unspecified).
+    default_histology = alignment.defaults.get('histology') if alignment.defaults else None
+    histology_space = (default_histology.space if default_histology else None) or 'ccf'
 
     data_paths = defaultdict(dict)
     configs = []
@@ -237,7 +273,10 @@ def load_alignment_yaml(
 
             def get_path(dname: str) -> str | None:
                 """Get path for a specific dataset from probe configuration."""
-                dataset = datasets.get(dname)
+                # noqa is safe: this closure is only ever called within the same loop iteration
+                # (see the dataset_name loop below), so the late binding B023 warns about cannot
+                # be observed.
+                dataset = datasets.get(dname)  # noqa: B023
                 return dataset.path if dataset else None
 
             def get_default_path(dname: str) -> str | None:
@@ -255,6 +294,8 @@ def load_alignment_yaml(
                 'picks',
                 'histology',
                 'output',
+                'features',
+                'transforms',
             ]:
                 path_value = get_path(dataset_name)
                 default_value = get_default_path(dataset_name)
@@ -263,13 +304,27 @@ def load_alignment_yaml(
                 )
                 setattr(resolved_paths, dataset_name, resolved_path)
 
+            # The xyz picks are read from the picks path, falling back to the spike sorting
+            # folder, and the results are written to the output, falling back to either of them.
+            # With neither there is nowhere to read the trajectory from or write the results to.
+            if resolved_paths.spike_sorting is None and resolved_paths.picks is None:
+                raise ValueError(
+                    f'No spike_sorting or picks path given for probe {pname} in configuration '
+                    f'{cname}; at least one of the two is needed'
+                )
+
+            # The raw ephys is filled in first so that the processed ephys can fall back to
+            # it, rather than the other way round which discarded an explicit processed_ephys
+            if resolved_paths.raw_ephys is None:
+                resolved_paths.raw_ephys = resolved_paths.spike_sorting
+
             if resolved_paths.processed_ephys is None:
                 resolved_paths.processed_ephys = resolved_paths.raw_ephys
 
+            # If no output is given the alignment results are written alongside the spike sorting,
+            # falling back to the picks for sessions that have no spike sorting path
             if resolved_paths.output is None:
-                resolved_paths.output = resolved_paths.spike_sorting
-
-            # resolved_paths.output.mkdir(parents=True, exist_ok=True)
+                resolved_paths.output = resolved_paths.spike_sorting or resolved_paths.picks
 
             data_paths[cname][pname] = resolved_paths
 
@@ -277,4 +332,19 @@ def load_alignment_yaml(
         'More than two configurations found in YAML, alignment GUI supports up to two.'
     )
 
-    return configs, list(set(probes)), data_paths
+    # The probes are returned as the union across configurations, and every configuration is
+    # then indexed with that union when the shanks are built, so a probe that is missing from
+    # one of them has to be caught here rather than failing with a KeyError later
+    probes_per_config = {cname: set(data_paths.get(cname, {})) for cname in configs}
+    if len({frozenset(names) for names in probes_per_config.values()}) > 1:
+        detail = '; '.join(
+            f'{cname}: {sorted(names)}' for cname, names in probes_per_config.items()
+        )
+        raise ValueError(
+            f'Every configuration must contain the same probes, found {detail}'
+        )
+
+    # dict.fromkeys rather than a set, so that duplicates across configurations are dropped
+    # while the order the probes are given in the yaml is kept. The order reaches the shank tabs
+    # of the GUI, so it has to be the same on every run.
+    return configs, list(dict.fromkeys(probes)), data_paths, histology_space

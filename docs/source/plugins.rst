@@ -3,7 +3,9 @@ Plugins
 
 The IBL Alignment GUI supports a plugin architecture that allows users to extend the GUI with additional functionality. Plugins can be used to add new visualizations, interactive tools, or auxiliary views that integrate with the main GUI.
 
-This section describes the currently available plugins and how to use them.
+This section describes the currently available plugins and how to use them. The Channel
+Prediction plugin, which predicts the brain region of each channel from its electrophysiology
+features, has its own page: see :doc:`channel_prediction`.
 
 Cluster Plugin
 --------------
@@ -33,10 +35,10 @@ A new window will open showing:
 
    * - Shortcut
      - Action
-   * - :kbd:`Ctrl+M`
-     - Minimize the plugin window
-   * - :kbd:`Ctrl+X`
-     - Close the plugin window
+   * - :kbd:`M`
+     - Minimise / show the plugin windows
+   * - :kbd:`Alt+X`
+     - Close the plugin windows
 
 
 Range Controller
@@ -68,6 +70,8 @@ When working with multi-shank or dual-configuration data, a radio button selecto
      - Method
    * - Adjust range
      - Drag the min/max sliders for the desired plot type
+   * - Set an exact range
+     - Type the value into the box beside the corresponding slider
    * - Reset single plot range
      - Click **Reset** button next to the corresponding slider
    * - Reset all plot ranges
@@ -103,17 +107,20 @@ If a cluster plot is selected in the image plot, the corresponding cluster locat
      - Function
    * - Cluster marker size slider
      - Adjust size of cluster markers
-   * - **3D Regions** checkbox
+   * - **Show regions** checkbox
      - Show / hide anatomical brain regions
-   * - **Picks** checkbox
+   * - **Show picks** checkbox
      - Show / hide probe trajectory picks
 
 Adding Additional Plots
 -----------------------
 
-Custom plots can be added to the GUI via the plugin system.
+Custom plots can be added to the GUI via the plugin system, without modifying the GUI itself.
 
-To add new plots, implement the plot in the `additional_plots` module located in the `plugins` directory.
+``ibl_alignment_gui/plugins/allen/additional_plots_allen.py`` is a worked example. It shows how a
+plugin adds its own plots by attaching new plot methods to the plot loader, so that they appear in
+the menu bars alongside the built-in plots. ``ibl_alignment_gui/plugins/allen/custom_filters.py``
+does the same for the unit filters, adding new entries to the ``Filter Plots`` menu.
 
 .. note::
    Detailed developer documentation for writing custom plugins and additional plots will be provided in a future release.

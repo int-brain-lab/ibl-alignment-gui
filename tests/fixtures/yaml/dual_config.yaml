@@ -1,0 +1,32 @@
+defaults:
+  histology:
+    path: /path/to/histology
+
+configurations:
+  dense:
+    path: /path/to/dense_session
+    probes:
+      probe_00:
+        datasets:
+          spike_sorting:
+            path: alf/probe00/kilosort
+          raw_ephys:
+            path: raw_ephys_data/probe00
+          picks:
+            path: alf/probe00/kilosort
+          output:
+            path: alignment_outputs
+
+  sparse:
+    path: /path/to/sparse_session
+    probes:
+      probe_00:
+        datasets:
+          spike_sorting:
+            path: alf/probe00/kilosort
+          raw_ephys:
+            path: raw_ephys_data/probe00
+          picks:
+            path: alf/probe00/kilosort
+          output:
+            path: alignment_outputs

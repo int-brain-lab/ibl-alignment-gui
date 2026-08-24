@@ -9,7 +9,7 @@ import pyqtgraph as pg
 from pyqtgraph.functions import makeARGB
 from qtpy import QtCore, QtGui, QtWidgets
 
-from ibl_alignment_gui.utils.qt.qrange_slider import QRangeSlider
+from ibl_alignment_gui.app.widgets.qrange_slider import QRangeSlider
 from iblutil.util import Bunch
 
 
@@ -351,7 +351,7 @@ class ColorBar(pg.GraphicsWidget):
         grad : QtGui.QLinearGradient
             Gradient object for rendering the bar.
         """
-        mpl_cmap = mpl.cm.get_cmap(cmap_name)
+        mpl_cmap = mpl.colormaps[cmap_name]
         if isinstance(mpl_cmap, mpl.colors.LinearSegmentedColormap):
             cbins = np.linspace(0.0, 1.0, cbin)
             colors = (mpl_cmap(cbins)[np.newaxis, :, :3][0]).tolist()
@@ -753,8 +753,6 @@ class ButtonWidget(QtWidgets.QWidget):
         """Create the buttons and labels."""
         # Button to apply interpolation
         self.buttons['fit'] = QtWidgets.QPushButton('Fit')
-        # Button to apply offset
-        self.buttons['offset'] = QtWidgets.QPushButton('Offset')
         # String to display current move index
         self.labels['current'] = QtWidgets.QLabel()
         # String to display total number of moves
@@ -763,6 +761,11 @@ class ButtonWidget(QtWidgets.QWidget):
         self.buttons['reset'] = QtWidgets.QPushButton('Reset')
         # Button to upload final state to Alyx/ to local file
         self.buttons['upload'] = QtWidgets.QPushButton('Upload')
+        # Button to save the current alignment to file so it can be recovered after a crash
+        self.buttons['save'] = QtWidgets.QPushButton('Save Progress')
+        self.buttons['save'].setToolTip(
+            'Save the current alignment to file so that it can be recovered if the GUI crashes'
+        )
         # Button to go to next move
         self.buttons['next'] = QtWidgets.QPushButton('Next')
         # Button to go to previous move
@@ -773,7 +776,7 @@ class ButtonWidget(QtWidgets.QWidget):
         # Layout rows
         hlayout1 = QtWidgets.QHBoxLayout()
         hlayout1.addWidget(self.buttons['fit'], stretch=1)
-        hlayout1.addWidget(self.buttons['offset'], stretch=1)
+        hlayout1.addWidget(self.buttons['save'], stretch=1)
         hlayout1.addWidget(QtWidgets.QLabel(), stretch=2)
         hlayout2 = QtWidgets.QHBoxLayout()
         hlayout2.addWidget(self.buttons['previous'], stretch=1)
@@ -831,12 +834,14 @@ class SelectionWidget(QtWidgets.QWidget):
         self,
         offline: bool = False,
         config: bool = False,
+        allen: bool = False,
         parent: QtWidgets.QMainWindow | None = None,
     ):
         super().__init__(parent)
 
         self.offline: bool = offline
         self.config: bool = config
+        self.allen: bool = allen
         self.dropdowns: dict[str, Bunch] = defaultdict(Bunch)
         self.buttons: dict[str, Bunch] = defaultdict(Bunch)
         self.button_style: dict = {
@@ -902,6 +907,11 @@ class SelectionWidget(QtWidgets.QWidget):
         self.buttons['data']['button'].setFixedWidth(70)
         self.buttons['data']['button'].setStyleSheet(self.button_style['deactivated'])
 
+        # Checkbox to toggle the DocDB alignment backend (Allen/Code Ocean workflow only)
+        if self.allen:
+            self.docdb_checkbox = QtWidgets.QCheckBox('DocDB')
+            self.docdb_checkbox.setChecked(True)
+
     def layout_widgets(self) -> None:
         """Layout the dropdowns and buttons."""
         layout = QtWidgets.QHBoxLayout()
@@ -920,6 +930,8 @@ class SelectionWidget(QtWidgets.QWidget):
             layout.addWidget(self.buttons['folder']['button'])
             layout.addWidget(self.dropdowns['shank']['combobox'])
             layout.addWidget(self.dropdowns['align']['combobox'])
+            if self.allen:
+                layout.addWidget(self.docdb_checkbox)
             layout.addWidget(self.buttons['data']['button'])
             if self.config:
                 layout.addWidget(self.dropdowns['config']['combobox'])
@@ -1153,6 +1165,10 @@ class LutWidget(pg.GraphicsLayoutWidget):
             self.lut_layout.removeItem(self.slice_lut)
             self.lut_status = False
 
+    def reset_lut_levels(self) -> None:
+        """Clear stored LUT levels so the next set_lut call computes fresh levels."""
+        self.lut_levels = None
+
     def set_lut_levels(self, levels: list | tuple | None = None) -> None:
         """
         Apply the specified intensity levels to all linked images and update the LUT.
@@ -1213,7 +1229,7 @@ class MenuWidget(QtWidgets.QMenuBar):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'feature', 'slice', 'filter']:
+        for group in ['image', 'line', 'probe', 'feature', 'slice', 'region', 'filter']:
             self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)
@@ -1968,9 +1984,51 @@ class DualConfigFeatureWidget(ConfigWidget):
         return ephys_layout, hist_layout
 
 
+class FloatLineEdit(QtWidgets.QLineEdit):
+    """
+    A line edit for entering float values.
+
+    Typing is restricted to numbers, in either decimal or scientific notation, and the
+    `committed` signal is emitted whenever the user has finished editing, either by pressing
+    enter or by clicking away from the field.
+
+    Parameters
+    ----------
+    parent : QtWidgets.QWidget, optional
+        The parent widget.
+
+    Signals
+    -------
+    committed : QtCore.Signal()
+        Emitted when the user has finished editing the value.
+    """
+
+    committed = QtCore.Signal()
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None):
+        super().__init__(parent)
+
+        validator = QtGui.QDoubleValidator(self)
+        validator.setNotation(QtGui.QDoubleValidator.ScientificNotation)
+        validator.setLocale(QtCore.QLocale.c())
+        self.setValidator(validator)
+        self.setLocale(QtCore.QLocale.c())
+
+        self.returnPressed.connect(self.committed)
+
+    def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
+        """Emit the committed signal when the field loses focus."""
+        super().focusOutEvent(event)
+        self.committed.emit()
+
+
 class SliderWidget(QtWidgets.QGroupBox):
     """
     A custom widget that contains a range slider with labels and a reset button.
+
+    The min and max values define the extremes of the slider and are always shown as read only
+    labels. The low and high values are the currently chosen values within these extremes and
+    are shown in text fields that can be typed into if `editable` is True.
 
     Parameters
     ----------
@@ -1978,6 +2036,8 @@ class SliderWidget(QtWidgets.QGroupBox):
         The number of discrete steps for the slider.
     slider_type : str, optional
         An optional identifier for the slider type.
+    editable : bool, default=False
+        If True, the low and high values are shown in editable text fields.
     parent : QtWidgets.QMainWindow, optional
         The parent window.
 
@@ -1987,12 +2047,20 @@ class SliderWidget(QtWidgets.QGroupBox):
         The range slider widget.
     slider_labels : Bunch
         A Bunch containing QLabel widgets for min, max, low, and high labels.
+    slider_edits : Bunch
+        A Bunch containing FloatLineEdit widgets for the low and high values. Empty unless
+        `editable` is True.
     slider_type : str or None
         An optional identifier for the slider type.
     intervals : np.ndarray or None
         The array of values corresponding to slider positions.
     max_levels : list or None
         The maximum levels for the slider.
+    values : np.ndarray or None
+        The current low and high values. These are the values chosen by the user, so are not
+        restricted to the discrete slider positions.
+    editable : bool
+        Whether the low and high values are shown in editable text fields.
     reset_button : QtWidgets.QPushButton
         The button to reset the levels.
 
@@ -2002,15 +2070,22 @@ class SliderWidget(QtWidgets.QGroupBox):
         Emitted when the slider is released. Returns the slider widget and its type.
     reset : QtCore.Signal(QtWidgets.QWidget, str)
         Emitted when the reset button is pressed. Returns the slider widget and its type.
+    levels_changed : QtCore.Signal(QtWidgets.QWidget, str)
+        Emitted when the low or high value is typed in. Returns the slider widget and its type.
     """
 
     released = QtCore.Signal(QtWidgets.QWidget, str)
     reset = QtCore.Signal(QtWidgets.QWidget, str)
+    levels_changed = QtCore.Signal(QtWidgets.QWidget, str)
+
+    # The prefix displayed in front of each of the values
+    FIELDS = {'min': 'Min', 'max': 'Max', 'low': 'Low Val', 'high': 'High Val'}
 
     def __init__(
         self,
         steps: int = 100,
         slider_type: str | None = None,
+        editable: bool = False,
         parent: QtWidgets.QMainWindow | None = None,
     ):
         super().__init__(parent)
@@ -2018,42 +2093,112 @@ class SliderWidget(QtWidgets.QGroupBox):
         self.slider_type: str | None = slider_type
         self.intervals: np.ndarray | None = None
         self.max_levels: list | None = None
+        self.values: np.ndarray | None = None
         self.steps: int = steps
+        self.editable: bool = editable
+        # Flag to stop the edit callbacks being triggered while the fields are being updated
+        self.updating: bool = False
 
         self.create_widgets()
         self.layout_widgets()
 
     def create_widgets(self) -> None:
-        """Create the slider, labels and buttons."""
+        """Create the slider, labels, text fields and buttons."""
         self.slider = QRangeSlider(QtCore.Qt.Horizontal)
         self.slider.sliderReleased.connect(self.slider_released)
         self.slider_labels = Bunch()
+        self.slider_edits = Bunch()
         self.slider_labels['min'] = QtWidgets.QLabel('Min')
         self.slider_labels['max'] = QtWidgets.QLabel('Max')
-        self.slider_labels['low'] = QtWidgets.QLabel('Low')
-        self.slider_labels['high'] = QtWidgets.QLabel('High')
+        if self.editable:
+            for key in ['low', 'high']:
+                self.slider_labels[key] = QtWidgets.QLabel(f'{self.FIELDS[key]}:')
+                self.slider_edits[key] = self.create_line_edit()
+        else:
+            self.slider_labels['low'] = QtWidgets.QLabel('Low')
+            self.slider_labels['high'] = QtWidgets.QLabel('High')
         self.reset_button = QtWidgets.QPushButton('Reset')
         self.reset_button.clicked.connect(self.reset_pressed)
 
+    def create_line_edit(self) -> FloatLineEdit:
+        """
+        Create a text field for typing in one of the levels.
+
+        Returns
+        -------
+        FloatLineEdit
+            The text field for the level.
+        """
+        edit = FloatLineEdit()
+        edit.setMaximumWidth(100)
+        edit.committed.connect(self.levels_edited)
+
+        return edit
+
+    def create_field_widget(self, key: str) -> QtWidgets.QWidget:
+        """
+        Group the label and text field for one of the values into a single widget.
+
+        Parameters
+        ----------
+        key: str
+            The level to group the widgets for ('low' or 'high').
+
+        Returns
+        -------
+        QtWidgets.QWidget
+            A widget containing the label and text field.
+        """
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.slider_labels[key])
+        layout.addWidget(self.slider_edits[key])
+        widget.setLayout(layout)
+
+        return widget
+
     def layout_widgets(self) -> None:
-        """Layout the slider, labels and buttons."""
+        """Layout the slider, labels, text fields and buttons."""
         layout = QtWidgets.QGridLayout()
         layout.addWidget(self.reset_button, 1, 0)
+        layout.addWidget(self.slider, 1, 5, 1, 5)
         layout.addWidget(self.slider_labels['min'], 0, 5, 1, 1)
         layout.addWidget(self.slider_labels['max'], 0, 10, 1, 1)
-        layout.addWidget(self.slider, 1, 5, 1, 5)
-        layout.addWidget(self.slider_labels['low'], 2, 5, 1, 1)
-        layout.addWidget(self.slider_labels['high'], 2, 10, 1, 1)
+        if self.editable:
+            layout.addWidget(self.create_field_widget('low'), 2, 5, 1, 1)
+            layout.addWidget(self.create_field_widget('high'), 2, 10, 1, 1)
+        else:
+            layout.addWidget(self.slider_labels['low'], 2, 5, 1, 1)
+            layout.addWidget(self.slider_labels['high'], 2, 10, 1, 1)
 
         self.setLayout(layout)
 
     def slider_released(self) -> None:
-        """Emit signal when slider is released."""
+        """Update the values from the slider positions and emit signal when slider is released."""
+        if self.intervals is not None:
+            self.set_slider_values(
+                [self.intervals[self.slider.low()], self.intervals[self.slider.high()]]
+            )
         self.released.emit(self, self.slider_type)
 
     def reset_pressed(self):
         """Emit signal when reset button is pressed."""
         self.reset.emit(self, self.slider_type)
+
+    def set_enabled(self, enabled: bool) -> None:
+        """
+        Enable or disable the slider, the reset button and the text fields.
+
+        Parameters
+        ----------
+        enabled: bool
+            Whether the widgets should be enabled or disabled.
+        """
+        self.slider.setEnabled(enabled)
+        self.reset_button.setEnabled(enabled)
+        for edit in self.slider_edits.values():
+            edit.setEnabled(enabled)
 
     @staticmethod
     def format_label(val: float) -> str:
@@ -2075,6 +2220,113 @@ class SliderWidget(QtWidgets.QGroupBox):
         else:
             return str(np.round(val, 2))
 
+    @staticmethod
+    def format_value(val: float) -> str:
+        """
+        Format a float value for display in an editable text field.
+
+        Enough significant figures are kept that the displayed value can be read back in
+        without changing the value.
+
+        Parameters
+        ----------
+        val: float
+            The value to format
+
+        Returns
+        -------
+        str:
+            The formatted value as a string.
+        """
+        return f'{val:.4g}'
+
+    def set_field(self, key: str, val: float) -> None:
+        """
+        Display a value in the label or text field it belongs to.
+
+        Parameters
+        ----------
+        key: str
+            The value to display ('min', 'max', 'low' or 'high').
+        val: float
+            The value to display.
+        """
+        if key in self.slider_edits:
+            self.slider_edits[key].setText(self.format_value(val))
+        else:
+            self.slider_labels[key].setText(f'{self.FIELDS[key]}: {self.format_label(val)}')
+
+    def parse_levels(self) -> np.ndarray | None:
+        """
+        Read the levels that have been typed into the text fields.
+
+        The values are sorted, so that they can be typed in in either order.
+
+        Returns
+        -------
+        np.ndarray or None
+            The sorted low and high values, or None if they don't define a valid range.
+        """
+        values = []
+        for key in ['low', 'high']:
+            try:
+                values.append(float(self.slider_edits[key].text()))
+            except ValueError:
+                return None
+
+        values = np.sort(np.array(values, dtype=float))
+        if not np.all(np.isfinite(values)) or values[0] == values[1]:
+            return None
+
+        return values
+
+    def levels_unchanged(self) -> bool:
+        """Return True if the text fields still show the levels last displayed in them."""
+        return all(
+            self.slider_edits[key].text() == self.format_value(val)
+            for key, val in zip(['low', 'high'], self.values, strict=True)
+        )
+
+    def refresh_fields(self) -> None:
+        """Restore the text fields to the levels currently held by the slider."""
+        if self.values is None:
+            return
+
+        self.updating = True
+        self.set_field('low', self.values[0])
+        self.set_field('high', self.values[1])
+        self.updating = False
+
+    def levels_edited(self) -> None:
+        """
+        Triggered when the low or high value has been typed in.
+
+        The extremes of the slider are expanded if either of the typed values lies outside of
+        them. If the typed values don't define a valid range, the text fields are restored to
+        the current values.
+        """
+        if self.updating or self.intervals is None or self.values is None:
+            return
+
+        # The fields lose focus whenever the user clicks away, so only do something if they
+        # have actually typed a new value in
+        if self.levels_unchanged():
+            return
+
+        levels = self.parse_levels()
+        if levels is None:
+            self.refresh_fields()
+            return
+
+        self.updating = True
+        self.set_slider_intervals(
+            [min(levels[0], self.max_levels[0]), max(levels[1], self.max_levels[1])]
+        )
+        self.set_slider_values(levels)
+        self.updating = False
+
+        self.levels_changed.emit(self, self.slider_type)
+
     def get_slider_values(self) -> tuple[float, float]:
         """
         Get the current slider values.
@@ -2084,9 +2336,7 @@ class SliderWidget(QtWidgets.QGroupBox):
         tuple of float:
             The low and high values of the slider.
         """
-        low_val = self.intervals[self.slider.low()]
-        high_val = self.intervals[self.slider.high()]
-        return low_val, high_val
+        return self.values[0], self.values[1]
 
     def set_slider_intervals(self, min_max: list | tuple | np.ndarray) -> None:
         """
@@ -2100,24 +2350,28 @@ class SliderWidget(QtWidgets.QGroupBox):
         self.max_levels = min_max
         self.intervals = np.linspace(min_max[0], min_max[1], self.steps)
         self.slider.setMinimum(0)
-        self.slider_labels['min'].setText(f'Min: {self.format_label(min_max[0])}')
+        self.set_field('min', min_max[0])
         self.slider.setMaximum(self.steps - 1)
-        self.slider_labels['max'].setText(f'Max: {self.format_label(min_max[1])}')
+        self.set_field('max', min_max[1])
 
     def set_slider_values(self, low_high: list | tuple | np.ndarray) -> None:
         """
         Set the slider values and update the labels.
+
+        The values are stored as given, while the slider positions are snapped to the closest
+        of the discrete slider steps.
 
         Parameters
         ----------
         low_high: list or np.ndarray
             The low and high values for the slider
         """
-        idx_lowhigh = np.searchsorted(self.intervals, low_high)
+        self.values = np.array(low_high, dtype=float)
+        idx_lowhigh = np.clip(np.searchsorted(self.intervals, low_high), 0, self.steps - 1)
         self.slider.setLow(idx_lowhigh[0])
         self.slider.setHigh(idx_lowhigh[1])
-        self.slider_labels['low'].setText(f'Low Val: {self.format_label(low_high[0])}')
-        self.slider_labels['high'].setText(f'High Val: {self.format_label(low_high[1])}')
+        self.set_field('low', low_high[0])
+        self.set_field('high', low_high[1])
 
 
 class CheckBoxGroup(QtWidgets.QGroupBox):

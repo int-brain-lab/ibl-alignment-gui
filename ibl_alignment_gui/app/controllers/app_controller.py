@@ -1,3 +1,5 @@
+import gc
+import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -5,21 +7,28 @@ from collections.abc import Callable
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
 import pyqtgraph as pg
+from qtpy import QtCore, QtWidgets
 
-from ibl_alignment_gui.app.app_view import AlignmentGUIView
-from ibl_alignment_gui.app.shank_controller import ShankController
+from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+from ibl_alignment_gui.app.load_worker import Worker
+from ibl_alignment_gui.app.views.app_view import AlignmentGUIView
+from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.probe_handler import (
+    ProbeHandlerAllenYaml,
     ProbeHandlerCSV,
     ProbeHandlerLocal,
     ProbeHandlerLocalYaml,
     ProbeHandlerONE,
 )
+from ibl_alignment_gui.loaders import plot_loader
 from ibl_alignment_gui.plugins.add_plugins import Plugins
+from ibl_alignment_gui.plugins.qc_dialog import apply_to_shanks as apply_qc_to_shanks
 from ibl_alignment_gui.plugins.qc_dialog import display as display_qc_dialog
 from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_dialog
-from ibl_alignment_gui.utils.qt.custom_widgets import ColorBar
-from ibl_alignment_gui.utils.utils import shank_loop
+from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
+
+logger = logging.getLogger(__name__)
 
 
 class AlignmentGUIController:
@@ -32,6 +41,9 @@ class AlignmentGUIController:
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
     csv: Path or str or None
         Path to a CSV file containing local sessions on the filesystem.
+    allen: bool
+        Whether to run the Allen/Code Ocean (anatomical) workflow. Uses a yaml session with a
+        ProbeHandlerAllenYaml model and adds a DocDB checkbox to toggle the DocDB backend.
 
     Attributes
     ----------
@@ -78,23 +90,24 @@ class AlignmentGUIController:
         A mapping of plugin names to plugin instances.
     """
 
-    def __init__(self, offline: bool = False, csv: str | None = None, yaml: str | None = None):
+    def __init__(
+        self,
+        offline: bool = False,
+        csv: str | None = None,
+        yaml: str | None = None,
+        pid: str | None = None,
+        allen: bool = False,
+    ):
         self.offline = offline
         self.csv: str | None = csv
         self.yaml: str | None = yaml
+        self.pid: str | None = pid
+        self.allen = allen
 
-        if offline:
-            if self.yaml is None:
-                self.model = ProbeHandlerLocal()
-            else:
-                self.model = ProbeHandlerLocalYaml(self.yaml)
-        elif self.csv is None:
-            self.model = ProbeHandlerONE()
-        else:
-            self.model = ProbeHandlerCSV(self.csv)
+        self.model = self._build_model()
 
         self.view: AlignmentGUIView = AlignmentGUIView(
-            offline=self.offline, config=len(self.model.configs) > 1
+            offline=self.offline, config=len(self.model.configs) > 1, allen=self.allen
         )
 
         if not offline:
@@ -129,6 +142,7 @@ class AlignmentGUIController:
         self.feature_init: str | None = None
         self.slice_init: str | None = None
         self.filter_init: str | None = None
+        self.region_init: str | None = None
 
         # The ephys view mode
         self.show_feature = False
@@ -139,15 +153,49 @@ class AlignmentGUIController:
         # Plugin management
         self.blockPlugins: bool = False
 
+        # Background loading thread state
+        self._load_thread: QtCore.QThread | None = None
+        self._load_worker: Worker | None = None
+        self._load_dialog: QtWidgets.QProgressDialog | None = None
+        self._load_start: float = 0.0
+
         # Setup all callbacks
         self.setup_connections()
 
         # Setup plugins
         Plugins(self)
 
+        # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
-            self.on_folder_selected(self.yaml)
-            self.data_button_pressed()
+            self._load_current_session()
+        # With a pid the online session is fully specified up front, so load it immediately.
+        elif self.pid is not None:
+            self.load_pid(self.pid)
+
+    def _build_model(
+        self,
+    ) -> ProbeHandlerLocal | ProbeHandlerLocalYaml | ProbeHandlerONE | ProbeHandlerCSV:
+        """
+        Build the data model (ProbeHandler) for the selected mode.
+
+        Returns
+        -------
+        ProbeHandler
+            ``ProbeHandlerAllenYaml`` (offline Allen workflow), ``ProbeHandlerLocalYaml`` /
+            ``ProbeHandlerLocal`` (offline), ``ProbeHandlerCSV`` (online with a csv) or
+            ``ProbeHandlerONE`` (online).
+        """
+        if self.offline:
+            if self.allen:
+                # Allen workflow is yaml-only. Until a yaml is chosen from the source button a
+                # lightweight local handler is used purely as a placeholder for the empty GUI.
+                return ProbeHandlerAllenYaml(self.yaml) if self.yaml else ProbeHandlerLocal()
+            if self.yaml is None:
+                return ProbeHandlerLocal()
+            return ProbeHandlerLocalYaml(self.yaml)
+        if self.csv is None:
+            return ProbeHandlerONE()
+        return ProbeHandlerCSV(self.csv)
 
     def setup_connections(self):
         """Set up all the connections between the view and controller methods."""
@@ -155,19 +203,34 @@ class AlignmentGUIController:
         if not self.offline:
             self.view.connect_selection_dropdown('subject', self.on_subject_selected)
             self.view.connect_selection_dropdown('session', self.on_session_selected)
-        elif self.yaml is None:
-            self.view.connect_selection_button('folder', self.on_folder_selected)
+        elif self.allen:
+            # The Allen workflow is yaml-only: the source button just opens a session yaml.
+            self.view.connect_selection_button('folder', self.on_open_session_yaml)
+        else:
+            # Offline the source button offers both a data folder and a session yaml; each handler
+            # swaps in the matching ProbeHandler, so the sources are interchangeable at runtime.
+            self.view.connect_selection_menu(
+                'folder',
+                {
+                    'Open data folder…': self.on_folder_selected,
+                    'Open session YAML…': self.on_open_session_yaml,
+                },
+            )
 
         self.view.connect_selection_dropdown('shank', self.on_shank_selected)
         self.view.connect_selection_dropdown('align', self.on_alignment_selected)
         self.view.connect_selection_dropdown('config', self.on_config_selected)
         self.view.connect_selection_button('data', self.data_button_pressed)
 
+        # In the Allen workflow the DocDB checkbox toggles the alignment backend at runtime.
+        if self.allen:
+            self.view.connect_docdb_checkbox(self.on_use_docdb_changed)
+
         # Setup connections for alignment buttons
         self.view.connect_button('fit', self.fit_button_pressed)
-        self.view.connect_button('offset', self.offset_button_pressed)
         self.view.connect_button('reset', self.reset_button_pressed)
         self.view.connect_button('upload', self.complete_button_pressed)
+        self.view.connect_button('save', self.save_progress_button_pressed)
         self.view.connect_button('next', self.next_button_pressed)
         self.view.connect_button('previous', self.prev_button_pressed)
 
@@ -184,10 +247,6 @@ class AlignmentGUIController:
         fit_options = {
             # Shortcuts to apply fit
             'Fit': {'shortcut': 'Return', 'callback': self.fit_button_pressed},
-            # Shortcuts to apply offset
-            'Offset': {'shortcut': 'O', 'callback': self.offset_button_pressed},
-            'Offset + 100um': {'shortcut': 'Shift+Up', 'callback': self.moveup_button_pressed},
-            'Offset - 100um': {'shortcut': 'Shift+Down', 'callback': self.movedown_button_pressed},
             # Shortcut to remove a reference line
             'Remove Line': {'shortcut': 'Shift+D', 'callback': self.delete_reference_line},
             # Shortcut to move between previous/next moves
@@ -197,6 +256,11 @@ class AlignmentGUIController:
             'Reset': {'shortcut': 'Shift+R', 'callback': self.reset_button_pressed},
             # Shortcut to upload final state to Alyx/to local file
             'Upload': {'shortcut': 'Shift+U', 'callback': self.complete_button_pressed},
+            # Shortcut to save the current alignment to file
+            'Save Progress': {
+                'shortcut': 'Shift+S',
+                'callback': self.save_progress_button_pressed,
+            },
         }
         display_options = {
             # Shortcuts to toggle between plots options
@@ -216,6 +280,10 @@ class AlignmentGUIController:
                 'shortcut': 'Alt+4',
                 'callback': lambda: self.toggle_plots('slice', 1),
             },
+            'Toggle Region Plots ->': {
+                'shortcut': 'Alt+5',
+                'callback': lambda: self.toggle_plots('region', 1),
+            },
             'Toggle Image Plots <-': {
                 'shortcut': 'Shift+Alt+1',
                 'callback': lambda: self.toggle_plots('image', -1),
@@ -231,6 +299,10 @@ class AlignmentGUIController:
             'Toggle Slice Plots <-': {
                 'shortcut': 'Shift+Alt+4',
                 'callback': lambda: self.toggle_plots('slice', -1),
+            },
+            'Toggle Region Plots <-': {
+                'shortcut': 'Shift+Alt+5',
+                'callback': lambda: self.toggle_plots('region', -1),
             },
             # Shortcut to reset axis on figures
             'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
@@ -252,17 +324,6 @@ class AlignmentGUIController:
         self.view.add_shortcuts_to_menu('fit', fit_options)
         self.view.add_shortcuts_to_menu('display', display_options)
 
-    def load_data(self) -> None:
-        """Load data for the selected session."""
-        self.model.load_data()
-        self.loaded = True
-        self.create_shanks()
-        self.execute_plugins('load_data', self)
-
-    def load_plots(self) -> None:
-        """Load available plots for the selected session."""
-        self.model.load_plots()
-
     def populate_menubar(self):
         """Populate menu bar tabs based on avaialble plots."""
         self.img_init = self.view.populate_menu_tab(
@@ -283,9 +344,15 @@ class AlignmentGUIController:
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys
         )
-        filter_keys = ['All', 'KS good', 'KS mua', 'IBL good']
+        filter_keys = ['All', 'KS good', 'KS mua', 'IBL good'] + list(
+            plot_loader.CUSTOM_FILTERS.keys()
+        )
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
+        )
+        region_keys = ['Allen', 'Beryl', 'Cosmos']
+        self.region_init = self.view.populate_menu_tab(
+            'region', self.plot_region_ref_panels, region_keys
         )
 
     # --------------------------------------------------------------------------------------------
@@ -381,6 +448,14 @@ class AlignmentGUIController:
         """Plot histology reference panel per shank and config."""
         items.plot_histology_ref()
 
+    def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
+        """Handle Region Plots menu selection — delegates non-Original keys to the plugin."""
+        self.region_init = plot_key
+        if plot_key == 'Allen':
+            self.plot_histology_ref_panels()
+            return
+        self.plugins['Channel Prediction']['loader'].plot_regions(plot_key, data_only=data_only)
+
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """
         Plot scale factor panel for list of shanks.
@@ -459,7 +534,7 @@ class AlignmentGUIController:
             if not self.show_channels:
                 self.toggle_channels()
             # If plot key changes reset the lut levels
-            self.view.set_levels(None)
+            self.view.reset_levels()
 
         self.slice_figs = Bunch()
         if self.model.selected_config == 'both':
@@ -488,7 +563,7 @@ class AlignmentGUIController:
         """Plot channels on slice plots."""
         self.show_channels = True
         c = 'g' if items.config == self.model.default_config else 'r'
-        items.plot_channels(self.slice_figs[kwargs.get('shank')], colour=c)
+        items.plot_channels(self.slice_figs[kwargs.get('shank')], self.probe_init, c)
 
     def plot_line_panels(self, plot_key: str, data_only: bool = True, **kwargs) -> None:
         """
@@ -708,6 +783,10 @@ class AlignmentGUIController:
             data_only=data_only,
             **kwargs,
         )
+        if self.model.selected_config == 'both':
+            self.plot_channel_panels()
+        else:
+            self.plot_channel_panels(configs=[self.model.selected_config])
 
     def plot_dual_colorbar(self, results: Bunch, fig: str) -> None:
         """
@@ -837,8 +916,12 @@ class AlignmentGUIController:
         self.view.clear_selection_dropdown('align')
         self.model.set_info(idx)
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load the initial alignment
-        self.model.get_starting_alignment(0)
+        # Load any recovered alignment if available, then the stored (resolved) alignment,
+        # otherwise the most recent
+        start_alignment_idx = self.model.get_start_alignment_idx()
+        self.model.get_starting_alignment(start_alignment_idx)
+        # Highlight the alignment that has been loaded as the selected option in the dropdown
+        self.view.set_selection_dropdown('align', start_alignment_idx)
         if self.loaded is not None:
             # If in tab view, update the tab to display the selected shank
             self.view.set_tabs(idx)
@@ -879,6 +962,28 @@ class AlignmentGUIController:
             # Update the plots
             self.update_plots(shanks=[self.model.selected_shank])
 
+    def on_use_docdb_changed(self, _state: int | None = None) -> None:
+        """
+        Toggle the DocDB alignment backend and refresh the alignment dropdown.
+
+        Triggered when the DocDB checkbox is ticked/unticked (Allen workflow only). Switches the
+        backend on the model, then (once data is loaded) reloads the previous alignments for the
+        selected shank so the alignment dropdown and reference lines reflect the new source.
+
+        Parameters
+        ----------
+        _state : int or None
+            The checkbox state emitted by the ``stateChanged`` signal. Unused; the checkbox is
+            queried directly via the view.
+        """
+        # No model backend is active until a yaml session is opened, so ignore early toggles.
+        if not hasattr(self.model, 'set_use_docdb'):
+            return
+        self.model.set_use_docdb(self.view.is_docdb_checked())
+        if self.loaded:
+            self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
+            self.on_alignment_selected(0)
+
     def on_config_selected(self, idx: int, init: bool = False) -> None:
         """
         Triggered when a config is selected from the config dropdown list.
@@ -898,17 +1003,99 @@ class AlignmentGUIController:
             self.view.focus()
 
     def on_folder_selected(self, folder_path: str | None = None) -> None:
-        """Triggered in offline mode when the folder button is clicked."""
-        self.loaded = None
-        self.view.clear_selection_dropdown(['align', 'shank'])
+        """Triggered in offline mode when a data folder is chosen from the source button."""
         if folder_path:
             self.view.set_selected_path(folder_path)
         else:
             folder_path = self.view.get_selected_path()
+            if folder_path is None:
+                # Dialog cancelled: leave the current session untouched.
+                return
+        # Coming from a yaml session, rebuild the folder-based model (reusing the brain atlas so it
+        # is not re-downloaded) so get_shanks reads the chosen folder rather than the old yaml.
+        if not isinstance(self.model, ProbeHandlerLocal):
+            self.model = ProbeHandlerLocal(brain_atlas=self.model.brain_atlas)
+            self.yaml = None
+        self.loaded = None
+        self.view.clear_selection_dropdown(['align', 'shank'])
         shank_options = self.model.get_shanks(folder_path)
         self.view.populate_selection_dropdown('shank', shank_options)
         self.on_shank_selected(0)
         self.view.activate_selection_button()
+        # Load immediately, mirroring the yaml session flow.
+        self.data_button_pressed()
+
+    def _load_current_session(self) -> None:
+        """
+        Load the yaml session currently held in ``self.model`` and (re)build the GUI.
+
+        Mirrors :meth:`on_folder_selected` without the file dialog. Safe to call again to switch
+        sessions: ``data_button_pressed`` rebuilds shanks/plots/menubar from scratch (the shank
+        tabs are cleared in ``setup`` and the menu tabs self-clear on repopulate).
+        """
+        # loaded=None so the early on_shank_selected skips add_points_to_display() until
+        # shank_items are (re)built in data_button_pressed.
+        self.loaded = None
+        # Show the yaml path in the source line edit (the offline folder/yaml share the widget).
+        self.view.set_selected_path(self.yaml)
+        self.view.clear_selection_dropdown(['align', 'shank'])
+        shank_options = self.model.get_shanks(self.yaml)
+        self.view.populate_selection_dropdown('shank', shank_options)
+        self.on_shank_selected(0)
+        self.view.activate_selection_button()
+        self.data_button_pressed()
+
+    def load_pid(self, pid: str) -> None:
+        """
+        Configure the dropdowns to a probe insertion and load its data.
+
+        Resolves `pid` to the subject, session and shank dropdown selections, sets each
+        dropdown accordingly and loads the data, reproducing a manual subject -> session ->
+        shank selection followed by pressing the data button. Only valid in online mode.
+
+        Parameters
+        ----------
+        pid : str
+            The probe insertion id (UUID) to load.
+
+        Raises
+        ------
+        ValueError
+            If `pid` cannot be resolved to an insertion in the subject dropdown.
+        """
+        # loaded=None so the early on_shank_selected skips display updates until
+        # shank_items are built in data_button_pressed.
+        self.loaded = None
+        subj_idx, sess_idx, shank_idx = self.model.resolve_pid(pid)
+
+        self.view.set_selection_dropdown('subject', subj_idx)
+        self.view.populate_selection_dropdown('session', self.model.sessions)
+        self.view.set_selection_dropdown('session', sess_idx)
+        self.view.populate_selection_dropdown('shank', list(self.model.shanks.keys()))
+        self.view.set_selection_dropdown('shank', shank_idx)
+
+        self.on_shank_selected(shank_idx)
+        self.view.activate_selection_button()
+        self.data_button_pressed()
+
+    def on_open_session_yaml(self) -> None:
+        """Open a different session yaml (File menu) and reload the whole GUI."""
+        yaml_path = self.view.get_selected_yaml()
+        if yaml_path is None or not yaml_path.is_file():
+            return
+        self.yaml = str(yaml_path)
+        # In Allen mode use the yaml-based Allen handler so the DocDB backend is used, reusing the
+        # existing DocDB client and honouring the current DocDB checkbox state.
+        if self.allen:
+            self.model = ProbeHandlerAllenYaml(
+                self.yaml,
+                docdb=getattr(self.model, 'docdb', None),
+                use_docdb=self.view.is_docdb_checked(),
+            )
+        else:
+            self.model = ProbeHandlerLocalYaml(self.yaml)
+        # The features override is reset for every new session in data_button_pressed.
+        self._load_current_session()
 
     def on_view_changed(self):
         """Triggered when the view is changed between feature and ephys plots."""
@@ -918,24 +1105,143 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Load data
     # --------------------------------------------------------------------------------------------
+    def _run_in_thread(
+        self,
+        func: Callable,
+        *args,
+        on_finished: Callable,
+        busy_message: str,
+        report_progress: bool = False,
+        **kwargs,
+    ) -> bool:
+        """
+        Run a slow callable on a background thread, showing a modal progress dialog.
+
+        The callable runs off the GUI thread so the window stays responsive; ``on_finished`` is
+        then called on the main thread with the callable's return value. Any exception is shown in
+        a message box via :meth:`_on_thread_error`. Only one background task runs at a time.
+
+        Parameters
+        ----------
+        func : Callable
+            The callable to run on the background thread.
+        *args : Any
+            Positional arguments forwarded to ``func``.
+        on_finished : Callable
+            Slot called on the main thread with ``func``'s result when it completes.
+        busy_message : str
+            Initial message shown in the progress dialog.
+        report_progress : bool
+            If True, ``func`` is given a ``progress_callback`` to drive the dialog.
+        **kwargs : Any
+            Keyword arguments forwarded to ``func``.
+
+        Returns
+        -------
+        bool
+            True if the task was started, False if another task is already running.
+        """
+        if self._load_thread is not None:
+            return False
+
+        # Progress dialog (no cancel button; starts indeterminate until totals are known)
+        self._load_dialog = QtWidgets.QProgressDialog(busy_message, None, 0, 0, self.view)
+        self._load_dialog.setWindowTitle('Please wait')
+        self._load_dialog.setWindowModality(QtCore.Qt.WindowModal)
+        self._load_dialog.setMinimumDuration(0)
+        self._load_dialog.setValue(0)
+
+        # Worker running the slow callable on a background thread
+        self._load_thread = QtCore.QThread()
+        self._load_worker = Worker(func, *args, report_progress=report_progress, **kwargs)
+        self._load_worker.moveToThread(self._load_thread)
+        self._load_thread.started.connect(self._load_worker.run)
+        self._load_worker.progress.connect(self._on_thread_progress)
+        self._load_worker.finished.connect(on_finished)
+        self._load_worker.error.connect(self._on_thread_error)
+        # Stop the thread once the worker is done, then dispose of everything
+        self._load_worker.finished.connect(self._load_thread.quit)
+        self._load_worker.error.connect(self._load_thread.quit)
+        self._load_thread.finished.connect(self._cleanup_thread)
+
+        self._load_dialog.show()
+        self._load_thread.start()
+        return True
+
+    def _on_thread_progress(self, message: str, current: int, total: int) -> None:
+        """Update the progress dialog with a message from the background worker."""
+        if self._load_dialog is None:
+            return
+        self._load_dialog.setLabelText(message)
+        if total > 0:
+            self._load_dialog.setMaximum(total)
+            self._load_dialog.setValue(current)
+
+    def _on_thread_error(self, message: str) -> None:
+        """Report a background task failure (main thread)."""
+        QtWidgets.QMessageBox.critical(
+            self.view, 'Error', f'A background task failed:\n\n{message}'
+        )
+
+    def _cleanup_thread(self) -> None:
+        """Close the dialog and dispose of the worker and thread once it has stopped."""
+        if self._load_dialog is not None:
+            self._load_dialog.close()
+        if self._load_worker is not None:
+            self._load_worker.deleteLater()
+        if self._load_thread is not None:
+            self._load_thread.deleteLater()
+        self._load_worker = None
+        self._load_thread = None
+        self._load_dialog = None
+
     def data_button_pressed(self) -> None:
         """
         Load in all the relevant data and instantiate the GUI display.
 
-        Triggered when data button is pressed.
+        Triggered when the data button is pressed. The atlas build, data load and plot build run
+        on a background thread (see :meth:`_run_in_thread` and ``ProbeHandler.load_all``) so the
+        GUI stays responsive and a progress dialog can be shown. The display is assembled in
+        :meth:`_on_load_finished` once loading completes.
         """
-        if self.loaded:
+        if self.loaded or self._load_thread is not None:
             return
-        start = time.time()
+        self._load_start = time.time()
         # Get the list of shanks
         self.all_shanks = list(self.model.shanks.keys())
-        # Load and prepare all data
-        self.load_data()
-        # Load in all the plots
-        self.load_plots()
+
+        self._run_in_thread(
+            self.model.load_all,
+            on_finished=self._on_load_finished,
+            busy_message='Loading data…',
+            report_progress=True,
+        )
+
+    def _teardown_session(self) -> None:
+        """
+        Tear down the previous session before building a new one.
+
+        Closes any plugin-owned popups/windows (e.g. cluster feature popups) tied to the
+        previous session so they do not linger or get reused across sessions. The shank
+        controllers, views and their pyqtgraph figures are dropped when :meth:`create_shanks`
+        replaces ``shank_items`` and :meth:`AlignmentGUIView.reset_view` clears the tabs; the
+        orphaned reference cycles are then collected at the end of :meth:`_on_load_finished`.
+        """
+        self.execute_plugins('teardown', self)
+
+    def _on_load_finished(self, _result: object = None) -> None:
+        """Assemble the GUI display once background loading has completed (main thread)."""
+        self.loaded = True
+        # Tear down the previous session (close its popups) before rebuilding
+        self._teardown_session()
+        # Build the shank controllers and run any load-time plugins
+        self.create_shanks()
+        self.execute_plugins('load_data', self)
+        # Load the plots
+        self.model.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
-        # If csv add the config options
+        # If multiple configs add the config options
         if self.view.config:
             self.view.populate_selection_dropdown('config', self.model.possible_configs)
         # Load in the shank panels and configure figures for initial config
@@ -947,7 +1253,10 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
-        print(time.time() - start)
+        # Reclaim the previous session's figures/data now that its tabs have been cleared and
+        # its shank controllers/views dereferenced (pyqtgraph leaves reference cycles behind)
+        gc.collect()
+        logger.info('Loading time: %.2f s', time.time() - self._load_start)
 
     def setup(self, init=True) -> None:
         """
@@ -975,18 +1284,18 @@ class AlignmentGUIController:
         self.set_probe_lims(data_only=True)
         self.set_yaxis_lims()
 
-        # Initialise ephys plots
-        self.set_ephys_plots()
-
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
         self.get_scaled_histology()
-        self.plot_histology_ref_panels()
+        self.view.trigger_menu_option('region', self.region_init)
         self.plot_histology_panels()
         self.plot_scale_factor_panels()
         self.show_labels = False
         self.toggle_labels()
         self.update_string()
+
+        # Initialise ephys plots
+        self.set_ephys_plots()
 
         # Add reference lines to the display
         if init:
@@ -1032,45 +1341,113 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Upload data
     # --------------------------------------------------------------------------------------------
+    def save_progress_button_pressed(self) -> None:
+        """
+        Triggered when the save progress button or Shift+S is pressed.
+
+        Saves the current alignment of the chosen shanks to file, so that it can be recovered if
+        the GUI crashes before the alignment has been uploaded. The saved alignment is offered in
+        the alignment dropdown the next time the data is loaded, and is deleted once the alignment
+        has been successfully uploaded.
+        """
+        if self._load_thread is not None:
+            return
+
+        if len(self.all_shanks) > 1:
+            shanks_to_save = display_upload_dialog(self)
+        else:
+            shanks_to_save = self.all_shanks
+
+        if not shanks_to_save:
+            return
+
+        info = self.model.save_progress(shanks_to_save)
+        # Label each shank only when more than one was saved
+        if len(info) == 1:
+            message = next(iter(info.values()))
+        else:
+            message = '\n\n'.join(f'{shank}:\n{msg}' for shank, msg in info.items())
+        self.view.upload_info(True, message)
+
     def complete_button_pressed(self) -> None:
         """
         Triggered when complete button or Shift+U is pressed.
 
-        Saves channel locations and alignments.
+        Saves channel locations and alignments. The per-shank user input (which shanks, QC
+        assessment, upload confirmation) is gathered here on the main thread via modal dialogs;
+        the slow saving itself then runs on a background thread (see :meth:`_run_in_thread` and
+        ``ProbeHandler.upload_shanks``), with the results reported in :meth:`_on_upload_finished`.
         """
+        if self._load_thread is not None:
+            return
+
         if len(self.all_shanks) > 1:
             shanks_to_upload = display_upload_dialog(self)
         else:
             shanks_to_upload = self.all_shanks
 
-        for shank in shanks_to_upload:
-            self.model.selected_shank = shank
-            self.model.current_shank = shank
+        # Gather all user decisions up front (modal dialogs must stay on the main thread).
+        # Online the QC dialog both captures the assessment (stored on the shank's uploader) and
+        # confirms the upload; offline there is no QC step so a simple upload prompt is used
+        # instead. Only one of the two is ever shown per shank.
+        approved: list[str] = []
+        # The shank is switched to gather the input for each one, so keep track of the one the
+        # user had selected and restore it once the input has been gathered
+        selected_shank = self.model.selected_shank
+        try:
+            for idx, shank in enumerate(shanks_to_upload):
+                self.model.selected_shank = shank
 
-            if not self.offline:
-                accepted = display_qc_dialog(self, shank)
-                if accepted == 0:
-                    break
+                if not self.offline:
+                    # The shanks that haven't been asked about yet
+                    remaining = shanks_to_upload[idx + 1 :]
+                    # Cancelling the QC dialog aborts the whole upload.
+                    if display_qc_dialog(self, shank, allow_apply_all=len(remaining) > 0) == 0:
+                        break
+                    approved.append(shank)
+                    # Give the remaining shanks the same assessment instead of asking again
+                    if self.qc_dialog.apply_to_all:
+                        apply_qc_to_shanks(self, remaining)
+                        approved.extend(remaining)
+                        break
+                elif self.view.upload_prompt(shank):
+                    approved.append(shank)
+                else:
+                    self.view.upload_info(False)
+        finally:
+            self.model.selected_shank = selected_shank
 
-            upload = self.view.upload_prompt()
-            if upload:
-                info = self.model.upload_data()
-                self.view.populate_selection_dropdown(
-                    'align', self.model.load_previous_alignments()
-                )
-                self.model.get_starting_alignment(0)
-                self.view.upload_info(upload, info)
-            else:
-                self.view.upload_info(upload)
+        if not approved:
+            return
+
+        # Save the approved shanks off the GUI thread.
+        self._run_in_thread(
+            self.model.upload_shanks,
+            approved,
+            on_finished=self._on_upload_finished,
+            busy_message='Saving…',
+            report_progress=True,
+        )
+
+    def _on_upload_finished(self, info: dict[str, str]) -> None:
+        """Refresh the alignment dropdown and report results once saving completes."""
+        self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
+        # Load in the latest alignment (the one that was just saved) so the display
+        # reflects the saved state
+        self.model.get_starting_alignment(0)
+        self.view.set_selection_dropdown('align', 0)
+
+        # Combine the per-shank results into a single message. Label each shank only when more
+        # than one was uploaded, so the single-shank case reads exactly as before.
+        if len(info) == 1:
+            message = next(iter(info.values()))
+        else:
+            message = '\n\n'.join(f'{shank}:\n{msg}' for shank, msg in info.items())
+        self.view.upload_info(True, message)
 
     # --------------------------------------------------------------------------------------------
     # Fitting functions
     # --------------------------------------------------------------------------------------------
-    @shank_loop
-    def offset_hist_data(self, items: ShankController, *args, **kwargs) -> None:
-        """See :meth:`ShankController.offset_hist_data` for details."""
-        items.offset_hist_data(*args)
-
     @shank_loop
     def scale_hist_data(self, items: ShankController, **kwargs) -> None:
         """Scale brain regions along the probe track based on reference lines."""
@@ -1094,30 +1471,6 @@ class AlignmentGUIController:
         """
         fit_function(**kwargs)
         self.update_plots(shanks=[self.model.selected_shank])
-
-    def offset_button_pressed(self) -> None:
-        """
-        Apply an offset to the selected shank based on location of the probe tip line.
-
-        Called when the offset button or O key is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank])
-
-    def movedown_button_pressed(self) -> None:
-        """
-        Offset the probe tip of selected shank by 100 µm downwards.
-
-        Called when Shift+down arrow is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=-100 / 1e6)
-
-    def moveup_button_pressed(self) -> None:
-        """
-        Offset the probe tip of selected shank by 100 µm upwards.
-
-        Called when Shift+up arrow is pressed.
-        """
-        self.apply_fit(self.offset_hist_data, shanks=[self.model.selected_shank], val=100 / 1e6)
 
     def fit_button_pressed(self) -> None:
         """

@@ -9,6 +9,9 @@ The GUI requires:
 - Extracted raw electrophysiology features
 - Probe trajectory coordinates in the brain atlas
 
+For the exact format of every dataset the GUI reads and writes, and which folder each one belongs
+in, see :doc:`datasets`.
+
 
 Preparing Electrophysiology Data
 ---------------------------------
@@ -22,8 +25,12 @@ If you recorded data using SpikeGLX and spike-sorted using Kilosort or pykilosor
 
 .. code-block:: python
 
+    import logging
     from pathlib import Path
-    from ibl_alignment_gui.convertors import extract_ephys
+    from ibl_alignment_gui.convertors.extract_ephys import extract_data
+
+    # Progress is reported through the logger, so give it somewhere to go
+    logging.basicConfig(level=logging.INFO)
 
     # Path to Kilosort output
     ks_path = Path('/path/to/kilosort/output')
@@ -34,10 +41,24 @@ If you recorded data using SpikeGLX and spike-sorted using Kilosort or pykilosor
     # Output path
     out_path = Path('/path/to/output')
 
-    extract_ephys(ks_path, ephys_path, out_path)
+    extract_data(ks_path, ephys_path, out_path)
+
+This writes the spike sorting datasets (``spikes.*``, ``clusters.*`` and ``channels.*``) and the
+RMS and spectral density files (``_iblqc_ephysTimeRms*`` and ``_iblqc_ephysSpectralDensityLF``)
+into the output path. See :doc:`datasets` for what each of them contains.
 
 .. warning::
     Ensure the output path is **not** the same as the Kilosort path to avoid overwriting existing files.
+
+.. note::
+    This conversion reads the Kilosort output through ``ibllib`` and ``phylib``, so it needs the
+    optional ``ibl`` dependencies installed:
+
+    .. code-block:: console
+
+       pip install -e ".[ibl]"
+
+    They are only needed to prepare the data; the GUI itself runs without them.
 
 Using Other Recording or Spike Sorting Software
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

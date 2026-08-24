@@ -1,0 +1,10 @@
+path: /mnt/data
+
+configurations:
+  dense:
+    path: dense_session
+    probes:
+      probe_00:
+        datasets:
+          spike_sorting:
+            path: kilosort

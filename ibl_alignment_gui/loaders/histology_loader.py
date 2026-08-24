@@ -1,18 +1,64 @@
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import requests
 import SimpleITK as sitk  # noqa: N813
 
-from iblatlas.atlas import AllenAtlas
+from ibl_alignment_gui.backends.allen.anatomical_atlas import (
+    _BLESSED_DIRECTION,
+    BrainAtlasAnatomical,
+)
+from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
 from one.webclient import http_download_file
 
 logger = logging.getLogger(__name__)
+
+# Timeout for the histology directory-listing request. Without one, an unreachable data
+# server leaves the load running behind a progress dialog that has no cancel button.
+HTTP_TIMEOUT_SECS = 30
+
+
+class LazySliceDict(dict):
+    """
+    Dict of histology slice Bunches that loads channels from disk on first access.
+
+    Eager entries (CCF, Annotation) are populated immediately. Lazy entries
+    (histology channels) are stored as ``None`` placeholders until a key is
+    accessed, at which point the registered callback loads and caches the slice.
+    """
+
+    def __init__(
+        self,
+        eager_data: dict,
+        lazy_callbacks: dict[str, Callable[[], Bunch]],
+    ):
+        super().__init__(eager_data)
+        self._callbacks: dict[str, Callable] = {}
+        for key, cb in lazy_callbacks.items():
+            self._callbacks[key] = cb
+            super().__setitem__(key, None)  # placeholder so key appears in .keys()
+
+    def __getitem__(self, key):
+        """Return the slice for ``key``, loading and caching it on first access."""
+        value = super().__getitem__(key)
+        if value is None and key in self._callbacks:
+            value = self._callbacks[key]()
+            super().__setitem__(key, value)  # cache for subsequent accesses
+        return value
+
+    def get(self, key, default=None):
+        """Return the slice for ``key``, or ``default`` when it is not present."""
+        # CPython's dict.get() bypasses __getitem__, so override to trigger lazy load.
+        if key in self:
+            return self[key]
+        return default
 
 
 class SliceLoader(ABC):
@@ -29,11 +75,14 @@ class SliceLoader(ABC):
         Reference brain atlas.
     """
 
-    def __init__(self, file_path: Path, brain_atlas: AllenAtlas):
-        self.file_path: Path = file_path
-        self.brain_atlas: AllenAtlas = brain_atlas
+    def __init__(self, file_path: Path | None, brain_atlas: BrainAtlas):
+        self.file_path: Path | None = file_path
+        self.brain_atlas: BrainAtlas = brain_atlas
         self.hist_paths: dict[str, Path] = {}
-        self.get_paths()
+        # A session need not have any histology: the atlas template and annotation slices are
+        # still available, there are simply no histology volumes to offer alongside them.
+        if self.file_path is not None:
+            self.get_paths()
 
     @abstractmethod
     def get_paths(self) -> None:
@@ -55,75 +104,72 @@ class SliceLoader(ABC):
             Loaded 3D image volume.
         """
 
-    def get_slices(self, xyz: np.ndarray) -> dict[str, dict]:
+    def get_slices(self, xyz: np.ndarray) -> LazySliceDict:
         """
-        Generate slice images for CCF, annotation, and loaded histology.
+        Generate slice images for CCF, annotation, and histology channels.
+
+        CCF and Annotation are computed immediately (atlas arrays are already in
+        memory).  Histology channel volumes are loaded from disk only when their
+        key is first accessed in the returned dict.
 
         Parameters
         ----------
         xyz : np.ndarray
-            n x 3 array of xyz coordinates.
+            n x 3 array of xyz coordinates along the probe track.
 
         Returns
         -------
-        slices: dict[str, dict]
-            A dictionary of dictionaries of image slices and metadata for each image type.
-        """
-        slices = Bunch(
-            {
-                'CCF': self.get_slice(xyz, self.brain_atlas.image),
-                'Annotation': self.get_slice(xyz, self.brain_atlas.label, annotation=True),
-            }
-        )
-
-        slices['Annotation']['label'] = True
-
-        for key, vol_path in self.hist_paths.items():
-            try:
-                vol = self.load_volume(vol_path)
-                slices[key] = self.get_slice(xyz, vol)
-            except Exception as e:
-                logger.error(f'Failed to load {key} volume at {vol_path}: {e}')
-
-        return slices
-
-    def get_slice(
-        self, xyz: np.ndarray, vol: np.ndarray, annotation: bool = False
-    ) -> dict[str, np.ndarray]:
-        """
-        Extract a slice from a 3D volume using given coordinates.
-
-        Parameters
-        ----------
-        xyz : np.ndarray
-            Nx3 array of XYZ coordinates.
-        vol : np.ndarray
-            3D volume from which to extract a slice.
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            A dictionary containing the 2D slice, scale, and offset.
+        LazySliceDict
+            Keys: 'CCF', 'Annotation', and one key per entry in hist_paths.
+            Each value is a Bunch with 'slice' (2D array), 'scale', and 'offset'.
         """
         index = self.brain_atlas.bc.xyz2i(xyz)[:, self.brain_atlas.xyz2dims]
-        width = [self.brain_atlas.bc.i2x(0), self.brain_atlas.bc.i2x(456)]
+        width = [self.brain_atlas.bc.i2x(0), self.brain_atlas.bc.i2x(self.brain_atlas.bc.nx - 1)]
         height = [self.brain_atlas.bc.i2z(index[0, 2]), self.brain_atlas.bc.i2z(index[-1, 2])]
+        scale = np.array(
+            [
+                (width[1] - width[0]) / self.brain_atlas.bc.nx,
+                (height[1] - height[0]) / len(xyz),
+            ]
+        )
+        offset = np.array([width[0], height[0]])
+
+        ann = self._make_slice_bunch(self.brain_atlas.label, index, scale, offset, annotation=True)
+        ann['label'] = True
+
+        eager = {
+            'CCF': self._make_slice_bunch(self.brain_atlas.image, index, scale, offset),
+            'Annotation': ann,
+        }
+
+        def _make_callback(vol_path):
+            def _load():
+                try:
+                    vol = self.load_volume(vol_path)
+                    return self._make_slice_bunch(vol, index, scale, offset)
+                except Exception as e:
+                    logger.error(f'Failed to load {vol_path}: {e}')
+                    return None
+
+            return _load
+
+        lazy = {key: _make_callback(path) for key, path in self.hist_paths.items()}
+        return LazySliceDict(eager, lazy)
+
+    def _make_slice_bunch(
+        self,
+        vol: np.ndarray,
+        index: np.ndarray,
+        scale: np.ndarray,
+        offset: np.ndarray,
+        annotation: bool = False,
+    ) -> Bunch:
+        """Extract a 2D wavy slice from *vol* and package it with shared metadata."""
         hist_slice = vol[index[:, 0], :, index[:, 2]]
         if annotation:
             hist_slice = self.brain_atlas._label2rgb(hist_slice)
         hist_slice = np.swapaxes(hist_slice, 0, 1)
-        return Bunch(
-            {
-                'slice': hist_slice,
-                'scale': np.array(
-                    [
-                        (width[-1] - width[0]) / hist_slice.shape[0],
-                        (height[-1] - height[0]) / hist_slice.shape[1],
-                    ]
-                ),
-                'offset': np.array([width[0], height[0]]),
-            }
-        )
+        return Bunch({'slice': hist_slice, 'scale': scale, 'offset': offset})
 
 
 class NrrdSliceLoader(SliceLoader):
@@ -165,7 +211,271 @@ class NrrdSliceLoader(SliceLoader):
         np.ndarray
             Loaded image volume.
         """
-        return AllenAtlas._read_volume(vol_path)
+        vol = AllenAtlas._read_volume(vol_path)
+        return vol
+
+
+@dataclass(frozen=True)
+class ImageSpacePaths:
+    """
+    Paths to the NRRD files produced by the histology registration pipeline.
+
+    All of the files live in a single folder.
+
+    atlas_image_path : Path
+        CCF template warped into anatomical space (``ccf_in_*.nrrd``).
+    atlas_labels_path : Path
+        CCF labels warped into anatomical space (``labels_in_*.nrrd``).
+    pipeline_image_path : Path
+        Pipeline reference image used by the registration
+        (``histology_registration_pipeline.nrrd``).
+    histology_image_path : Path
+        Main registered histology channel (``histology_registration.nrrd``).
+    other_channel_paths : list[Path]
+        Any additional fluorescence channels matching ``Ex_*_Em_*.nrrd``.
+    """
+
+    atlas_image_path: Path
+    atlas_labels_path: Path
+    pipeline_image_path: Path
+    histology_image_path: Path
+    other_channel_paths: list[Path] = field(default_factory=list)
+
+    @classmethod
+    def from_folder(cls, input_path: Path) -> 'ImageSpacePaths':
+        """
+        Discover all required files in *input_path* and return an ImageSpacePaths.
+
+        Raises StopIteration if any required file is missing.
+        """
+
+        def _glob_first(pattern: str) -> Path:
+            return next(input_path.glob(pattern))
+
+        other_channel_paths: list[Path] = []
+        pattern = re.compile(r'^Ex_\d+_Em_\d+\.nrrd$')
+        for p in input_path.iterdir():
+            if pattern.match(p.name):
+                other_channel_paths.append(p)
+
+        return cls(
+            atlas_image_path=_glob_first('ccf_in_*.nrrd'),
+            atlas_labels_path=_glob_first('labels_in_*.nrrd'),
+            pipeline_image_path=_glob_first('histology_registration_pipeline.nrrd'),
+            histology_image_path=_glob_first('histology_registration.nrrd'),
+            other_channel_paths=other_channel_paths,
+        )
+
+
+class AnatomicalSliceLoader(SliceLoader):
+    """
+    SliceLoader for histology registered in original anatomical (non-CCF) space.
+
+    Expects a folder produced by the histology registration pipeline containing:
+    ``ccf_in_*.nrrd``, ``labels_in_*.nrrd``,
+    ``histology_registration_pipeline.nrrd``, ``histology_registration.nrrd``,
+    and optionally ``Ex_*_Em_*.nrrd`` channel files.
+
+    The BrainAtlasAnatomical built from these files works in the physical space
+    of the anatomical images (mm, RAS).  Coordinates passed to ``get_slices``
+    must therefore be in that same anatomical physical space, not in Allen CCF
+    space.
+
+    Parameters
+    ----------
+    file_path : Path
+        Folder containing the registration pipeline NRRD outputs.
+    brain_atlas : BrainAtlas
+        Unused; accepted to satisfy the SliceLoader interface and the
+        ``make_slice_loader`` factory signature.
+    """
+
+    def __init__(self, file_path: Path, brain_atlas: BrainAtlas):
+        super().__init__(file_path, brain_atlas)
+        if not isinstance(self.brain_atlas, BrainAtlasAnatomical):
+            self.brain_atlas = self._build_anatomical_atlas()
+
+    def get_paths(self) -> None:
+        """Resolve the anatomical-space volume paths and record them on the loader."""
+        self.image_space_paths = ImageSpacePaths.from_folder(self.file_path)
+        self.hist_paths: dict[str, Path] = {
+            'Histology registration': self.image_space_paths.histology_image_path,
+        }
+        for p in self.image_space_paths.other_channel_paths:
+            self.hist_paths[p.stem] = p
+
+    def load_volume(self, vol_path: Path) -> np.ndarray:
+        """Read a channel NRRD, reorient to IRP, and return as a numpy array."""
+        img = sitk.ReadImage(str(vol_path))
+        img = sitk.DICOMOrient(img, _BLESSED_DIRECTION)
+        return sitk.GetArrayFromImage(img)
+
+    def _build_anatomical_atlas(self) -> BrainAtlasAnatomical:
+        return build_anatomical_atlas(self.file_path)
+
+
+def build_anatomical_atlas(histology_path: Path) -> BrainAtlasAnatomical:
+    """
+    Build a BrainAtlasAnatomical from the registration pipeline NRRD files in *histology_path*.
+
+    Parameters
+    ----------
+    histology_path : Path
+        Folder containing ``ccf_in_*.nrrd``, ``labels_in_*.nrrd``, and
+        ``histology_registration_pipeline.nrrd``.
+
+    Returns
+    -------
+    BrainAtlasAnatomical
+    """
+    paths = ImageSpacePaths.from_folder(histology_path)
+    return BrainAtlasAnatomical(
+        intensity_img=sitk.ReadImage(str(paths.atlas_image_path)),
+        label_img=sitk.ReadImage(str(paths.atlas_labels_path)),
+        pipeline_img=sitk.ReadImage(str(paths.pipeline_image_path)),
+    )
+
+
+def make_slice_loader(file_path: Path, brain_atlas: BrainAtlas, space: str = 'ccf') -> SliceLoader:
+    """
+    Return the appropriate SliceLoader for the given folder.
+
+    Parameters
+    ----------
+    file_path : Path or None
+        Folder containing histology files. When None, no histology volumes are loaded and only
+        the atlas template and annotation slices are available.
+    brain_atlas : BrainAtlas
+        Brain atlas passed to the loader (used directly by NrrdSliceLoader;
+        ignored by AnatomicalSliceLoader which builds its own atlas from the
+        folder files).
+    space : {'ccf', 'anatomical'}
+        Which loader to use.  'ccf' returns a NrrdSliceLoader operating in
+        Allen CCF space; 'anatomical' returns an AnatomicalSliceLoader
+        operating in the original image space.  Matches the ``histology.space``
+        field in the alignment YAML.
+
+    Returns
+    -------
+    SliceLoader
+        NrrdSliceLoader for 'ccf', AnatomicalSliceLoader for 'anatomical'. A NrrdSliceLoader with
+        no histology volumes when ``file_path`` is None.
+    """
+    if file_path is None:
+        # Neither loader can inspect a folder that was not given. The atlas slices come from the
+        # brain atlas rather than from files, so they are unaffected.
+        logger.info('No histology path given, only the atlas slices will be available')
+        return NrrdSliceLoader(None, brain_atlas)
+
+    if space == 'anatomical':
+        return AnatomicalSliceLoader(file_path, brain_atlas)
+    return _build_slice_loader(file_path, brain_atlas)
+
+
+def _build_slice_loader(hist_path: Path, brain_atlas: AllenAtlas) -> SliceLoader:
+    """
+    Pick the right SliceLoader by inspecting the histology directory.
+
+    Parameters
+    ----------
+    hist_path : Path
+        Directory containing the histology volumes.
+    brain_atlas : AllenAtlas
+        Brain atlas for alignment.
+
+    Returns
+    -------
+    SliceLoader
+        A :class:`TiffSliceLoader` if TIFFs are present, otherwise a :class:`NrrdSliceLoader`.
+    """
+    if any(hist_path.glob('*.nrrd')):
+        return NrrdSliceLoader(hist_path, brain_atlas)
+    if any(hist_path.glob('*.tif')) or any(hist_path.glob('*.tiff')):
+        return TiffSliceLoader(hist_path, brain_atlas)
+    return NrrdSliceLoader(hist_path, brain_atlas)
+
+
+class TiffSliceLoader(SliceLoader):
+    """
+    SliceLoader for histology in TIFF format (e.g. brainreg outputs).
+
+    Detects brainreg's standard ``C0`` (green) / ``C1`` (red) channel
+    suffixes first, then falls back to the NRRD loader's ``GR`` / ``RD``
+    substring rules so manually-named TIFFs also load.
+
+    Parameters
+    ----------
+    file_path : Path
+        Directory containing ``.tif`` / ``.tiff`` files.
+    brain_atlas : AllenAtlas
+        Brain atlas for alignment.
+    """
+
+    def __init__(self, file_path: Path, brain_atlas: AllenAtlas):
+        super().__init__(file_path, brain_atlas)
+
+    def get_paths(self) -> None:
+        """Locate histology TIFFs and store paths keyed by display label."""
+        # Brainreg writes both `.tif` and `.tiff` depending on version.
+        files = list(self.file_path.glob('*.tif')) + list(self.file_path.glob('*.tiff'))
+
+        brainreg_map = {'green': 'C0', 'red': 'C1'}
+
+        # Preferred: brainreg files in Allen CCF space — filename contains 'standard'.
+        # (Subject-space brainreg outputs share the same C0/C1 suffix but are not in
+        # atlas coordinates, so we must not match them when standard ones exist.)
+        standard_files = [f for f in files if 'standard' in f.stem]
+        for color, abbrev in brainreg_map.items():
+            match = next((f for f in standard_files if abbrev in f.stem), None)
+            if match:
+                self.hist_paths[f'Histology {color}'] = match
+
+        # Fallback 1: any brainreg-style C0/C1 file (e.g. user only kept subject-space).
+        for color, abbrev in brainreg_map.items():
+            label = f'Histology {color}'
+            if label in self.hist_paths:
+                continue
+            match = next((f for f in files if abbrev in f.stem), None)
+            if match:
+                self.hist_paths[label] = match
+
+        # Fallback 2: generic GR/RD substring (mirrors NrrdSliceLoader convention)
+        # so users with manually-renamed TIFFs do not need brainreg-style names.
+        generic_map = {'green': 'GR', 'red': 'RD'}
+        for color, abbrev in generic_map.items():
+            label = f'Histology {color}'
+            if label in self.hist_paths:
+                continue
+            match = next((f for f in files if abbrev in f.stem), None)
+            if match:
+                self.hist_paths[label] = match
+
+    def load_volume(self, vol_path: Path) -> np.ndarray:
+        """
+        Load a TIFF and reorient to AllenAtlas (AP, ML, DV) convention.
+
+        Parameters
+        ----------
+        vol_path : Path
+            A path to a histology TIFF volume.
+
+        Returns
+        -------
+        np.ndarray
+            Loaded volume with shape ``(AP, ML, DV)`` ready for slicing by
+            :meth:`SliceLoader.get_slice`.
+
+        Notes
+        -----
+        Brainreg's ``downsampled_standard_brain_C*.tiff`` are 25 µm
+        isotropic in Allen CCF space, with ``sitk.GetArrayFromImage`` axis
+        order ``(AP, DV, ML)``. The AllenAtlas convention is ``(AP, ML, DV)``,
+        so a single axis swap suffices — no flips required.
+        """
+        arr = sitk.GetArrayFromImage(sitk.ReadImage(str(vol_path)))
+        arr = np.transpose(arr, (0, 2, 1))
+        arr = np.flip(arr, 0)
+        return arr
 
 
 def download_histology_data(
@@ -205,7 +515,9 @@ def download_histology_data(
         url = f'{par.HTTP_DATA_SERVER}/{"/".join(flatiron_path.parts)}/'
         try:
             response = requests.get(
-                url, auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD)
+                url,
+                auth=(par.HTTP_DATA_SERVER_LOGIN, par.HTTP_DATA_SERVER_PWD),
+                timeout=HTTP_TIMEOUT_SECS,
             )
             response.raise_for_status()
             return flatiron_path, response.text
@@ -231,7 +543,9 @@ def download_histology_data(
     rel_path, html_text = histology_folder
     base_url = f'{par.HTTP_DATA_SERVER}/{"/".join(rel_path.parts)}'
 
-    tif_files = [match + '.tif' for match in re.findall(r'href="(.*).tif"', html_text)]
+    # Match within a single href value ([^"]*) rather than greedily across the line, so two
+    # links on one line yield two filenames instead of one mangled one.
+    tif_files = [f'{match}.tif' for match in re.findall(r'href="([^"]*)\.tif"', html_text)]
 
     cache_dir.mkdir(exist_ok=True, parents=True)
     path_to_files = []
@@ -239,13 +553,31 @@ def download_histology_data(
         img_path = Path(cache_dir, file)
         if not img_path.exists():
             file_url = f'{base_url}/{file}'
-            http_download_file(
-                file_url,
-                target_dir=cache_dir,
-                username=par.HTTP_DATA_SERVER_LOGIN,
-                password=par.HTTP_DATA_SERVER_PWD,
-            )
-        path_to_files.append(tif2nrrd(img_path))
+            try:
+                downloaded = http_download_file(
+                    file_url,
+                    target_dir=cache_dir,
+                    username=par.HTTP_DATA_SERVER_LOGIN,
+                    password=par.HTTP_DATA_SERVER_PWD,
+                )
+            except Exception as e:
+                logger.error(f'Failed to download histology file {file_url}: {e}')
+                continue
+            if downloaded is None or not Path(downloaded).exists():
+                logger.error(f'Histology file was not downloaded: {file_url}')
+                continue
+            # Trust the path the downloader reports rather than reconstructing it, so a href
+            # that carries directory parts cannot point the conversion at a missing file.
+            img_path = Path(downloaded)
+
+        try:
+            path_to_files.append(tif2nrrd(img_path))
+        except Exception as e:
+            logger.error(f'Failed to convert histology file {img_path} to nrrd: {e}')
+
+    if not path_to_files:
+        logger.error(f'No histology files could be retrieved for subject={subject}')
+        return None, cache_dir
 
     if len(path_to_files) > 3:
         path_to_files = path_to_files[1:3]

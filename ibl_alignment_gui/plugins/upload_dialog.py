@@ -2,10 +2,10 @@ from typing import TYPE_CHECKING
 
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.utils.qt.custom_widgets import CheckBoxGroup
+from ibl_alignment_gui.app.widgets.custom_widgets import CheckBoxGroup
 
 if TYPE_CHECKING:
-    from ibl_alignment_gui.app.app_controller import AlignmentGUIController
+    from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 
 PLUGIN_NAME = 'Upload dialog'
 
@@ -72,11 +72,13 @@ class UploadDialog(QtWidgets.QDialog):
 
     def add_shanks(self) -> None:
         """Add the current shanks to the dropdown options."""
+        # Nothing is uploaded unless the dialog is accepted
+        self.shanks_to_upload = list()
         # Replace the options in the CheckBoxGroup
         options = ['All'] + self.controller.all_shanks
         self.shank_options.add_options(options)
-        # Set the currently selected shank
-        self.shank_options.set_checked([self.controller.model.selected_shank])
+        # Select all of the shanks by default
+        self.shank_options.set_checked(options)
         # Connect the callback
         self.shank_options.setup_callback(self.on_shank_button_clicked)
 

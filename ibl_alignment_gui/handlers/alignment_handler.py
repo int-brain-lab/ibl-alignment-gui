@@ -1,7 +1,7 @@
 import numpy as np
 
-from iblatlas.atlas import AllenAtlas
-from ibllib.pipes.ephys_alignment import EphysAlignment
+from ibl_alignment_gui.core.ephys_alignment import EphysAlignment
+from iblatlas.atlas import BrainAtlas
 from iblutil.util import Bunch
 
 
@@ -142,9 +142,9 @@ class AlignmentHandler:
         probe at a specific alignment step
     """
 
-    def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: AllenAtlas):
+    def __init__(self, xyz_picks: np.ndarray, chn_depths: np.ndarray, brain_atlas: BrainAtlas):
         self.buffer: CircularIndexTracker = CircularIndexTracker(10)
-        self.brain_atlas: AllenAtlas = brain_atlas
+        self.brain_atlas: BrainAtlas = brain_atlas
         self.ephysalign: EphysAlignment = EphysAlignment(
             xyz_picks, chn_depths, brain_atlas=self.brain_atlas
         )
@@ -196,6 +196,22 @@ class AlignmentHandler:
         return self.ephysalign.get_channel_locations(
             self.features[self.idx], self.tracks[self.idx]
         )
+
+    @property
+    def tip_location(self) -> np.ndarray:
+        """
+        Return the xyz location of the probe tip estimated using the current alignment.
+
+        The tip sits a fixed distance below the first electrode and is estimated using the
+        same track/feature fit as the channels, evaluated at the current index of the
+        circular buffer, so it moves as the alignment is adjusted.
+
+        Returns
+        -------
+        np.ndarray
+            xyz position of the probe tip in 3D space
+        """
+        return self.ephysalign.get_tip_location(self.features[self.idx], self.tracks[self.idx])
 
     @property
     def track_lines(self) -> list[np.ndarray]:
@@ -347,21 +363,6 @@ class AlignmentHandler:
         hist_data_ref['colour'] = colour
 
         return hist_data, hist_data_ref, scale_data
-
-    def offset_hist_data(self, offset: float) -> None:
-        """
-        Apply an offset to the brain regions along the probe track.
-
-        Adds the new alignment state into next buffer index of the feature and track arrays.
-
-        Parameters
-        ----------
-        offset : float
-            Offset value to apply to the track alignment.
-        """
-        self.buffer.next_idx_to_fill()
-        self.tracks[self.idx] = self.tracks[self.idx_prev] + offset
-        self.features[self.idx] = self.features[self.idx_prev]
 
     def scale_hist_data(
         self,

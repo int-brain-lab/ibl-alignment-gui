@@ -3,6 +3,7 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from pathlib import Path
 
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
@@ -130,6 +131,10 @@ class AlignmentGUIController:
         self.hover_shank: str | None = None
         self.hover_idx: int | None = None
         self.hover_config: str | None = None
+
+        # Folders that previous alignments are additionally read from. Chosen per session, so
+        # they are dropped whenever a different session is selected.
+        self.local_alignment_roots: list[Path] = []
 
         # Available shanks and their controllers
         self.all_shanks: list = list()
@@ -323,6 +328,9 @@ class AlignmentGUIController:
 
         self.view.add_shortcuts_to_menu('fit', fit_options)
         self.view.add_shortcuts_to_menu('display', display_options)
+
+        # Online the previous alignments can additionally be read from local folders
+        self._rebuild_local_alignment_menu()
 
     def populate_menubar(self):
         """Populate menu bar tabs based on avaialble plots."""
@@ -892,6 +900,12 @@ class AlignmentGUIController:
             The index selected in the dropdown list
         """
         self.loaded = None
+        # The local alignment folders are chosen per session, so they are dropped here rather
+        # than carried over. Set directly, as the shanks they were pushed to are about to be
+        # replaced and reloading their alignments first would be wasted work.
+        self.local_alignment_roots = []
+        self.model.local_alignment_roots = []
+        self._rebuild_local_alignment_menu()
         self.view.clear_selection_dropdown(['shank', 'config'])
         self.model.get_config(0)
         shanks = self.model.get_shanks(idx)
@@ -983,6 +997,96 @@ class AlignmentGUIController:
         if self.loaded:
             self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
             self.on_alignment_selected(0)
+
+    def _rebuild_local_alignment_menu(self) -> None:
+        """
+        Rebuild the menu listing the folders that previous alignments are read from.
+
+        Each chosen folder is listed as a ticked option that can be unticked to drop it again
+        without having to choose it afresh. Does nothing offline, where the alignments are
+        already read from the chosen data folder and the menu is not shown.
+        """
+        if self.offline:
+            return
+
+        self.view.populate_local_alignment_menu(
+            {str(root): True for root in self.local_alignment_roots},
+            self.on_local_alignment_toggled,
+            {'Add folder…': self.on_add_local_alignments},
+        )
+
+    def on_add_local_alignments(self) -> None:
+        """
+        Choose a folder to additionally read previous alignments from.
+
+        Triggered from the local alignments menu. The folder is added to the ones already
+        chosen, so that alignments held under more than one root can be shown together.
+        """
+        root = self.view.get_local_alignment_path()
+        if root is None or root in self.local_alignment_roots:
+            # Dialog cancelled, or the folder is already being read
+            return
+
+        self.local_alignment_roots.append(root)
+        self._apply_local_alignments()
+
+    def on_local_alignment_toggled(self, label: str, checked: bool) -> None:
+        """
+        Add or drop one of the chosen local alignment folders.
+
+        Triggered when a folder is ticked or unticked in the local alignments menu.
+
+        Parameters
+        ----------
+        label : str
+            The folder, as shown in the menu.
+        checked : bool
+            Whether the folder is now ticked.
+        """
+        root = Path(label)
+        if checked and root not in self.local_alignment_roots:
+            self.local_alignment_roots.append(root)
+        elif not checked and root in self.local_alignment_roots:
+            self.local_alignment_roots.remove(root)
+        else:
+            return
+
+        self._apply_local_alignments()
+
+    def _apply_local_alignments(self) -> None:
+        """
+        Reload the previous alignments from the chosen folders and refresh the dropdown.
+
+        The alignment that is selected is kept wherever it is still on offer, so that changing
+        the folders while one is being worked on does not reset its reference lines. Where it is
+        no longer on offer the starting alignment is selected instead.
+
+        The alignments of a shank are read as soon as its session is selected, so the dropdown
+        is refreshed from then on rather than only once the data has been loaded.
+        """
+        selected = self.view.get_selection_dropdown_text('align')
+
+        self.model.set_local_alignment_roots(self.local_alignment_roots)
+        self._rebuild_local_alignment_menu()
+
+        if not self.model.shanks:
+            # No session has been selected yet, so there is nothing to refresh
+            return
+
+        keys = self.model.get_previous_alignments()
+        self.view.populate_selection_dropdown('align', keys)
+
+        if selected in keys:
+            # Setting the dropdown does not emit activated, so the alignment on display and the
+            # reference lines drawn on it are left untouched. The model is pointed at the new
+            # index by hand, as the position of the alignment in the list may have moved.
+            idx = keys.index(selected)
+            self.view.set_selection_dropdown('align', idx)
+            self.model.get_starting_alignment(idx)
+        else:
+            idx = self.model.get_start_alignment_idx()
+            self.view.set_selection_dropdown('align', idx)
+            self.on_alignment_selected(idx)
 
     def on_config_selected(self, idx: int, init: bool = False) -> None:
         """

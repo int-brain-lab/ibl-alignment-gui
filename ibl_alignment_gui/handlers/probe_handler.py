@@ -98,6 +98,9 @@ class ProbeHandler(ABC):
         self.selected_shank: str | None = None
         self.selected_idx: int | None = None
 
+        # Folders that previous alignments are additionally read from, chosen at runtime
+        self.local_alignment_roots: list[Path] = []
+
     # -------------------------------------------------------------------------
     # Shank access methods
     # -------------------------------------------------------------------------
@@ -152,6 +155,36 @@ class ProbeHandler(ABC):
             .loaders['align']
             .get_previous_alignments()
         )
+
+    def set_local_alignment_roots(self, roots: list[Path]) -> None:
+        """
+        Set the local folders that previous alignments are additionally read from.
+
+        The folders are handed to the alignment loader of every shank and configuration and the
+        previous alignments are reloaded, so that what is on offer reflects the chosen folders
+        for every shank rather than only the one that happens to be selected.
+
+        Parameters
+        ----------
+        roots : list of Path
+            The chosen folders.
+        """
+        self.local_alignment_roots = list(roots)
+
+        for shank in self.shanks:
+            for handler in self.shanks[shank].values():
+                handler.loaders['align'].import_roots = self.local_alignment_roots
+
+        for shank in self.shanks:
+            # The default configuration is the source of truth, and sync_config_alignments
+            # shares its alignments with the other one. Where a shank has no default
+            # configuration there is nothing to share, so each is reloaded on its own.
+            default = self.shanks[shank].get(self.default_config)
+            handlers = [default] if default is not None else list(self.shanks[shank].values())
+            for handler in handlers:
+                handler.loaders['align'].load_previous_alignments()
+
+        self.sync_config_alignments()
 
     def get_previous_alignments(self) -> dict:
         """
@@ -610,6 +643,55 @@ class ProbeHandler(ABC):
     # Utility
     # -------------------------------------------------------------------------
     @staticmethod
+    def local_alignment_folder(subject: str, date: str, shank_label: str) -> str:
+        """
+        Build the name of the folder that local alignments for a shank are held in.
+
+        Mirrors the layout written by the offline gui, ``<subject>_<date>_<probe>``, with the
+        shank identifier stripped from the probe name as one folder holds every shank.
+
+        Parameters
+        ----------
+        subject : str
+            The subject name.
+        date : str
+            The session date, as ``YYYY-MM-DD``.
+        shank_label : str
+            The probe or shank name, e.g. 'probe00' or 'probe00a'.
+
+        Returns
+        -------
+        str
+            The folder name, e.g. 'HB_011_2024-01-24_probe00'.
+        """
+        return f'{subject}_{date}_{ProbeHandler.normalize_shank_label(shank_label)}'
+
+    @staticmethod
+    def local_alignment_shank(shank_label: str) -> int | None:
+        """
+        Return the 1 based shank number that a shank label maps to in a local folder.
+
+        Taken from the letter the probe name ends in rather than from the position of the shank
+        in the probe, so that it stays correct when only some shanks of a probe have data.
+
+        Parameters
+        ----------
+        shank_label : str
+            The probe or shank name, e.g. 'probe00' or 'probe00a'.
+
+        Returns
+        -------
+        int or None
+            The shank number, or None for single shank data, whose files carry no shank number.
+        """
+        suffix = shank_label[len(ProbeHandler.normalize_shank_label(shank_label)) :]
+
+        if len(suffix) == 1 and suffix.isalpha():
+            return ord(suffix.lower()) - ord('a') + 1
+
+        return None
+
+    @staticmethod
     def normalize_shank_label(shank_label: str) -> str:
         """
         Normalize a shank label to the form 'probe0X'.
@@ -856,8 +938,18 @@ class ProbeHandlerONE(ProbeHandler):
             # Work in progress alignments are saved next to the spike sorting data
             spike_path = loaders['data'].spike_sorting_path
             loaders['align'] = AlignmentLoaderOne(
-                ins, self.one, user=params.get().ALYX_LOGIN, data_path=spike_path
+                ins,
+                self.one,
+                user=params.get().ALYX_LOGIN,
+                data_path=spike_path,
+                import_folder=self.local_alignment_folder(
+                    ins['session_info']['subject'],
+                    ins['session_info']['start_time'][:10],
+                    ins['name'],
+                ),
+                import_shank=self.local_alignment_shank(ins['name']),
             )
+            loaders['align'].import_roots = self.local_alignment_roots
             loaders['upload'] = AlignmentUploaderOne(
                 ins, self.one, self.brain_atlas, data_path=spike_path
             )
@@ -1005,12 +1097,26 @@ class ProbeHandlerCSV(ProbeHandler):
             xyz_picks = ins['json'].get('xyz_picks', None)
             xyz_picks = np.array(xyz_picks) / 1e6 if xyz_picks is not None else None
 
+            import_folder = self.local_alignment_folder(
+                ins['session_info']['subject'],
+                ins['session_info']['start_time'][:10],
+                ins['name'],
+            )
+            import_shank = self.local_alignment_shank(ins['name'])
+
             if shank.is_quarter:  # Quarter is offline
                 loaders['data'] = DataLoaderLocal(data_paths)
                 loaders['geom'] = GeometryLoaderLocal(data_paths)
                 loaders['align'] = AlignmentLoaderLocal(
-                    data_paths.spike_sorting, 0, 1, user=user, xyz_picks=xyz_picks
+                    data_paths.spike_sorting,
+                    0,
+                    1,
+                    user=user,
+                    xyz_picks=xyz_picks,
+                    import_folder=import_folder,
+                    import_shank=import_shank,
                 )
+                loaders['align'].import_roots = self.local_alignment_roots
                 loaders['upload'] = AlignmentUploaderLocal(
                     data_paths.spike_sorting, 0, 1, self.brain_atlas, user=user
                 )
@@ -1032,8 +1138,14 @@ class ProbeHandlerCSV(ProbeHandler):
                 # Work in progress alignments are saved next to the spike sorting data
                 spike_path = loaders['data'].spike_sorting_path
                 loaders['align'] = AlignmentLoaderOne(
-                    ins, self.one, user=user, data_path=spike_path
+                    ins,
+                    self.one,
+                    user=user,
+                    data_path=spike_path,
+                    import_folder=import_folder,
+                    import_shank=import_shank,
                 )
+                loaders['align'].import_roots = self.local_alignment_roots
                 loaders['upload'] = AlignmentUploaderOne(
                     ins, self.one, self.brain_atlas, data_path=spike_path
                 )

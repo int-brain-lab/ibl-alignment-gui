@@ -452,3 +452,206 @@ class TestSavedProgress(unittest.TestCase):
 
         self.assertIsNone(loader.recovered_key)
         self.assertNotIn(self.recovered_key, keys)
+
+
+class TestAlignmentLoaderImport(unittest.TestCase):
+    """Test loading previous alignments from local folders alongside the primary source."""
+
+    def setUp(self):
+        self.one_mock = MagicMock()
+        insertion = {
+            'id': uuid.uuid4(),
+            'json': {'xyz_picks': [[1000, 2000, 3000], [1000, 2500, 4000]]},
+        }
+        self.folder = 'HB_011_2024-01-24_probe00'
+        self.loader = AlignmentLoaderOne(
+            insertion,
+            self.one_mock,
+            user='test_user',
+            import_folder=self.folder,
+            import_shank=1,
+        )
+        # No alignments on the primary source unless a test sets some
+        self.one_mock.alyx.rest.return_value = []
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def write_alignments(self, user, alignments, shank=1, root=None):
+        """Write an alignment file into a user's session folder under a root."""
+        root = self.root if root is None else root
+        folder = root.joinpath(user, self.folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        name = 'prev_alignments.json' if shank is None else f'prev_alignments_shank{shank}.json'
+        with open(folder.joinpath(name), 'w') as f:
+            json.dump(alignments, f)
+        return folder
+
+    def test_no_roots(self):
+        """Test that nothing is imported until a folder is chosen."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.assertListEqual(self.loader.load_previous_alignments(), ['original'])
+
+    def test_import_from_root(self):
+        """Test alignments are read from every user folder under a chosen root."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.write_alignments('alex.roe', {'2026-08-14T09:00:00_alex.roe': [[3], [4]]})
+        self.loader.import_roots = [self.root]
+
+        keys = self.loader.load_previous_alignments()
+        self.assertListEqual(
+            keys,
+            [
+                '2026-08-14T09:00:00_alex.roe (local)',
+                '2026-08-13T15:14:15_jane.doe (local)',
+                'original',
+            ],
+        )
+        self.assertEqual(self.loader.alignments[keys[1]], [[1], [2]])
+
+    def test_import_from_multiple_roots(self):
+        """Test alignments held under more than one chosen root are merged."""
+        other_root = self.root.joinpath('elsewhere')
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.write_alignments(
+            'robin.poe', {'2026-08-15T11:00:00_robin.poe': [[5], [6]]}, root=other_root
+        )
+        # The nested root is not one of the user folders of the outer root
+        self.loader.import_roots = [self.root.joinpath('jane.doe'), other_root]
+
+        keys = self.loader.load_previous_alignments()
+        self.assertIn('2026-08-13T15:14:15_jane.doe (local)', keys)
+        self.assertIn('2026-08-15T11:00:00_robin.poe (local)', keys)
+
+    def test_import_picked_at_any_level(self):
+        """Test the root, a user folder or the session folder itself are all accepted."""
+        session = self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        key = '2026-08-13T15:14:15_jane.doe (local)'
+
+        for name, root in (
+            ('root', self.root),
+            ('user folder', session.parent),
+            ('session folder', session),
+        ):
+            with self.subTest(name):
+                self.loader.import_roots = [root]
+                self.assertIn(key, self.loader.load_previous_alignments())
+
+    def test_import_ignores_other_sessions(self):
+        """Test a session folder belonging to another session is never read."""
+        other = self.root.joinpath('jane.doe', 'HB_011_2024-01-25_probe00')
+        other.mkdir(parents=True)
+        with open(other.joinpath('prev_alignments_shank1.json'), 'w') as f:
+            json.dump({'2026-08-13T15:14:15_jane.doe': [[1], [2]]}, f)
+
+        for name, root in (('root', self.root), ('session folder', other)):
+            with self.subTest(name):
+                self.loader.import_roots = [root]
+                self.assertListEqual(self.loader.load_previous_alignments(), ['original'])
+
+    def test_import_shank(self):
+        """Test only the file for the shank is read, with no fallback for multi shank data."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[3], [4]]}, shank=3)
+        self.loader.import_roots = [self.root]
+
+        with self.subTest('shank 3'):
+            self.loader.import_shank = 3
+            self.loader.load_previous_alignments()
+            key = '2026-08-13T15:14:15_jane.doe (local)'
+            self.assertEqual(self.loader.alignments[key], [[3], [4]])
+
+        with self.subTest('shank without a file'):
+            self.loader.import_shank = 4
+            self.assertListEqual(self.loader.load_previous_alignments(), ['original'])
+
+    def test_import_single_shank(self):
+        """Test single shank data reads a file written with or without a shank number."""
+        self.loader.import_shank = None
+        self.loader.import_roots = [self.root]
+        key = '2026-08-13T15:14:15_jane.doe (local)'
+
+        with self.subTest('with shank in the name'):
+            self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+            self.assertIn(key, self.loader.load_previous_alignments())
+
+        with self.subTest('without shank in the name'):
+            self.write_alignments(
+                'jane.doe', {'2026-08-13T15:14:15_jane.doe': [[3], [4]]}, shank=None
+            )
+            self.loader.load_previous_alignments()
+            self.assertEqual(self.loader.alignments[key], [[3], [4]])
+
+    def test_import_tags_key_with_folder_user(self):
+        """Test an alignment saved without a user is attributed to the folder's owner."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15': [[1], [2]]})
+        self.loader.import_roots = [self.root]
+
+        # Tagged with the owner of the folder, not with the user running the gui
+        self.assertIn(
+            '2026-08-13T15:14:15_jane.doe (local)', self.loader.load_previous_alignments()
+        )
+
+    def test_import_skips_alignments_already_known(self):
+        """Test an alignment already held by the primary source is not listed twice."""
+        alignments = {'2026-08-13T15:14:15_jane.doe': [[1], [2]]}
+        self.one_mock.alyx.rest.return_value = [{'id': uuid.uuid4(), 'json': dict(alignments)}]
+        self.write_alignments('jane.doe', alignments)
+        self.loader.import_roots = [self.root]
+
+        self.assertListEqual(
+            self.loader.load_previous_alignments(),
+            ['2026-08-13T15:14:15_jane.doe', 'original'],
+        )
+
+    def test_import_conflict_prefers_the_attributed_user(self):
+        """Test the copy in the folder of the user the key names wins over another copy."""
+        key = '2026-08-13T15:14:15_jane.doe'
+        # Each folder holds everything the gui that wrote it knew about, so the same alignment
+        # turns up in both, and here the two copies disagree
+        alex = self.write_alignments('alex.roe', {key: [[9], [9]]}).parent
+        jane = self.write_alignments('jane.doe', {key: [[1], [2]]}).parent
+
+        # Whichever order the folders are read in, the copy held by the user the key is
+        # attributed to is the one that ends up being used
+        for name, roots in (
+            ('attributed copy read second', [self.root]),
+            ('attributed copy read first', [jane, alex]),
+        ):
+            with self.subTest(name):
+                self.loader.import_roots = roots
+                self.loader.load_previous_alignments()
+                self.assertEqual(self.loader.alignments[f'{key} (local)'], [[1], [2]])
+
+    def test_import_refresh_drops_stale(self):
+        """Test reloading reflects the folders currently chosen rather than adding to them."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.loader.import_roots = [self.root]
+        self.assertEqual(len(self.loader.load_previous_alignments()), 2)
+
+        self.loader.import_roots = []
+        self.assertListEqual(self.loader.load_previous_alignments(), ['original'])
+
+    def test_imported_are_never_uploadable(self):
+        """Test imported alignments are kept out of everything that gets uploaded."""
+        alyx = {'2026-08-12T10:00:00_test_user': [[7], [8]]}
+        self.one_mock.alyx.rest.return_value = [{'id': uuid.uuid4(), 'json': dict(alyx)}]
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.loader.import_roots = [self.root]
+        self.loader.load_previous_alignments()
+
+        self.assertIn('2026-08-13T15:14:15_jane.doe (local)', self.loader.alignments)
+        self.assertDictEqual(self.loader.uploadable_alignments, alyx)
+
+    def test_imported_stay_excluded_once_copied(self):
+        """Test imported alignments copied to another loader are still not uploadable."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.loader.import_roots = [self.root]
+        self.loader.load_previous_alignments()
+
+        # Configurations of a shank share one set of alignments, so the loader that receives
+        # them has imported nothing itself and must still recognise them
+        other = AlignmentLoaderLocal(self.root, 0, 1, user='test_user')
+        other.alignments = self.loader.alignments
+        self.assertDictEqual(other.uploadable_alignments, {})

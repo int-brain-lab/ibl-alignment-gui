@@ -1204,20 +1204,26 @@ class MenuWidget(QtWidgets.QMenuBar):
     ----------
     parent: QtWidgets.QMainWindow
         The parent window
+    offline: bool
+        Whether the gui is running offline. Offline the data folder already holds the previous
+        alignments, so the tab for choosing other folders to read them from is left out.
 
     Attributes
     ----------
     parent: QtWidgets.QMainWindow
         The parent window
+    offline: bool
+        Whether the gui is running offline
     tabs: dict[str, Bunch]
         A dictionary containing the created tabs as Bunch objects.
         Each Bunch has keys 'menu' (the menu object)
     """
 
-    def __init__(self, parent: QtWidgets.QMainWindow | None = None):
+    def __init__(self, parent: QtWidgets.QMainWindow | None = None, offline: bool = False):
         super().__init__(parent)
 
         self.parent: QtWidgets.QMainWindow | None = parent
+        self.offline: bool = offline
         self.tabs: dict[str, Bunch] = defaultdict(Bunch)
 
         self.setNativeMenuBar(False)
@@ -1237,6 +1243,11 @@ class MenuWidget(QtWidgets.QMenuBar):
         # Add tab for fit and displat options (thse are non-exclusive)
         self.tabs['fit']['menu'] = self.addMenu('Fit Options')
         self.tabs['display']['menu'] = self.addMenu('Display Options')
+
+        # Add tab to choose folders that previous alignments are additionally read from. Only
+        # added online, as offline they are already read from the chosen data folder.
+        if not self.offline:
+            self.tabs['local']['menu'] = self.addMenu('Local Alignments')
 
     def populate_exclusive_tab(
         self, name: str, callback: Callable, options: list[str] = None, set_checked: bool = True
@@ -1296,6 +1307,48 @@ class MenuWidget(QtWidgets.QMenuBar):
                 option.setShortcut(shortcut)
             option.triggered.connect(val['callback'])
             self.tabs[name]['menu'].addAction(option)
+
+    def populate_checkable_tab(
+        self,
+        name: str,
+        options: dict[str, bool],
+        callback: Callable,
+        actions: dict[str, Callable],
+    ) -> None:
+        """
+        Rebuild a tab holding a set of fixed actions followed by checkable options.
+
+        The tab is cleared and rebuilt on each call, as the options it offers change while the
+        gui is running.
+
+        Parameters
+        ----------
+        name : str
+            The name of the tab to populate.
+        options : dict of str to bool
+            The checkable options, mapped to whether each one is ticked.
+        callback : Callable
+            Called with the label and the new state whenever an option is ticked or unticked.
+        actions : dict of str to Callable
+            The fixed actions added above the options, mapped to their callbacks.
+        """
+        menu = self.tabs[name]['menu']
+        menu.clear()
+
+        for label, action_callback in actions.items():
+            action = QtWidgets.QAction(label, self.parent)
+            action.triggered.connect(lambda _=False, cb=action_callback: cb())
+            menu.addAction(action)
+
+        if options:
+            menu.addSeparator()
+
+        for label, checked in options.items():
+            action = QtWidgets.QAction(label, self.parent)
+            action.setCheckable(True)
+            action.setChecked(checked)
+            action.toggled.connect(lambda state, lb=label: callback(lb, state))
+            menu.addAction(action)
 
     @staticmethod
     def add_actions(

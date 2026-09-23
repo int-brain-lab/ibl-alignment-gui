@@ -28,6 +28,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
 
     def __init__(self, offline: bool = False, config: bool = False, allen: bool = False):
         super().__init__()
+        self.offline = offline
         self.config = config
         self.allen = allen
 
@@ -40,7 +41,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         self.selection_widgets = custom_widgets.SelectionWidget(
             offline=offline, config=self.config, allen=self.allen, parent=self
         )
-        self.menu_widgets = custom_widgets.MenuWidget(self)
+        self.menu_widgets = custom_widgets.MenuWidget(self, offline=offline)
         self.setMenuBar(self.menu_widgets)
         self.menu_widgets.setCornerWidget(self.selection_widgets, corner=QtCore.Qt.TopRightCorner)
         self.tab_widgets = Bunch()
@@ -291,6 +292,27 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         """See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""
         return self.menu_widgets.populate_non_exclusive_tab(tab, options)
 
+    def populate_local_alignment_menu(
+        self, options: dict[str, bool], callback: Callable, actions: dict[str, Callable]
+    ) -> None:
+        """See :meth:`MenuWidget.populate_checkable_tab` for details."""
+        return self.menu_widgets.populate_checkable_tab('local', options, callback, actions)
+
+    def get_local_alignment_path(self) -> Path | None:
+        """
+        Open a dialog to choose a folder that previous alignments are read from.
+
+        Returns
+        -------
+        Path or None
+            The chosen folder, or None if the dialog was cancelled.
+        """
+        selected = QtWidgets.QFileDialog.getExistingDirectory(
+            self, 'Select folder holding previous alignments'
+        )
+
+        return Path(selected) if selected else None
+
     def trigger_menu_option(self, tab: str, option: str) -> None:
         """
         Trigger the selection of an action in an action group stored in the menubar.
@@ -385,6 +407,22 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The index to set
         """
         self.selection_widgets.dropdowns[name]['combobox'].setCurrentIndex(idx)
+
+    def get_selection_dropdown_text(self, name: str) -> str:
+        """
+        Return the option currently selected in a dropdown.
+
+        Parameters
+        ----------
+        name: str
+            The name of the dropdown
+
+        Returns
+        -------
+        str
+            The text of the selected option.
+        """
+        return self.selection_widgets.dropdowns[name]['combobox'].currentText()
 
     def connect_selection_dropdown(self, name: str, callback: Callable) -> None:
         """

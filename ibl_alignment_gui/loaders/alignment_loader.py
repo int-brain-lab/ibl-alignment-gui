@@ -11,6 +11,11 @@ from iblutil.util import Bunch
 
 logger = logging.getLogger(__name__)
 
+# Marks an alignment that was read from a local folder rather than from the primary source.
+# Kept as a suffix so that the alignment keys, which are timestamps, still sort
+# chronologically in the dropdown.
+LOCAL_SUFFIX = ' (local)'
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -37,6 +42,12 @@ class AlignmentLoader(ABC):
         Index of the shank (0-based).
     n_shanks : int
         Total number of shanks.
+    import_folder : str or None
+        The name of the session folder that previous alignments are additionally read from, of
+        the form ``<subject>_<date>_<probe>``. If None, no local folders are read.
+    import_shank : int or None
+        The 1 based shank number used to pick the alignment file out of an imported folder.
+        None for single shank data, where the file carries no shank number.
     """
 
     def __init__(
@@ -46,6 +57,9 @@ class AlignmentLoader(ABC):
         data_path: Path | None = None,
         shank_idx: int = 0,
         n_shanks: int = 1,
+        *,
+        import_folder: str | None = None,
+        import_shank: int | None = None,
     ) -> None:
         # Set before the xyz picks are loaded, as they may be read from the data path
         self.data_path: Path | None = data_path
@@ -63,6 +77,17 @@ class AlignmentLoader(ABC):
         self.track_prev: np.ndarray | None = None
         self.stored_alignment_key: str | None = None
 
+        # Previous alignments held on the local file system, merged in alongside those of the
+        # primary source. The folders are chosen at runtime, so they are set by the probe handler
+        # rather than passed in here.
+        self.import_folder: str | None = import_folder
+        self.import_shank: int | None = import_shank
+        self.import_roots: list[Path] = []
+        self.imported_keys: set[str] = set()
+        # The imported alignments whose key is attributed to the user of the folder they were
+        # found in, and which therefore win over a copy found in another user's folder
+        self._authoritative_keys: set[str] = set()
+
     @abstractmethod
     def load_alignments(self) -> dict[str, Any] | None:
         """Load previously saved alignments."""
@@ -75,8 +100,9 @@ class AlignmentLoader(ABC):
         """
         Load previous alignments into memory.
 
-        Any work in progress that has been saved is loaded alongside them, so that it is
-        recovered whenever the previous alignments are refreshed.
+        Any alignments held in the chosen local folders are merged in, and any work in
+        progress that has been saved is loaded alongside them, so that both are recovered
+        whenever the previous alignments are refreshed.
 
         Returns
         -------
@@ -87,6 +113,7 @@ class AlignmentLoader(ABC):
         if data:
             self.alignments = data
 
+        self.load_imported()
         self.load_progress()
 
         return self.get_previous_alignments()
@@ -121,6 +148,138 @@ class AlignmentLoader(ABC):
         key = f'recovered ({progress["saved"]})'
         self.alignments[key] = [progress['feature'], progress['track']]
 
+    def load_imported(self) -> None:
+        """
+        Merge previous alignments held in local folders into the available alignments.
+
+        The folders are chosen at runtime and hold what the offline gui writes out, laid out as
+        ``<root>/<alyx user>/<subject>_<date>_<probe>/``. Anything found is added under a key
+        marked as local, so that it can be chosen from the alignment dropdown but is never
+        mistaken for, or uploaded alongside, the alignments of the primary source.
+
+        Nothing is added if no folders have been chosen, or if the shank has no session folder
+        name to look for.
+        """
+        # Drop anything imported previously, so that what is loaded always reflects the folders
+        # that are currently chosen and what they hold
+        for key in self.imported_keys:
+            self.alignments.pop(key, None)
+
+        self.imported_keys = set()
+        self._authoritative_keys = set()
+
+        if not self.import_roots or self.import_folder is None:
+            return
+
+        for root in self.import_roots:
+            for user, folder in self._find_import_folders(root):
+                for name in self._import_names():
+                    data = self._load_json_file(folder.joinpath(name))
+                    if data:
+                        self._merge_imported(data, user)
+                        break
+
+        if self.imported_keys:
+            logger.info(
+                f'Loaded {len(self.imported_keys)} previous alignment(s) for '
+                f'{self.import_folder} from local folders'
+            )
+
+    def _import_names(self) -> list[str]:
+        """
+        Return the names of the alignment files to look for in an imported folder.
+
+        Multi-shank data only ever matches the file for its own shank, as a file without a shank
+        number belongs to a different layout and would be the wrong alignment for this shank.
+
+        Returns
+        -------
+        list of str
+            The filenames to look for, in the order they should be tried.
+        """
+        if self.import_shank is None:
+            # Single shank data may have been written with or without the shank in the name
+            return ['prev_alignments.json', 'prev_alignments_shank1.json']
+
+        return [f'prev_alignments_shank{self.import_shank}.json']
+
+    def _find_import_folders(self, root: Path) -> list[tuple[str, Path]]:
+        """
+        Find the folders under a chosen root that hold alignments for this shank's session.
+
+        The root is whichever folder was chosen, so all three levels of the layout are accepted:
+        the session folder itself, a single user's folder, or a root holding a folder per user.
+
+        Parameters
+        ----------
+        root : Path
+            The chosen folder.
+
+        Returns
+        -------
+        list of (str, Path)
+            The alyx user and session folder of each match.
+        """
+        # The session folder itself. Its name is checked so that a folder belonging to another
+        # session is never read for this one
+        if root.name == self.import_folder and any(
+            root.joinpath(name).exists() for name in self._import_names()
+        ):
+            return [(root.parent.name, root)]
+
+        # A single user's folder
+        if root.joinpath(self.import_folder).is_dir():
+            return [(root.name, root.joinpath(self.import_folder))]
+
+        # A root holding a folder per user
+        return [
+            (folder.parent.name, folder)
+            for folder in sorted(root.glob(f'*/{self.import_folder}'))
+            if folder.is_dir()
+        ]
+
+    def _merge_imported(self, data: dict[str, Any], user: str) -> None:
+        """
+        Merge the alignments read from one local folder into the available alignments.
+
+        The same alignment is often held in more than one folder, as each folder holds
+        everything the gui that wrote it knew about. Where two copies disagree, the one found in
+        the folder of the user the alignment is attributed to is taken, and otherwise the first
+        folder read wins. Alignments already known to the primary source are left out, so that
+        the ones these folders share with it are not listed twice.
+
+        Parameters
+        ----------
+        data : dict
+            The alignments read from the folder.
+        user : str
+            The alyx user whose folder they were read from.
+        """
+        for key, val in data.items():
+            # An alignment saved without a user is attributed to the owner of the folder it was
+            # found in, rather than to whoever is running the gui
+            base = f'{key}_{user}' if len(key) == 19 else key
+
+            if base in self.alignments:
+                continue
+
+            import_key = f'{base}{LOCAL_SUFFIX}'
+            authoritative = base.endswith(f'_{user}')
+
+            if import_key in self.imported_keys:
+                if import_key in self._authoritative_keys or not authoritative:
+                    continue
+                if self.alignments[import_key] != val:
+                    logger.warning(
+                        f'Copies of alignment {base} differ between folders, using the one '
+                        f'found in the folder of {user}'
+                    )
+
+            self.alignments[import_key] = val
+            self.imported_keys.add(import_key)
+            if authoritative:
+                self._authoritative_keys.add(import_key)
+
     @property
     def recovered_key(self) -> str | None:
         """
@@ -145,19 +304,24 @@ class AlignmentLoader(ABC):
         Return the alignments that can be uploaded.
 
         Recovered alignments are left out, as they are a local record of work in progress and
-        must never be saved alongside the alignments that have been uploaded. Any recovered
-        alignment is excluded, not just this loader's own, as alignments are copied between the
-        loaders of different configurations.
+        must never be saved alongside the alignments that have been uploaded. Alignments
+        imported from local folders are left out for the same reason: they are someone else's
+        record of work done elsewhere, and uploading them would attribute them to this session
+        and change how many users the primary source believes have aligned this insertion.
+
+        Both are recognised by their key rather than by what this loader imported, so that they
+        stay excluded once the alignments are copied between the loaders of different
+        configurations.
 
         Returns
         -------
         dict
-            The alignments, excluding any recovered alignment.
+            The alignments, excluding any recovered or imported alignment.
         """
         return {
             key: val
             for key, val in self.alignments.items()
-            if not str(key).startswith('recovered')
+            if not str(key).startswith('recovered') and not str(key).endswith(LOCAL_SUFFIX)
         }
 
     def get_previous_alignments(self) -> list[str]:
@@ -295,6 +459,10 @@ class AlignmentLoaderOne(AlignmentLoader):
     data_path : Path or None
         The path to the folder that work in progress alignments are saved to, normally the folder
         containing the spike sorting data.
+    import_folder : str or None
+        The name of the session folder that previous alignments are additionally read from.
+    import_shank : int or None
+        The 1 based shank number used to pick the alignment file out of an imported folder.
     """
 
     def __init__(
@@ -303,12 +471,20 @@ class AlignmentLoaderOne(AlignmentLoader):
         one: ONE,
         user: str | None = None,
         data_path: Path | None = None,
+        *,
+        import_folder: str | None = None,
+        import_shank: int | None = None,
     ):
         self.insertion: dict[str, Any] = insertion
         self.one: ONE = one
         self.traj_id: str | None = None
 
-        super().__init__(user=user, data_path=data_path)
+        super().__init__(
+            user=user,
+            data_path=data_path,
+            import_folder=import_folder,
+            import_shank=import_shank,
+        )
 
         self.stored_alignment_key: str | None = (
             insertion['json'].get('extended_qc', {}).get('alignment_stored')
@@ -390,6 +566,10 @@ class AlignmentLoaderLocal(AlignmentLoader):
     picks_path : Path or None
         The path to the folder that the xyz picks are read from. Defaults to `data_path` when the
         picks sit alongside the alignment results.
+    import_folder : str or None
+        The name of the session folder that previous alignments are additionally read from.
+    import_shank : int or None
+        The 1 based shank number used to pick the alignment file out of an imported folder.
     """
 
     def __init__(
@@ -401,6 +581,9 @@ class AlignmentLoaderLocal(AlignmentLoader):
         xyz_picks: np.ndarray | None = None,
         histology_space: str = 'ccf',
         picks_path: Path | None = None,
+        *,
+        import_folder: str | None = None,
+        import_shank: int | None = None,
     ):
         self.histology_space: str = histology_space
         # Set before the xyz picks are loaded in the base class
@@ -412,6 +595,8 @@ class AlignmentLoaderLocal(AlignmentLoader):
             data_path=data_path,
             shank_idx=shank_idx,
             n_shanks=n_shanks,
+            import_folder=import_folder,
+            import_shank=import_shank,
         )
 
     def load_xyz_picks(self) -> np.ndarray | None:

@@ -132,8 +132,8 @@ class AlignmentGUIController:
         self.hover_idx: int | None = None
         self.hover_config: str | None = None
 
-        # Folders that previous alignments are additionally read from. Chosen per session, so
-        # they are dropped whenever a different session is selected.
+        # Folders or files that previous alignments are additionally read from. Chosen per
+        # session, so they are dropped whenever a different session is selected.
         self.local_alignment_roots: list[Path] = []
 
         # Available shanks and their controllers
@@ -1000,10 +1000,10 @@ class AlignmentGUIController:
 
     def _rebuild_local_alignment_menu(self) -> None:
         """
-        Rebuild the menu listing the folders that previous alignments are read from.
+        Rebuild the menu listing the folders and files that previous alignments are read from.
 
-        Each chosen folder is listed as a ticked option that can be unticked to drop it again
-        without having to choose it afresh. Does nothing offline, where the alignments are
+        Each chosen folder or file is listed as a ticked option that can be unticked to drop it
+        again without having to choose it afresh. Does nothing offline, where the alignments are
         already read from the chosen data folder and the menu is not shown.
         """
         if self.offline:
@@ -1012,7 +1012,10 @@ class AlignmentGUIController:
         self.view.populate_local_alignment_menu(
             {str(root): True for root in self.local_alignment_roots},
             self.on_local_alignment_toggled,
-            {'Add folder…': self.on_add_local_alignments},
+            {
+                'Add folder…': self.on_add_local_alignments,
+                'Add file…': self.on_add_local_alignment_file,
+            },
         )
 
     def on_add_local_alignments(self) -> None:
@@ -1030,16 +1033,40 @@ class AlignmentGUIController:
         self.local_alignment_roots.append(root)
         self._apply_local_alignments()
 
+    def on_add_local_alignment_file(self) -> None:
+        """
+        Choose a single file to additionally read previous alignments from.
+
+        Triggered from the local alignments menu. Where a folder loads the alignments of every
+        shank, a file loads those of only the shank it was written for, whichever shank is
+        selected. A file that belongs to none of the shanks is not added.
+        """
+        file = self.view.get_local_alignment_file()
+        if file is None or file in self.local_alignment_roots:
+            # Dialog cancelled, or the file is already being read
+            return
+
+        if self.model.shanks and not self.model.get_local_alignment_file_shanks(file):
+            self.view.local_alignment_warning(
+                f'{file.name} does not hold alignments for any shank of this probe. The file '
+                f'must sit in a folder named after the session and probe, e.g. '
+                f'<subject>_<date>_<probe>, and be named for a shank the probe has.'
+            )
+            return
+
+        self.local_alignment_roots.append(file)
+        self._apply_local_alignments()
+
     def on_local_alignment_toggled(self, label: str, checked: bool) -> None:
         """
-        Add or drop one of the chosen local alignment folders.
+        Add or drop one of the chosen local alignment folders or files.
 
-        Triggered when a folder is ticked or unticked in the local alignments menu.
+        Triggered when a folder or file is ticked or unticked in the local alignments menu.
 
         Parameters
         ----------
         label : str
-            The folder, as shown in the menu.
+            The folder or file, as shown in the menu.
         checked : bool
             Whether the folder is now ticked.
         """
@@ -1055,7 +1082,7 @@ class AlignmentGUIController:
 
     def _apply_local_alignments(self) -> None:
         """
-        Reload the previous alignments from the chosen folders and refresh the dropdown.
+        Reload the previous alignments from the chosen folders and files and refresh the dropdown.
 
         The alignment that is selected is kept wherever it is still on offer, so that changing
         the folders while one is being worked on does not reset its reference lines. Where it is

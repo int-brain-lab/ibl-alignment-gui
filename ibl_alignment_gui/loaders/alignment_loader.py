@@ -11,7 +11,7 @@ from iblutil.util import Bunch
 
 logger = logging.getLogger(__name__)
 
-# Marks an alignment that was read from a local folder rather than from the primary source.
+# Marks an alignment that was read from a local folder or file rather than from the primary source.
 # Kept as a suffix so that the alignment keys, which are timestamps, still sort
 # chronologically in the dropdown.
 LOCAL_SUFFIX = ' (local)'
@@ -150,15 +150,18 @@ class AlignmentLoader(ABC):
 
     def load_imported(self) -> None:
         """
-        Merge previous alignments held in local folders into the available alignments.
+        Merge previous alignments held in local folders or files into the available alignments.
 
         The folders are chosen at runtime and hold what the offline gui writes out, laid out as
         ``<root>/<alyx user>/<subject>_<date>_<probe>/``. Anything found is added under a key
         marked as local, so that it can be chosen from the alignment dropdown but is never
         mistaken for, or uploaded alongside, the alignments of the primary source.
 
-        Nothing is added if no folders have been chosen, or if the shank has no session folder
-        name to look for.
+        A single alignment file can be chosen in place of a folder, so that the alignments of
+        only one shank are read. The file is only read by the shank it was written for.
+
+        Nothing is added if nothing has been chosen, or if the shank has no session folder name
+        to look for.
         """
         # Drop anything imported previously, so that what is loaded always reflects the folders
         # that are currently chosen and what they hold
@@ -172,6 +175,14 @@ class AlignmentLoader(ABC):
             return
 
         for root in self.import_roots:
+            if root.is_file():
+                if self.matches_import_file(root):
+                    data = self._load_json_file(root)
+                    if data:
+                        # The user is taken from the folder the session folder is held in
+                        self._merge_imported(data, root.parent.parent.name)
+                continue
+
             for user, folder in self._find_import_folders(root):
                 for name in self._import_names():
                     data = self._load_json_file(folder.joinpath(name))
@@ -202,6 +213,26 @@ class AlignmentLoader(ABC):
             return ['prev_alignments.json', 'prev_alignments_shank1.json']
 
         return [f'prev_alignments_shank{self.import_shank}.json']
+
+    def matches_import_file(self, file: Path) -> bool:
+        """
+        Return whether a chosen alignment file belongs to this shank.
+
+        The file must be one of the names this shank reads, so that the file of one shank is
+        never loaded into another, and must sit in this shank's session folder, so that a file
+        belonging to another session is never read for this one.
+
+        Parameters
+        ----------
+        file : Path
+            The chosen file.
+
+        Returns
+        -------
+        bool
+            True if the file holds the alignments of this shank.
+        """
+        return file.name in self._import_names() and file.parent.name == self.import_folder
 
     def _find_import_folders(self, root: Path) -> list[tuple[str, Path]]:
         """

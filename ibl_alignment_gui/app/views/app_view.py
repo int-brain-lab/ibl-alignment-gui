@@ -313,6 +313,32 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
 
         return Path(selected) if selected else None
 
+    def get_local_alignment_file(self) -> Path | None:
+        """
+        Open a dialog to choose a single file that previous alignments are read from.
+
+        Returns
+        -------
+        Path or None
+            The chosen file, or None if the dialog was cancelled.
+        """
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Select previous alignments file', filter='Alignments (prev_alignments*.json)'
+        )
+
+        return Path(selected) if selected else None
+
+    def local_alignment_warning(self, message: str) -> None:
+        """
+        Show a message box warning that a local alignment file could not be loaded.
+
+        Parameters
+        ----------
+        message: str
+            The message to display to the user
+        """
+        QtWidgets.QMessageBox.warning(self, 'Local Alignments', message)
+
     def trigger_menu_option(self, tab: str, option: str) -> None:
         """
         Trigger the selection of an action in an action group stored in the menubar.

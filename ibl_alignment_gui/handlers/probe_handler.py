@@ -98,7 +98,7 @@ class ProbeHandler(ABC):
         self.selected_shank: str | None = None
         self.selected_idx: int | None = None
 
-        # Folders that previous alignments are additionally read from, chosen at runtime
+        # Folders or files that previous alignments are additionally read from, chosen at runtime
         self.local_alignment_roots: list[Path] = []
 
     # -------------------------------------------------------------------------
@@ -156,9 +156,35 @@ class ProbeHandler(ABC):
             .get_previous_alignments()
         )
 
+    def get_local_alignment_file_shanks(self, file: Path) -> list[str]:
+        """
+        Return the shanks that a chosen local alignment file holds the alignments of.
+
+        The file is matched by its name and the session folder it sits in, so this is the shank
+        it was written for rather than the one that happens to be selected.
+
+        Parameters
+        ----------
+        file : Path
+            The chosen alignment file.
+
+        Returns
+        -------
+        list of str
+            The shanks the file will be loaded into, empty if it belongs to none of them.
+        """
+        return [
+            shank
+            for shank in self.shanks
+            if any(
+                handler.loaders['align'].matches_import_file(file)
+                for handler in self.shanks[shank].values()
+            )
+        ]
+
     def set_local_alignment_roots(self, roots: list[Path]) -> None:
         """
-        Set the local folders that previous alignments are additionally read from.
+        Set the local folders or files that previous alignments are additionally read from.
 
         The folders are handed to the alignment loader of every shank and configuration and the
         previous alignments are reloaded, so that what is on offer reflects the chosen folders
@@ -167,7 +193,7 @@ class ProbeHandler(ABC):
         Parameters
         ----------
         roots : list of Path
-            The chosen folders.
+            The chosen folders and files.
         """
         self.local_alignment_roots = list(roots)
 

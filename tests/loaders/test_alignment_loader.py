@@ -583,6 +583,60 @@ class TestAlignmentLoaderImport(unittest.TestCase):
             self.loader.load_previous_alignments()
             self.assertEqual(self.loader.alignments[key], [[3], [4]])
 
+    def test_import_file(self):
+        """Test a chosen file is read only by the shank it was written for."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        session = self.write_alignments(
+            'jane.doe', {'2026-08-13T15:14:15_jane.doe': [[3], [4]]}, shank=3
+        )
+        self.loader.import_roots = [session.joinpath('prev_alignments_shank3.json')]
+        key = '2026-08-13T15:14:15_jane.doe (local)'
+
+        with self.subTest('shank the file was written for'):
+            self.loader.import_shank = 3
+            self.loader.load_previous_alignments()
+            self.assertEqual(self.loader.alignments[key], [[3], [4]])
+
+        with self.subTest('other shank'):
+            # Not read by another shank, even though its own file sits alongside
+            self.loader.import_shank = 1
+            self.assertListEqual(self.loader.load_previous_alignments(), ['original'])
+
+    def test_import_file_single_shank(self):
+        """Test single shank data reads a chosen file written with or without a shank number."""
+        self.loader.import_shank = None
+        key = '2026-08-13T15:14:15_jane.doe (local)'
+
+        for shank in (None, 1):
+            with self.subTest(shank=shank):
+                session = self.write_alignments(
+                    'jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]}, shank=shank
+                )
+                name = 'prev_alignments.json' if shank is None else 'prev_alignments_shank1.json'
+                self.loader.import_roots = [session.joinpath(name)]
+                self.assertIn(key, self.loader.load_previous_alignments())
+
+    def test_import_file_ignores_other_sessions(self):
+        """Test a chosen file held in the folder of another session is never read."""
+        other = self.root.joinpath('jane.doe', 'HB_011_2024-01-25_probe00')
+        other.mkdir(parents=True)
+        file = other.joinpath('prev_alignments_shank1.json')
+        with open(file, 'w') as f:
+            json.dump({'2026-08-13T15:14:15_jane.doe': [[1], [2]]}, f)
+
+        self.loader.import_roots = [file]
+        self.assertFalse(self.loader.matches_import_file(file))
+        self.assertListEqual(self.loader.load_previous_alignments(), ['original'])
+
+    def test_import_file_tags_key_with_folder_user(self):
+        """Test an alignment in a chosen file is attributed to the owner of its folder."""
+        session = self.write_alignments('jane.doe', {'2026-08-13T15:14:15': [[1], [2]]})
+        self.loader.import_roots = [session.joinpath('prev_alignments_shank1.json')]
+
+        self.assertIn(
+            '2026-08-13T15:14:15_jane.doe (local)', self.loader.load_previous_alignments()
+        )
+
     def test_import_tags_key_with_folder_user(self):
         """Test an alignment saved without a user is attributed to the folder's owner."""
         self.write_alignments('jane.doe', {'2026-08-13T15:14:15': [[1], [2]]})

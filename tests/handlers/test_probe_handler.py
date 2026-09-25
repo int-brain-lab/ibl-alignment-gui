@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from ibl_alignment_gui.handlers.probe_handler import ProbeHandler, ProbeHandlerONE
+from ibl_alignment_gui.loaders.alignment_loader import AlignmentLoaderLocal
 from iblutil.util import Bunch
 
 
@@ -139,3 +140,38 @@ class TestSetLocalAlignmentRoots(unittest.TestCase):
         roots.append(Path('/data/other'))
 
         self.assertListEqual(self.handler.local_alignment_roots, [Path('/data/alignments')])
+
+
+class TestLocalAlignmentFileShanks(unittest.TestCase):
+    """Test finding the shanks that a chosen local alignment file belongs to."""
+
+    def setUp(self):
+        self.handler = ProbeHandlerONE.__new__(ProbeHandlerONE)
+        self.handler.shanks = defaultdict(Bunch)
+        folder = 'HB_011_2024-01-24_probe00'
+        for i, shank in enumerate(('probe00a', 'probe00b', 'probe00c')):
+            loader = AlignmentLoaderLocal(
+                Path('/data'), i, 3, import_folder=folder, import_shank=i + 1
+            )
+            self.handler.shanks[shank]['default'] = MagicMock(loaders={'align': loader})
+        self.folder = Path('/root/jane.doe', folder)
+
+    def test_file_matches_its_own_shank(self):
+        """Test a file is matched to the shank it was written for, whichever is selected."""
+        for n, shank in ((1, 'probe00a'), (3, 'probe00c')):
+            with self.subTest(shank=shank):
+                file = self.folder.joinpath(f'prev_alignments_shank{n}.json')
+                self.assertListEqual(self.handler.get_local_alignment_file_shanks(file), [shank])
+
+    def test_file_matches_no_shank(self):
+        """Test a file for another session, or a shank the probe lacks, matches nothing."""
+        for name, file in (
+            (
+                'other session',
+                Path('/root/jane.doe/HB_011_2024-01-25_probe00/prev_alignments_shank1.json'),
+            ),
+            ('missing shank', self.folder.joinpath('prev_alignments_shank4.json')),
+            ('no shank number', self.folder.joinpath('prev_alignments.json')),
+        ):
+            with self.subTest(name):
+                self.assertListEqual(self.handler.get_local_alignment_file_shanks(file), [])

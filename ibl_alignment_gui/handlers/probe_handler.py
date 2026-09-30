@@ -49,7 +49,7 @@ from one import params
 from one.api import ONE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from ibl_alignment_gui.backends.allen.docdb_api import DocDB
 
@@ -210,7 +210,7 @@ class ProbeHandler(ABC):
             for handler in handlers:
                 handler.loaders['align'].load_previous_alignments()
 
-        self.sync_config_alignments()
+        self.sync_config_alignments(keep_selected=True)
 
     def get_previous_alignments(self) -> dict:
         """
@@ -260,12 +260,71 @@ class ProbeHandler(ABC):
             .get_start_alignment_idx()
         )
 
+    def get_current_alignment_idx(self) -> int:
+        """
+        Return the index of the alignment currently chosen for the selected shank.
+
+        Delegates to the default configuration's alignment loader, falling back to the starting
+        alignment when nothing has been chosen or the choice is no longer on offer.
+
+        Returns
+        -------
+        int
+            Index of the alignment in the alignment keys list.
+        """
+        return (
+            self.get_selected_shank()[self.default_config]
+            .loaders['align']
+            .get_current_alignment_idx()
+        )
+
+    def select_alignments(self, local_shanks: Iterable[str] = ()) -> list[str]:
+        """
+        Choose the alignment of every shank after the alignments on offer have changed.
+
+        The shanks in `local_shanks` are set to the most recent alignment read from a local
+        folder or file, where they have one. Every other shank keeps the alignment it already
+        had wherever that is still on offer, and otherwise goes back to its starting alignment.
+
+        Parameters
+        ----------
+        local_shanks : iterable of str
+            The shanks to set to their most recent local alignment.
+
+        Returns
+        -------
+        list of str
+            The shanks whose chosen alignment changed, and whose reference lines therefore need
+            to be redrawn.
+        """
+        local_shanks = set(local_shanks)
+        changed = []
+
+        for shank in self.shanks:
+            shank_changed = False
+            for handler in self.shanks[shank].values():
+                loader = handler.loaders['align']
+                previous = loader.selected_key
+                loader.get_previous_alignments()
+
+                idx = loader.get_latest_local_alignment_idx() if shank in local_shanks else None
+                if idx is None:
+                    idx = loader.get_current_alignment_idx()
+
+                loader.get_starting_alignment(idx)
+                shank_changed |= loader.selected_key != previous
+
+            if shank_changed:
+                changed.append(shank)
+
+        return changed
+
     def set_init_alignment(self) -> None:
         """Initialise the alignment for the selected shank and each configuration."""
         for config in self.configs:
             self.get_selected_shank()[config].set_init_alignment()
 
-    def sync_config_alignments(self) -> None:
+    def sync_config_alignments(self, keep_selected: bool = False) -> None:
         """
         Make the configurations of a shank share one set of alignments.
 
@@ -281,6 +340,12 @@ class ProbeHandler(ABC):
         The starting alignment of both configurations is set, as the alignments they can choose
         between may have changed.
 
+        Parameters
+        ----------
+        keep_selected : bool
+            Keep the alignment already chosen for each shank wherever it is still on offer,
+            rather than going back to the starting alignment. Used when the alignments are
+            refreshed after the shanks were set up.
         """
         if self.non_default_config is None:
             return
@@ -306,7 +371,11 @@ class ProbeHandler(ABC):
             # The alignments are shared, so the same index applies to both configurations
             default_align.get_previous_alignments()
             other_align.get_previous_alignments()
-            idx = default_align.get_start_alignment_idx()
+            idx = (
+                default_align.get_current_alignment_idx()
+                if keep_selected
+                else default_align.get_start_alignment_idx()
+            )
             default_align.get_starting_alignment(idx)
             other_align.get_starting_alignment(idx)
 

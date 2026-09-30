@@ -175,3 +175,49 @@ class TestLocalAlignmentFileShanks(unittest.TestCase):
         ):
             with self.subTest(name):
                 self.assertListEqual(self.handler.get_local_alignment_file_shanks(file), [])
+
+
+class TestSelectAlignments(unittest.TestCase):
+    """Test choosing the alignment of every shank once the local alignments have changed."""
+
+    def setUp(self):
+        self.handler = ProbeHandlerONE.__new__(ProbeHandlerONE)
+        self.handler.shanks = defaultdict(Bunch)
+        self.loaders = {}
+        alignments = {
+            'probe00a': {
+                '2026-08-20T10:00:00_alyx': [[1], [2]],
+                '2026-08-13T15:14:15_jane (local)': [[3], [4]],
+            },
+            'probe00b': {'2026-08-20T10:00:00_alyx': [[5], [6]]},
+        }
+        for i, (shank, aligns) in enumerate(alignments.items()):
+            loader = AlignmentLoaderLocal(Path('/data'), i, 2)
+            loader.alignments = dict(aligns)
+            loader.get_previous_alignments()
+            loader.get_starting_alignment(0)
+            self.loaders[shank] = loader
+            self.handler.shanks[shank]['default'] = MagicMock(loaders={'align': loader})
+
+    def test_local_shanks_switch_to_local(self):
+        """Test shanks with a local alignment switch to it, and the rest are left alone."""
+        changed = self.handler.select_alignments(['probe00a', 'probe00b'])
+
+        self.assertListEqual(changed, ['probe00a'])
+        self.assertEqual(self.loaders['probe00a'].selected_key, '2026-08-13T15:14:15_jane (local)')
+        np.testing.assert_array_equal(self.loaders['probe00a'].feature_prev, [3])
+        self.assertEqual(self.loaders['probe00b'].selected_key, '2026-08-20T10:00:00_alyx')
+
+    def test_other_shanks_keep_their_alignment(self):
+        """Test shanks not asked to switch keep the alignment they already had."""
+        self.assertListEqual(self.handler.select_alignments(['probe00b']), [])
+        self.assertEqual(self.loaders['probe00a'].selected_key, '2026-08-20T10:00:00_alyx')
+
+    def test_dropped_alignment_falls_back(self):
+        """Test a shank whose chosen alignment is no longer on offer goes back to its start."""
+        loader = self.loaders['probe00a']
+        self.handler.select_alignments(['probe00a'])
+        loader.alignments.pop('2026-08-13T15:14:15_jane (local)')
+
+        self.assertListEqual(self.handler.select_alignments(), ['probe00a'])
+        self.assertEqual(loader.selected_key, '2026-08-20T10:00:00_alyx')

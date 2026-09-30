@@ -930,9 +930,9 @@ class AlignmentGUIController:
         self.view.clear_selection_dropdown('align')
         self.model.set_info(idx)
         self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
-        # Load any recovered alignment if available, then the stored (resolved) alignment,
-        # otherwise the most recent
-        start_alignment_idx = self.model.get_start_alignment_idx()
+        # Show the alignment already chosen for this shank. Until one is chosen this is any
+        # recovered alignment, then the stored (resolved) alignment, otherwise the most recent
+        start_alignment_idx = self.model.get_current_alignment_idx()
         self.model.get_starting_alignment(start_alignment_idx)
         # Highlight the alignment that has been loaded as the selected option in the dropdown
         self.view.set_selection_dropdown('align', start_alignment_idx)
@@ -1031,7 +1031,7 @@ class AlignmentGUIController:
             return
 
         self.local_alignment_roots.append(root)
-        self._apply_local_alignments()
+        self._apply_local_alignments(self._local_alignment_shanks(root))
 
     def on_add_local_alignment_file(self) -> None:
         """
@@ -1046,7 +1046,7 @@ class AlignmentGUIController:
             # Dialog cancelled, or the file is already being read
             return
 
-        if self.model.shanks and not self.model.get_local_alignment_file_shanks(file):
+        if self.model.shanks and not self._local_alignment_shanks(file):
             self.view.local_alignment_warning(
                 f'{file.name} does not hold alignments for any shank of this probe. The file '
                 f'must sit in a folder named after the session and probe, e.g. '
@@ -1055,7 +1055,7 @@ class AlignmentGUIController:
             return
 
         self.local_alignment_roots.append(file)
-        self._apply_local_alignments()
+        self._apply_local_alignments(self._local_alignment_shanks(file))
 
     def on_local_alignment_toggled(self, label: str, checked: bool) -> None:
         """
@@ -1073,26 +1073,51 @@ class AlignmentGUIController:
         root = Path(label)
         if checked and root not in self.local_alignment_roots:
             self.local_alignment_roots.append(root)
+            self._apply_local_alignments(self._local_alignment_shanks(root))
         elif not checked and root in self.local_alignment_roots:
             self.local_alignment_roots.remove(root)
-        else:
-            return
+            self._apply_local_alignments()
 
-        self._apply_local_alignments()
+    def _local_alignment_shanks(self, root: Path) -> list[str]:
+        """
+        Return the shanks that a chosen local folder or file holds the alignments of.
 
-    def _apply_local_alignments(self) -> None:
+        A folder holds the alignments of every shank, whereas a file holds those of only the
+        shank it was written for.
+
+        Parameters
+        ----------
+        root : Path
+            The chosen folder or file.
+
+        Returns
+        -------
+        list of str
+            The shanks that the folder or file is loaded into.
+        """
+        if root.is_file():
+            return self.model.get_local_alignment_file_shanks(root)
+
+        return list(self.model.shanks)
+
+    def _apply_local_alignments(self, local_shanks: list[str] | tuple = ()) -> None:
         """
         Reload the previous alignments from the chosen folders and files and refresh the dropdown.
 
-        The alignment that is selected is kept wherever it is still on offer, so that changing
-        the folders while one is being worked on does not reset its reference lines. Where it is
-        no longer on offer the starting alignment is selected instead.
+        The shanks in `local_shanks` are switched to the most recent alignment read from a local
+        folder or file, so that choosing a folder shows its alignments on every shank straight
+        away. Every other shank keeps the alignment it already had wherever that is still on
+        offer, so that changing the folders while one is being worked on does not reset its
+        reference lines, and otherwise goes back to its starting alignment.
 
         The alignments of a shank are read as soon as its session is selected, so the dropdown
         is refreshed from then on rather than only once the data has been loaded.
-        """
-        selected = self.view.get_selection_dropdown_text('align')
 
+        Parameters
+        ----------
+        local_shanks : list or tuple of str
+            The shanks to switch to their most recent local alignment.
+        """
         self.model.set_local_alignment_roots(self.local_alignment_roots)
         self._rebuild_local_alignment_menu()
 
@@ -1100,20 +1125,19 @@ class AlignmentGUIController:
             # No session has been selected yet, so there is nothing to refresh
             return
 
-        keys = self.model.get_previous_alignments()
-        self.view.populate_selection_dropdown('align', keys)
+        changed = self.model.select_alignments(local_shanks)
 
-        if selected in keys:
-            # Setting the dropdown does not emit activated, so the alignment on display and the
-            # reference lines drawn on it are left untouched. The model is pointed at the new
-            # index by hand, as the position of the alignment in the list may have moved.
-            idx = keys.index(selected)
-            self.view.set_selection_dropdown('align', idx)
-            self.model.get_starting_alignment(idx)
-        else:
-            idx = self.model.get_start_alignment_idx()
-            self.view.set_selection_dropdown('align', idx)
-            self.on_alignment_selected(idx)
+        # Setting the dropdown does not emit activated, so it is pointed at the alignment chosen
+        # for the selected shank by hand
+        self.view.populate_selection_dropdown('align', self.model.get_previous_alignments())
+        self.view.set_selection_dropdown('align', self.model.get_current_alignment_idx())
+
+        if self.loaded is not None and changed:
+            # Redraw the reference lines of only the shanks whose alignment changed
+            self.remove_reference_lines_from_display(shanks=changed)
+            self.reset_reference_line_arrays(shanks=changed)
+            self.set_init_reference_lines(shanks=changed)
+            self.update_plots(shanks=changed)
 
     def on_config_selected(self, idx: int, init: bool = False) -> None:
         """
@@ -1971,7 +1995,7 @@ class AlignmentGUIController:
     @shank_loop
     def set_init_reference_lines(self, items: ShankController, **kwargs) -> None:
         """Find the initial alignment for specified shanks and creates reference lines."""
-        self.model.set_init_alignment()
+        items.model.set_init_alignment()
         feature_prev = items.model.feature_prev
         if np.any(feature_prev):
             self.create_reference_lines(feature_prev[1:-1] * 1e6, items)

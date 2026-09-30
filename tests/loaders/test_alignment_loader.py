@@ -637,6 +637,44 @@ class TestAlignmentLoaderImport(unittest.TestCase):
             '2026-08-13T15:14:15_jane.doe (local)', self.loader.load_previous_alignments()
         )
 
+    def test_current_alignment_kept(self):
+        """Test the chosen alignment is kept when the alignments are reloaded."""
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.loader.import_roots = [self.root]
+        keys = self.loader.load_previous_alignments()
+        key = '2026-08-13T15:14:15_jane.doe (local)'
+
+        self.loader.get_starting_alignment(keys.index(key))
+        self.assertEqual(self.loader.selected_key, key)
+
+        with self.subTest('still on offer'):
+            # A newer alignment moves the chosen one down the list
+            self.write_alignments('alex.roe', {'2026-08-14T09:00:00_alex.roe': [[3], [4]]})
+            keys = self.loader.load_previous_alignments()
+            self.assertEqual(keys[self.loader.get_current_alignment_idx()], key)
+
+        with self.subTest('no longer on offer'):
+            self.loader.import_roots = []
+            self.loader.load_previous_alignments()
+            self.assertEqual(
+                self.loader.get_current_alignment_idx(), self.loader.get_start_alignment_idx()
+            )
+
+    def test_latest_local_alignment_idx(self):
+        """Test the most recent local alignment is found, and None when there are none."""
+        alyx = {'2026-08-20T10:00:00_test_user': [[7], [8]]}
+        self.one_mock.alyx.rest.return_value = [{'id': uuid.uuid4(), 'json': dict(alyx)}]
+        self.assertIsNone(self.loader.get_latest_local_alignment_idx())
+
+        self.write_alignments('jane.doe', {'2026-08-13T15:14:15_jane.doe': [[1], [2]]})
+        self.write_alignments('alex.roe', {'2026-08-14T09:00:00_alex.roe': [[3], [4]]})
+        self.loader.import_roots = [self.root]
+        keys = self.loader.load_previous_alignments()
+
+        # The newer alyx alignment is passed over for the newest local one
+        idx = self.loader.get_latest_local_alignment_idx()
+        self.assertEqual(keys[idx], '2026-08-14T09:00:00_alex.roe (local)')
+
     def test_import_tags_key_with_folder_user(self):
         """Test an alignment saved without a user is attributed to the folder's owner."""
         self.write_alignments('jane.doe', {'2026-08-13T15:14:15': [[1], [2]]})

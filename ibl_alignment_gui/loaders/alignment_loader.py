@@ -76,6 +76,9 @@ class AlignmentLoader(ABC):
         self.feature_prev: np.ndarray | None = None
         self.track_prev: np.ndarray | None = None
         self.stored_alignment_key: str | None = None
+        # The key of the alignment last chosen as the starting alignment, kept so that the choice
+        # survives the alignment keys being rebuilt or the shank being switched away from
+        self.selected_key: str | None = None
 
         # Previous alignments held on the local file system, merged in alongside those of the
         # primary source. The folders are chosen at runtime, so they are set by the probe handler
@@ -387,6 +390,8 @@ class AlignmentLoader(ABC):
             self.feature_prev = np.array(self.alignments[self.alignment_keys[idx]][0])
             self.track_prev = np.array(self.alignments[self.alignment_keys[idx]][1])
 
+        self.selected_key = self.alignment_keys[idx]
+
     def get_stored_alignment_idx(self) -> int:
         """
         Return the index of the stored (resolved) alignment in the alignment keys list.
@@ -422,6 +427,39 @@ class AlignmentLoader(ABC):
             return self.alignment_keys.index(self.recovered_key)
 
         return self.get_stored_alignment_idx()
+
+    def get_current_alignment_idx(self) -> int:
+        """
+        Return the index of the alignment that is currently chosen.
+
+        Falls back to the starting alignment when nothing has been chosen yet, or when the
+        chosen alignment is no longer on offer.
+
+        Returns
+        -------
+        int
+            Index of the alignment in ``self.alignment_keys``.
+        """
+        if self.selected_key is not None and self.selected_key in self.alignment_keys:
+            return self.alignment_keys.index(self.selected_key)
+
+        return self.get_start_alignment_idx()
+
+    def get_latest_local_alignment_idx(self) -> int | None:
+        """
+        Return the index of the most recent alignment read from a local folder or file.
+
+        The alignment keys are sorted newest first, so this is the first local one.
+
+        Returns
+        -------
+        int or None
+            Index of the alignment in ``self.alignment_keys``, or None if none were read.
+        """
+        return next(
+            (i for i, key in enumerate(self.alignment_keys) if str(key).endswith(LOCAL_SUFFIX)),
+            None,
+        )
 
     @staticmethod
     def _load_json_file(file: Path) -> dict[str, Any] | None:

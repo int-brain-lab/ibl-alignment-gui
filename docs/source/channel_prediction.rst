@@ -11,9 +11,11 @@ Two independent models are provided:
 **Inference model**
     A region classifier that predicts a region for each channel directly from its features.
 
-**Spatial encoder**
-    A model that predicts the features expected along the probe track and warps the recording onto
-    that prediction, giving a region for each channel and an estimate of the alignment itself.
+**Auto-alignment**
+    The Ephys Atlas channel-level model predicts the features expected along the probe's histology
+    track; the recording is warped onto that prediction, giving an initial alignment of the probe
+    along the track, a region for each channel and the model's confidence in each channel. It only
+    needs the recording's features and the histology track, so it can be used on a new recording.
 
 .. note::
    The plugin is only available when the optional ``ephysatlas`` dependencies are installed. Without
@@ -99,24 +101,37 @@ Once the features are available, load a model from the ``Plugins -> Channel Pred
     Select the directory holding the trained classifier. The directory must contain a ``folds``
     subdirectory (``folds/FOLD00/`` and so on).
 
-**Load spatial model**
-    A dialog with two rows, each with its own ``Browse…`` button:
+**Load alignment model (Hugging Face)…**
+    The released channel-level model, loaded with ``ephysatlas.load_pretrained``: a Hugging Face
+    repository (``int-brain-lab/ea-encoder-channel`` by default) and release tag, or a local
+    release directory. It is downloaded once and cached; it ships its molecular-context volumes
+    and training neighbour bank, so nothing else is needed. Requires ``torch``.
 
-    * **Model** — the directory holding the encoder checkpoint, which must contain
-      ``SE_model_*.pt``
-    * **Features** — the directory holding the feature tables the encoder was trained against,
-      which must contain ``raw_ephys_features*.pqt``
+To avoid selecting the same model every time, the GUI can be launched with it already filled in.
+See ``examples/launch_with_local_prediction.py`` in the repository, which opens a session and
+pre-populates the model paths so the dialogs are skipped.
 
-Building the spatial encoder takes a little time, as the model and its reference bank are read in;
-progress is reported in the terminal.
 
-.. note::
-   Downloading the trained models automatically, rather than pointing the GUI at a local copy, is
-   coming soon. Until the models are published, both must be loaded from a local directory.
+Auto-alignment
+--------------
 
-To avoid selecting the same directories every time, the GUI can be launched with the paths already
-filled in. See ``examples/launch_with_local_prediction.py`` in the repository, which opens a
-session and pre-populates the model paths so the dialogs are skipped.
+Selecting ``Region Plots -> Auto-alignment`` (loading the model first if needed) aligns each shank
+behind a progress dialog and opens a result window with:
+
+- the histology track (top to bottom of the brain), the planned trajectory when the features table
+  has one, and the inferred alignment, on a coronal and a sagittal slice
+- the cost matrix of every recorded channel against every track sample, with the alignment path
+- stripes along the histology track: its atlas regions, then the confidence and the recorded
+  features where the probe was aligned, next to the features the model predicts along the whole
+  track
+
+Each shank is aligned once. Selecting the option again re-opens a result window that was closed
+(without re-aligning); a new model or features file starts over.
+
+The region column shows either the predicted regions or the alignment confidence along the probe
+(green high, red low; grey beyond the probe), chosen from
+``Plugins -> Channel Prediction -> Auto-alignment colours``. Switching redraws the column without
+re-aligning.
 
 
 Where the results appear
@@ -132,7 +147,7 @@ The predictions and the features are added to three of the menu bars:
      - Added entries
    * - ``Region Plots``
      - ``Inference Model`` and ``Inference Cumulative`` for the inference model, and
-       ``Spatial Encoder`` for the spatial encoder
+       ``Auto-alignment`` for the auto-alignment
    * - ``Feature Plots``
      - A single ``Ephys Atlas`` entry, tiling every feature side by side
    * - ``Probe Plots``

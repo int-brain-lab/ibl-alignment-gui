@@ -22,13 +22,13 @@ Run with::
         --yaml /path/to/session/alignment_gui_probe00.yaml \
         --model-dir /path/to/models/<vintage>_Cosmos_<run-name>
 
-To pre-wire the Spatial Encoder (automatic alignment) as well, pass both encoder options::
+The automatic-alignment model (``Load alignment model (Hugging Face)...``) loads from the Hub;
+to use a local release of it instead, pre-wire it with ``--encoder-dir``::
 
     python launch_with_local_prediction.py \
         --yaml /path/to/session/alignment_gui_probe00.yaml \
         --model-dir /path/to/models/<vintage>_Cosmos_<run-name> \
-        --encoder-dir /path/to/encoding_models/<vintage> \
-        --encoder-data /path/to/analysis/features
+        --encoder-dir /path/to/ea-encoder-channel/<vintage>
 
 """
 
@@ -47,7 +47,8 @@ from ibl_alignment_gui.plugins.channel_prediction import PLUGIN_NAME
 
 # Model locations are machine-specific, so they are passed on the command line rather than
 # defaulted here. Features normally live in the session YAML, so --features is only an override
-# for YAMLs that do not specify a `features` dataset.
+# for YAMLs that do not specify a `features` dataset. The automatic-alignment model comes from the
+# Hugging Face Hub unless --encoder-dir points at a local release.
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -69,16 +70,9 @@ def parse_args() -> argparse.Namespace:
              '`features` dataset).')
     parser.add_argument(
         '--encoder-dir', type=Path, default=None,
-        help='Local Spatial Encoder model dir (SE_model_*.pt + *_vol_pca.npy). Only needed to '
-             'pre-wire the Spatial Encoder; must be given together with --encoder-data.')
-    parser.add_argument(
-        '--encoder-data', type=Path, default=None,
-        help='Spatial Encoder reference-bank root, i.e. the dir containing '
-             '<project>/<vintage>/agg_full/*.pqt. Must be given together with --encoder-dir.')
-    args = parser.parse_args()
-    if (args.encoder_dir is None) != (args.encoder_data is None):
-        parser.error('--encoder-dir and --encoder-data must be given together')
-    return args
+        help='Local release directory of the channel-level alignment model '
+             '(int-brain-lab/ea-encoder-channel layout). Default: the Hugging Face Hub release.')
+    return parser.parse_args()
 
 
 # %% Path validation
@@ -118,12 +112,11 @@ def main() -> None:
     plugin_state['Inference'] = {'local_inference_dir': args.model_dir, 'model_name': None, 'model': None}
     if args.features is not None:
         plugin_state['features_path'] = args.features
-    # Pre-wire the Spatial Encoder (automatic alignment) too, when its paths were supplied.
+    # Pre-wire the automatic-alignment model at a local release too, so it runs offline.
     if args.encoder_dir is not None:
-        plugin_state['Encoding'] = {'local_encoder_dir': args.encoder_dir,
-                                    'local_encoder_data': args.encoder_data,
-                                    'model_name': None,
-                                    'model': None}
+        from ephysatlas.alignment import VINTAGE  # noqa: PLC0415 - heavy, only when pre-wiring
+
+        plugin_state['Encoding'] = {'source': (str(args.encoder_dir), VINTAGE), 'model': None}
     logger.info(
         'Pre-populated %r plugin. Click Plugins -> %s -> Inference Model to run inference.',
         PLUGIN_NAME, PLUGIN_NAME)

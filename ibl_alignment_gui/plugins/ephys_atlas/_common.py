@@ -30,6 +30,18 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_KEY = 'Channel Prediction'
 
+# Auto-alignment: its region-panel option (also the per-shank prediction cache key) and how its
+# column is coloured -- the predicted regions, or the alignment confidence along the probe.
+AUTO_ALIGNMENT_KEY = 'Auto-alignment'
+DISPLAY_STATE_KEY = 'auto_alignment_display'
+DISPLAY_REGIONS = 'Regions'
+DISPLAY_CONFIDENCE = 'Confidence'
+
+
+def auto_alignment_display(controller: AlignmentGUIController) -> str:
+    """How the auto-alignment column is coloured: ``DISPLAY_REGIONS`` or ``DISPLAY_CONFIDENCE``."""
+    return plugin_state(controller).get(DISPLAY_STATE_KEY) or DISPLAY_REGIONS
+
 
 def plugin_state(controller: AlignmentGUIController) -> Bunch:
     """Return the Channel Prediction plugin state Bunch.

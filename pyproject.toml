@@ -28,7 +28,7 @@ dependencies = [
   "pydantic",
   "pyyaml",
   "requests",
-  "ibl-datoviz @ git+https://github.com/int-brain-lab/ibl-datoviz.git"
+  "ibl-datoviz @ git+https://github.com/int-brain-lab/ibl-datoviz.git@4e07085a96f83519ef78a163f4f040a90ae250dd"
 ]
 readme = "README.md"
 license = {text = "MIT"}

@@ -86,6 +86,11 @@ probe, configuration or top-level ``path``.
 Alternatively a features file can be chosen at runtime from
 ``Plugins -> Channel Prediction -> Load features file…``.
 
+For an IBL insertion loaded from Alyx, the models otherwise use the ephys-atlas feature table of
+the vintage they were trained on (e.g. ``2026_W26``), which may differ from the latest table shown
+in the feature plots. A file chosen from the menu always takes precedence. A local file must hold
+the features of the model's vintage; missing columns are reported when the model runs.
+
 .. note::
    A features file chosen from the menu applies to the session that is currently loaded only. It is
    cleared whenever new data is loaded, so for a session you return to it is better to add the
@@ -97,9 +102,13 @@ Loading a model
 
 Once the features are available, load a model from the ``Plugins -> Channel Prediction`` menu:
 
-**Load inference model**
-    Select the directory holding the trained classifier. The directory must contain a ``folds``
-    subdirectory (``folds/FOLD00/`` and so on).
+**Load inference model (Hugging Face)…**
+    The released channel-level region classifier, loaded with
+    ``ephysatlas.regionclassifier.RegionClassifier``: a Hugging Face repository
+    (``int-brain-lab/ea-decoder-channel-xgboost`` by default) and release tag (by default the
+    tag of the model's vintage, ``2026_W26``), or a local release directory containing its
+    ``ephysatlas_model.json``. It is downloaded once and cached. Models in the older
+    ``folds/FOLD0X/meta.yaml`` layout (previously downloaded from S3) are no longer supported.
 
 **Load alignment model (Hugging Face)…**
     The released channel-level model, loaded with ``ephysatlas.load_pretrained``: a Hugging Face

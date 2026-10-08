@@ -22,6 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ShankView.plot_histology(..., boundaries=False)` draws a column without region boundary lines;
   `AppView.triggering_menu_option` tells callbacks a programmatic menu selection from a user's.
 
+### Changed
+- The inference model (`Load inference model (Hugging Face)…`) is the released region classifier
+  `int-brain-lab/ea-decoder-channel-xgboost`, loaded with `ephysatlas.regionclassifier.RegionClassifier`
+  from the Hugging Face Hub (repository and release tag, by default the `2026_W26` vintage tag) or a
+  local release directory holding its `ephysatlas_model.json`. Its `void_fluid` class is now drawn with its own colour.
+- The inference and auto-alignment models run on the ephys-atlas feature table matching the
+  model's vintage (its manifest `vintage`, e.g. `2026_W26`), not the latest table the GUI loads for
+  its feature plots, whose feature set can differ. Auto-alignment takes the feature list from the
+  loaded release rather than the code's `FEATURE_LIST`, so older release tags work. Missing feature
+  columns are reported in a dialog instead of raising.
+- A features file chosen with `Load features file…` is used by both models, also for an IBL
+  insertion (auto-alignment previously used the model's feature release instead).
+
+### Removed
+- The S3 inference models and local models in the old `folds/FOLD0X/meta.yaml` layout; these no
+  longer load with the current ibleatools.
+
 ## [0.1.0a1] - 2026-08-21
 
 ### Added

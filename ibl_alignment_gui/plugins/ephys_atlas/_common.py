@@ -3,8 +3,8 @@ Provider-agnostic helpers shared by the channel-prediction model backends.
 
 Both :mod:`ibl_alignment_gui.plugins.ephys_atlas.inference` (XGBoost) and
 :mod:`ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder` (torch) cache their state on the
-Channel Prediction plugin, resolve a ONE/Alyx connection the same way, decide when to rebuild a
-model from cached state, and clear per-shank prediction caches identically. Those pieces live here.
+Channel Prediction plugin, check for features the same way and clear per-shank prediction caches
+identically. Those pieces live here.
 
 This module intentionally avoids the heavy/optional ``torch`` and ``ephysatlas`` imports so it can
 be imported in offline mode alongside ``inference`` (which defers those imports itself).
@@ -12,12 +12,13 @@ be imported in offline mode alongside ``inference`` (which defers those imports 
 
 from __future__ import annotations
 
+import copy
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
-from one.api import ONE
+from qtpy import QtCore, QtWidgets
+
+from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal, FeatureLoaderOne
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -81,6 +82,22 @@ def is_model_loaded(controller: AlignmentGUIController, state_key: str) -> bool:
     return bool(state) and state.get('model') is not None
 
 
+def has_local_features(controller: AlignmentGUIController) -> bool:
+    """Return whether the user chose a features file with ``Load features file…``.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+
+    Returns
+    -------
+    bool
+        True when a local features file overrides the session's features, else False.
+    """
+    return plugin_state(controller).get('features_path') is not None
+
+
 def has_features(controller: AlignmentGUIController) -> bool:
     """Return whether per-channel features are available to run a prediction on.
 
@@ -97,7 +114,7 @@ def has_features(controller: AlignmentGUIController) -> bool:
     bool
         True when features are available for at least one loaded shank, else False.
     """
-    if plugin_state(controller).get('features_path') is not None:
+    if has_local_features(controller):
         return True
     for shank_dict in controller.model.shanks.values():
         for shank_handler in shank_dict.values():
@@ -108,73 +125,6 @@ def has_features(controller: AlignmentGUIController) -> bool:
             if features is not None and features.get('exists', False):
                 return True
     return False
-
-
-def has_one_connection(
-    controller: AlignmentGUIController,
-    base_url: str = 'https://alyx.internationalbrainlab.org',
-) -> tuple[bool, ONE | None]:
-    """Return whether a ONE/Alyx connection to ``base_url`` is available.
-
-    Reuses the data backend's ONE when it already targets ``base_url``; otherwise tries to open a
-    standalone connection.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    base_url : str
-        Alyx database URL the connection must target.
-
-    Returns
-    -------
-    tuple of (bool, ONE or None)
-        ``(True, one)`` when a connection is available, otherwise ``(False, None)``.
-    """
-    one = getattr(controller.model, 'one', None)
-    if one is None or one.alyx.base_url != base_url:
-        try:
-            one = ONE(base_url=base_url, silent=True)
-        except Exception:
-            return False, None
-    return True, one
-
-
-def s3_cache_root(one: ONE) -> Path:
-    """Return the local cache directory used for S3 model/feature downloads.
-
-    Parameters
-    ----------
-    one : ONE
-        ONE connection whose cache directory roots the download tree.
-
-    Returns
-    -------
-    Path
-        The ``ephys_atlas_features`` directory under the ONE cache.
-    """
-    return Path(one.cache_dir).joinpath('ephys_atlas_features')
-
-
-def needs_reload(current_model: dict, **expected: object) -> bool:
-    """Return whether a cached model must be (re)built for a newly-chosen source.
-
-    Parameters
-    ----------
-    current_model : dict
-        The cached model state, holding a ``model`` entry plus the source keys to compare.
-    expected
-        The newly-selected source values keyed by their cache-state name (e.g.
-        ``model_name='…'`` or ``local_inference_dir=Path(…)``).
-
-    Returns
-    -------
-    bool
-        True when no model is built yet or any ``expected`` value differs from the cached one.
-    """
-    if current_model['model'] is None:
-        return True
-    return any(current_model.get(key) != value for key, value in expected.items())
 
 
 def clear_predictions(items: ShankController, *keys: str) -> None:
@@ -226,4 +176,60 @@ def _get_features_df(
         items.model.raw_data['features'] = feats
         if not feats.get('exists', False):
             return None
+    return feats['df']
+
+
+def features_for_vintage(
+    controller: AlignmentGUIController, items: ShankController, vintage: str | None
+) -> pd.DataFrame | None:
+    """Return the shank's features from the feature table a model was trained on.
+
+    The GUI loads the latest ephys-atlas feature table, whose feature set can differ from the one
+    a model was trained on (columns are renamed or dropped between vintages). When the features
+    come from ONE, the table labelled ``vintage`` is loaded instead, and cached on the shank so the
+    feature plots keep the latest table. A local features file (from the session or chosen with
+    ``Load features file…``) is used as is.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    items : ShankController
+        The shank being predicted on.
+    vintage : str or None
+        Label of the feature table the model was trained on (e.g. ``2026_W26``); None uses the
+        GUI's features.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The features DataFrame, or None when no features are available.
+    """
+    loader = items.model.loaders.get('features')
+    if (
+        has_local_features(controller)
+        or not isinstance(loader, FeatureLoaderOne)
+        or vintage is None
+        or loader.feature_version == vintage
+    ):
+        return _get_features_df(controller, items)
+
+    cache = items.model.raw_data.setdefault('model_features', {})
+    if vintage not in cache:
+        vintage_loader = copy.copy(loader)
+        vintage_loader.feature_version = vintage
+        logger.info(
+            'Loading %s features for the model (GUI features are %s)',
+            vintage,
+            loader.feature_version,
+        )
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            cache[vintage] = vintage_loader.load_features()
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+    feats = cache[vintage]
+    if not feats.get('exists', False):
+        logger.warning('No %s features for this insertion; using the GUI features', vintage)
+        return _get_features_df(controller, items)
     return feats['df']

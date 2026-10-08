@@ -73,7 +73,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
-    menu_actions = [('Load inference model', _load_inference_model)]
+    menu_actions = [('Load inference model (Hugging Face)…', _load_inference_model)]
     # The alignment model needs torch; only offer it when torch is installed.
     if importlib.util.find_spec('torch') is not None:
         menu_actions.append(('Load alignment model (Hugging Face)…', _load_spatial_model))
@@ -450,8 +450,7 @@ def compute_inference_predictions(
     if result is None:
         return
 
-    region_ids, depths = result
-    regions = controller.model.brain_atlas.regions.get(region_ids)
+    regions, depths = result
 
     return get_region_boundaries(regions, depths / M_TO_UM)
 

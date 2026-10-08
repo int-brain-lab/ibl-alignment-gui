@@ -8,7 +8,8 @@ This is a thin wrapper around :class:`AlignmentGUIController` that does **not** 
 It simply:
 
 1. Builds the controller in offline mode (optionally loading a YAML session config via ``--yaml``).
-2. Sets the *Channel Prediction* plugin's ``local_model_dir`` / ``features_path`` so the dialogs
+2. Pre-sets the *Channel Prediction* plugin's inference-model source (a local release, or the
+   Hugging Face Hub release when ``--model-dir`` is omitted) and ``features_path`` so the dialogs
    are skipped and inference runs straight away.
 3. Shows the window and enters the Qt event loop.
 
@@ -20,14 +21,16 @@ Run with::
 
     python launch_with_local_prediction.py \
         --yaml /path/to/session/alignment_gui_probe00.yaml \
-        --model-dir /path/to/models/<vintage>_Cosmos_<run-name>
+        --model-dir /path/to/ea-decoder-channel-xgboost/<vintage>
 
-The automatic-alignment model (``Load alignment model (Hugging Face)...``) loads from the Hub;
-to use a local release of it instead, pre-wire it with ``--encoder-dir``::
+``--model-dir`` is a local release of ``int-brain-lab/ea-decoder-channel-xgboost`` (it holds
+``ephysatlas_model.json``); omit it to download the Hub release. The automatic-alignment model
+(``Load alignment model (Hugging Face)...``) loads from the Hub; to use a local release of it
+instead, pre-wire it with ``--encoder-dir``::
 
     python launch_with_local_prediction.py \
         --yaml /path/to/session/alignment_gui_probe00.yaml \
-        --model-dir /path/to/models/<vintage>_Cosmos_<run-name> \
+        --model-dir /path/to/ea-decoder-channel-xgboost/<vintage> \
         --encoder-dir /path/to/ea-encoder-channel/<vintage>
 
 """
@@ -62,8 +65,9 @@ def parse_args() -> argparse.Namespace:
         '--yaml', '-y', type=Path, default=None,
         help='Path to a session YAML config (same format as `alignment-gui -y`).')
     parser.add_argument(
-        '--model-dir', type=Path, required=True,
-        help='Trained inference model directory (containing folds/FOLD00/ or FOLD00/).')
+        '--model-dir', type=Path, default=None,
+        help='Local release directory of the inference model (containing ephysatlas_model.json). '
+             'Default: the Hugging Face Hub release.')
     parser.add_argument(
         '--features', type=Path, default=None,
         help='Optional per-channel features parquet override (only needed if the YAML has no '
@@ -76,15 +80,13 @@ def parse_args() -> argparse.Namespace:
 
 
 # %% Path validation
-def validate_paths(model_dir: Path, features_path: Path | None) -> None:
-    """Sanity-check the model directory (and the features override, if given) before launching."""
-    has_folds = (model_dir / 'folds' / 'FOLD00').is_dir() or (model_dir / 'FOLD00').is_dir()
-    if not has_folds:
-        raise SystemExit(
-            f'Model directory has no "folds/FOLD00" (or "FOLD00") subdirectory:\n  {model_dir}')
+def validate_paths(model_dir: Path | None, features_path: Path | None) -> None:
+    """Sanity-check the model directory and the features override, if given, before launching."""
+    if model_dir is not None and not (model_dir / 'ephysatlas_model.json').is_file():
+        raise SystemExit(f'Model directory has no ephysatlas_model.json:\n  {model_dir}')
     if features_path is not None and not features_path.is_file():
         raise SystemExit(f'Features file not found:\n  {features_path}')
-    logger.info('Model dir:     %s', model_dir)
+    logger.info('Model dir:     %s', model_dir or 'Hugging Face Hub release')
     if features_path is not None:
         logger.info('Features file: %s (override)', features_path)
 
@@ -109,7 +111,11 @@ def main() -> None:
     # keys with None. Pre-set the model dir (and a features override if given) so the file dialogs
     # are skipped on the first click. Features normally come from the session YAML.
     plugin_state = controller.plugins[PLUGIN_NAME]
-    plugin_state['Inference'] = {'local_inference_dir': args.model_dir, 'model_name': None, 'model': None}
+    from ibl_alignment_gui.plugins.ephys_atlas import inference  # noqa: PLC0415
+
+    model_source = str(args.model_dir) if args.model_dir is not None else inference.MODEL_REPO_ID
+    plugin_state[inference.MODEL_NAME] = {
+        'source': (model_source, inference.MODEL_REVISION), 'model': None}
     if args.features is not None:
         plugin_state['features_path'] = args.features
     # Pre-wire the automatic-alignment model at a local release too, so it runs offline.

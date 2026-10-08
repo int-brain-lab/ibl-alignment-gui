@@ -23,12 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AppView.triggering_menu_option` tells callbacks a programmatic menu selection from a user's.
 
 ### Changed
-- The inference model (`Load inference model (Hugging Face)…`) is the released region classifier
-  `int-brain-lab/ea-decoder-channel-xgboost`, loaded with `ephysatlas.regionclassifier.RegionClassifier`
-  from the Hugging Face Hub (repository and release tag, by default the `2026_W26` vintage tag) or a
-  local release directory holding its `ephysatlas_model.json`. Its `void_fluid` class is now drawn with its own colour.
-- The inference and auto-alignment models run on the ephys-atlas feature table matching the
-  model's vintage (its manifest `vintage`, e.g. `2026_W26`), not the latest table the GUI loads for
+- The inference model is replaced by two released region decoders, `XGBoost region prediction`
+  (`int-brain-lab/ea-decoder-channel-xgboost`) and `ProbeTransformer region prediction`
+  (`int-brain-lab/ea-decoder-channel-transformer`, needs torch), both loaded with
+  `ephysatlas.load_pretrained` from the Hugging Face Hub (release tag `2026_W39` by default) or a
+  local release directory holding its `ephysatlas_model.json`, and run with their `predict`. Each
+  has its own `Load … model (Hugging Face)…` menu entry and two Region Plots entries: the most
+  probable region and the `(cumulative)` probabilities. The `void_fluid` class is drawn with its
+  own colour.
+- The region decoders and auto-alignment model run on the ephys-atlas feature table matching the
+  model's vintage (its manifest `vintage`, e.g. `2026_W39`), not the latest table the GUI loads for
   its feature plots, whose feature set can differ. Auto-alignment takes the feature list from the
   loaded release rather than the code's `FEATURE_LIST`, so older release tags work. Missing feature
   columns are reported in a dialog instead of raising.
@@ -36,8 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   insertion (auto-alignment previously used the model's feature release instead).
 
 ### Removed
-- The S3 inference models and local models in the old `folds/FOLD0X/meta.yaml` layout; these no
-  longer load with the current ibleatools.
+- The `Inference Model` / `Inference Cumulative` region entries and `Load inference model…`, the
+  S3 inference models and local models in the old `folds/FOLD0X/meta.yaml` layout (these no longer
+  load with the current ibleatools).
 
 ## [0.1.0a1] - 2026-08-21
 

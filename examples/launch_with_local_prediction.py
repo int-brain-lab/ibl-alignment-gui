@@ -8,30 +8,28 @@ This is a thin wrapper around :class:`AlignmentGUIController` that does **not** 
 It simply:
 
 1. Builds the controller in offline mode (optionally loading a YAML session config via ``--yaml``).
-2. Pre-sets the *Channel Prediction* plugin's inference-model source (a local release, or the
-   Hugging Face Hub release when ``--model-dir`` is omitted) and ``features_path`` so the dialogs
-   are skipped and inference runs straight away.
+2. Pre-sets the *Channel Prediction* plugin's model sources (the local releases given with
+   ``--model-dir``, otherwise the Hugging Face Hub releases of the region decoders) and
+   ``features_path`` so the dialogs are skipped and inference runs straight away.
 3. Shows the window and enters the Qt event loop.
 
 After the GUI opens (the session auto-loads when ``--yaml`` is given), click
-``Plugins -> Channel Prediction -> Inference Model`` (or ``Inference Cumulative``) to overlay the
-predicted regions on the reference histology.
+``Region Plots -> XGBoost region prediction`` (or ``ProbeTransformer region prediction``, or
+their ``(cumulative)`` entries) to overlay the predicted regions on the reference histology.
 
 Run with::
 
     python launch_with_local_prediction.py \
         --yaml /path/to/session/alignment_gui_probe00.yaml \
-        --model-dir /path/to/ea-decoder-channel-xgboost/<vintage>
-
-``--model-dir`` is a local release of ``int-brain-lab/ea-decoder-channel-xgboost`` (it holds
-``ephysatlas_model.json``); omit it to download the Hub release. The automatic-alignment model
-(``Load alignment model (Hugging Face)...``) loads from the Hub; to use a local release of it
-instead, pre-wire it with ``--encoder-dir``::
-
-    python launch_with_local_prediction.py \
-        --yaml /path/to/session/alignment_gui_probe00.yaml \
         --model-dir /path/to/ea-decoder-channel-xgboost/<vintage> \
-        --encoder-dir /path/to/ea-encoder-channel/<vintage>
+        --model-dir /path/to/ea-decoder-channel-transformer/<vintage> \
+        --model-dir /path/to/ea-encoder-channel/<vintage>
+
+``--model-dir`` is a local release directory (it holds ``ephysatlas_model.json``) and can be given
+once per model: the release's manifest ``model_class`` tells which model it is -- the XGBoost or
+ProbeTransformer region decoder, or the automatic-alignment model (``ea-encoder-channel``). A
+region decoder without a ``--model-dir`` is downloaded from the Hugging Face Hub; the
+automatic-alignment model then loads from the Hub through its own dialog.
 
 """
 
@@ -39,6 +37,7 @@ instead, pre-wire it with ``--encoder-dir``::
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -47,11 +46,16 @@ from qtpy import QtWidgets
 
 from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 from ibl_alignment_gui.plugins.channel_prediction import PLUGIN_NAME
+from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODERS, MODEL_REVISION
 
 # Model locations are machine-specific, so they are passed on the command line rather than
 # defaulted here. Features normally live in the session YAML, so --features is only an override
-# for YAMLs that do not specify a `features` dataset. The automatic-alignment model comes from the
-# Hugging Face Hub unless --encoder-dir points at a local release.
+# for YAMLs that do not specify a `features` dataset.
+
+# The manifest ``model_class`` of the automatic-alignment model (ea-encoder-channel), and the
+# plugin-state key it is cached under (spatial_encoder.MODEL_NAME; not imported, it pulls torch).
+ENCODER_MODEL_CLASS = 'NeighborInpaintingModel'
+ENCODER_STATE_KEY = 'Encoding'
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -65,28 +69,62 @@ def parse_args() -> argparse.Namespace:
         '--yaml', '-y', type=Path, default=None,
         help='Path to a session YAML config (same format as `alignment-gui -y`).')
     parser.add_argument(
-        '--model-dir', type=Path, default=None,
-        help='Local release directory of the inference model (containing ephysatlas_model.json). '
-             'Default: the Hugging Face Hub release.')
+        '--model-dir', type=Path, action='append', default=[],
+        help='Local release directory of a model (containing ephysatlas_model.json); repeat it '
+             'for several models. Which model it is comes from the manifest model_class. '
+             'Default: the Hugging Face Hub releases of the region decoders.')
     parser.add_argument(
         '--features', type=Path, default=None,
         help='Optional per-channel features parquet override (only needed if the YAML has no '
              '`features` dataset).')
-    parser.add_argument(
-        '--encoder-dir', type=Path, default=None,
-        help='Local release directory of the channel-level alignment model '
-             '(int-brain-lab/ea-encoder-channel layout). Default: the Hugging Face Hub release.')
     return parser.parse_args()
 
 
 # %% Path validation
-def validate_paths(model_dir: Path | None, features_path: Path | None) -> None:
-    """Sanity-check the model directory and the features override, if given, before launching."""
-    if model_dir is not None and not (model_dir / 'ephysatlas_model.json').is_file():
-        raise SystemExit(f'Model directory has no ephysatlas_model.json:\n  {model_dir}')
+def model_sources(model_dirs: list[Path]) -> dict[str, str]:
+    """Match each local release directory to the model it holds, from its manifest ``model_class``.
+
+    Parameters
+    ----------
+    model_dirs : list of Path
+        Local release directories, each holding an ``ephysatlas_model.json`` manifest.
+
+    Returns
+    -------
+    dict of str to str
+        The plugin-state key of each model (a region-decoder name, or ``'Encoding'`` for the
+        automatic-alignment model) -> its release directory.
+
+    Raises
+    ------
+    SystemExit
+        If a directory has no manifest, declares an unknown ``model_class``, or two directories
+        hold the same model.
+    """
+    state_keys = {decoder.model_class: name for name, decoder in DECODERS.items()}
+    state_keys[ENCODER_MODEL_CLASS] = ENCODER_STATE_KEY
+    sources = {}
+    for model_dir in model_dirs:
+        manifest = model_dir / 'ephysatlas_model.json'
+        if not manifest.is_file():
+            raise SystemExit(f'Model directory has no ephysatlas_model.json:\n  {model_dir}')
+        model_class = json.loads(manifest.read_text()).get('model_class')
+        if model_class not in state_keys:
+            raise SystemExit(
+                f'{model_dir} holds a {model_class!r} model; expected one of {sorted(state_keys)}'
+            )
+        key = state_keys[model_class]
+        if key in sources:
+            raise SystemExit(f'Two model directories for {key}:\n  {sources[key]}\n  {model_dir}')
+        sources[key] = str(model_dir)
+        logger.info('Model dir:     %s -> %s', model_dir, key)
+    return sources
+
+
+def validate_features(features_path: Path | None) -> None:
+    """Sanity-check the features override, if given, before launching."""
     if features_path is not None and not features_path.is_file():
         raise SystemExit(f'Features file not found:\n  {features_path}')
-    logger.info('Model dir:     %s', model_dir or 'Hugging Face Hub release')
     if features_path is not None:
         logger.info('Features file: %s (override)', features_path)
 
@@ -95,7 +133,8 @@ def validate_paths(model_dir: Path | None, features_path: Path | None) -> None:
 def main() -> None:
     """Build the controller, pre-fill the plugin paths, and run the Qt event loop."""
     args = parse_args()
-    validate_paths(args.model_dir, args.features)
+    sources = model_sources(args.model_dir)
+    validate_features(args.features)
 
     # Qt application — must be created before any widgets.
     app = QtWidgets.QApplication([])
@@ -108,24 +147,25 @@ def main() -> None:
     )
 
     # The Channel Prediction plugin registers during the controller's __init__, seeding its state
-    # keys with None. Pre-set the model dir (and a features override if given) so the file dialogs
-    # are skipped on the first click. Features normally come from the session YAML.
+    # keys with None. Pre-set the model sources (and a features override if given) so the file
+    # dialogs are skipped on the first click. Features normally come from the session YAML.
     plugin_state = controller.plugins[PLUGIN_NAME]
-    from ibl_alignment_gui.plugins.ephys_atlas import inference  # noqa: PLC0415
 
-    model_source = str(args.model_dir) if args.model_dir is not None else inference.MODEL_REPO_ID
-    plugin_state[inference.MODEL_NAME] = {
-        'source': (model_source, inference.MODEL_REVISION), 'model': None}
+    # Each region decoder: its local release when given, else its Hugging Face repository.
+    for name, decoder in DECODERS.items():
+        plugin_state[name] = {
+            'source': (sources.get(name, decoder.repo), MODEL_REVISION), 'model': None}
     if args.features is not None:
         plugin_state['features_path'] = args.features
     # Pre-wire the automatic-alignment model at a local release too, so it runs offline.
-    if args.encoder_dir is not None:
+    if ENCODER_STATE_KEY in sources:
         from ephysatlas.alignment import VINTAGE  # noqa: PLC0415 - heavy, only when pre-wiring
 
-        plugin_state['Encoding'] = {'source': (str(args.encoder_dir), VINTAGE), 'model': None}
+        plugin_state[ENCODER_STATE_KEY] = {
+            'source': (sources[ENCODER_STATE_KEY], VINTAGE), 'model': None}
     logger.info(
-        'Pre-populated %r plugin. Click Plugins -> %s -> Inference Model to run inference.',
-        PLUGIN_NAME, PLUGIN_NAME)
+        'Pre-populated %r plugin. Pick a region decoder in Region Plots to run inference.',
+        PLUGIN_NAME)
 
     controller.view.show()
     sys.exit(app.exec_())

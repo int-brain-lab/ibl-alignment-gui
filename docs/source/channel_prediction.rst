@@ -6,10 +6,12 @@ electrophysiology features, so that the prediction can be compared against the h
 aligning. It also makes the features themselves available as plots, so they can be inspected
 alongside the other electrophysiology data.
 
-Two independent models are provided:
+Three independent models are provided:
 
-**Inference model**
-    A region classifier that predicts a region for each channel directly from its features.
+**Region decoders (XGBoost and ProbeTransformer)**
+    Region classifiers that predict a region for each channel directly from its features: an
+    XGBoost classifier working channel by channel, and a ProbeTransformer that attends across all
+    channels of the probe, using each channel's depth.
 
 **Auto-alignment**
     The Ephys Atlas channel-level model predicts the features expected along the probe's histology
@@ -102,13 +104,13 @@ Loading a model
 
 Once the features are available, load a model from the ``Plugins -> Channel Prediction`` menu:
 
-**Load inference model (Hugging Face)…**
-    The released channel-level region classifier, loaded with
-    ``ephysatlas.regionclassifier.RegionClassifier``: a Hugging Face repository
-    (``int-brain-lab/ea-decoder-channel-xgboost`` by default) and release tag (by default the
-    tag of the model's vintage, ``2026_W26``), or a local release directory containing its
-    ``ephysatlas_model.json``. It is downloaded once and cached. Models in the older
-    ``folds/FOLD0X/meta.yaml`` layout (previously downloaded from S3) are no longer supported.
+**Load XGBoost region prediction model (Hugging Face)…** / **Load ProbeTransformer region prediction model (Hugging Face)…**
+    The released channel-level region decoders, loaded with ``ephysatlas.load_pretrained`` and run
+    with their ``predict``: a Hugging Face repository
+    (``int-brain-lab/ea-decoder-channel-xgboost`` or ``int-brain-lab/ea-decoder-channel-transformer``
+    by default) and release tag (``2026_W39`` by default), or a local release directory containing
+    its ``ephysatlas_model.json``. Each is downloaded once and cached. The ProbeTransformer requires
+    ``torch``; its menu entry is only shown when ``torch`` is installed.
 
 **Load alignment model (Hugging Face)…**
     The released channel-level model, loaded with ``ephysatlas.load_pretrained``: a Hugging Face
@@ -155,8 +157,9 @@ The predictions and the features are added to three of the menu bars:
    * - Menu
      - Added entries
    * - ``Region Plots``
-     - ``Inference Model`` and ``Inference Cumulative`` for the inference model, and
-       ``Auto-alignment`` for the auto-alignment
+     - ``XGBoost region prediction`` and ``ProbeTransformer region prediction`` (the most probable region per channel), each with a
+       ``(cumulative)`` entry showing the stacked class probabilities, and ``Auto-alignment`` for
+       the auto-alignment
    * - ``Feature Plots``
      - A single ``Ephys Atlas`` entry, tiling every feature side by side
    * - ``Probe Plots``

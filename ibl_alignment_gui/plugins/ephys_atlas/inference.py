@@ -1,24 +1,23 @@
 """
-Region-classifier inference for the channel-prediction plugin.
+Region-decoder inference for the channel-prediction plugin.
 
-Loads the released fold-based XGBoost region classifier with
-``ephysatlas.regionclassifier.RegionClassifier`` -- from the Hugging Face Hub (a repository and a
-release tag) or from a local release directory -- and runs its ``predict`` to get per-channel
-Cosmos regions from an ephys-feature table. A release is described by its ``ephysatlas_model.json``
-manifest (features, classes and folds), so the GUI needs nothing else. Heavy ``ephysatlas`` imports
-are deferred so this module can be imported without it installed; it is only required when a model
-is loaded.
+Loads the released channel-level region decoders with ``ephysatlas.load_pretrained`` -- from the
+Hugging Face Hub (a repository and a release tag) or from a local release directory -- and runs
+their ``predict`` to get per-channel Cosmos regions from an ephys-feature table. Two decoders are
+offered (:data:`DECODERS`): the fold-averaged XGBoost classifier and the ProbeTransformer seed
+ensemble. Both ``predict`` outputs carry the best region (``predicted_atlas_id``) and one
+``p_<acronym>`` probability column per class.
 """
 
 from __future__ import annotations
 
 import functools
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
+import pandas as pd
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
@@ -30,49 +29,52 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
 from ibl_alignment_gui.utils.helpers import shank_loop
 
 if TYPE_CHECKING:
-    import pandas as pd
     from ephysatlas.anatomy import ClassifierRegions
-    from ephysatlas.regionclassifier import RegionClassifier
 
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 logger = logging.getLogger(__name__)
 
-# Released channel-level region classifier on the Hugging Face Hub, pinned to the release tag of
-# its vintage (the feature set it was trained on) rather than ``main``, which moves whenever a new
-# release is published. Update the tag when a new release is adopted.
-MODEL_REPO_ID = 'int-brain-lab/ea-decoder-channel-xgboost'
-MODEL_REVISION = '2026_W26'
-MANIFEST_FILE = 'ephysatlas_model.json'
-MODEL_NAME = 'Inference'  # key under which the loaded model is cached on the plugin
-PREDICTION_KEY = 'Inference Model'  # cache key for the argmax prediction
-CUMULATIVE_KEY = 'Inference Cumulative'  # cache key for the cumulative prediction
-
-
-@dataclass(frozen=True)
-class InferenceModel:
-    """A loaded region classifier and its feature/class contract.
+class Decoder(NamedTuple):
+    """A released region decoder.
 
     Attributes
     ----------
-    classifier : RegionClassifier
-        The loaded classifier; its ``predict`` averages the fold models.
-    features : list of str
-        Feature columns the model requires, in order.
-    classes : list of int
-        Region ids the model predicts, in column order.
-    source : tuple of (str, str)
-        ``(repo_id_or_directory, revision)`` the model was loaded from.
-    vintage : str or None
-        Label of the feature table the model was trained on (e.g. ``2026_W26``).
+    repo : str
+        Its Hugging Face repository.
+    model_class : str
+        The ``model_class`` its release manifest (``ephysatlas_model.json``) declares, which
+        identifies a local release directory as this decoder.
+    needs_torch : bool
+        Whether it needs torch (only offered when torch is installed).
     """
 
-    classifier: RegionClassifier
-    features: list[str]
-    classes: list[int]
-    source: tuple[str, str]
-    vintage: str | None = None
+    repo: str
+    model_class: str
+    needs_torch: bool
+
+
+# Released channel-level region decoders on the Hugging Face Hub, by region-plot option name (also
+# the plugin-state key the loaded model is cached under). The ProbeTransformer is a torch model;
+# the XGBoost decoder is not.
+DECODERS = {
+    'XGBoost region prediction': Decoder(
+        repo='int-brain-lab/ea-decoder-channel-xgboost',
+        model_class='xgboost.sklearn.XGBClassifier',
+        needs_torch=False,
+    ),
+    'ProbeTransformer region prediction': Decoder(
+        repo='int-brain-lab/ea-decoder-channel-transformer',
+        model_class='ProbeTransformer',
+        needs_torch=True,
+    ),
+}
+# Release tag of the vintage (the feature set the decoders were trained on), pinned rather than
+# ``main``, which moves whenever a new release is published. Update it when adopting a new release.
+MODEL_REVISION = '2026_W39'
+# Suffix of the region-plot option showing a decoder's cumulative class probabilities.
+CUMULATIVE_SUFFIX = ' (cumulative)'
 
 
 # -----------------------------------------------------------------------------
@@ -81,12 +83,15 @@ class InferenceModel:
 
 
 class _InferenceModelDialog(QtWidgets.QDialog):
-    """Choose the released region classifier: a Hugging Face repo + tag, or a local release."""
+    """Choose a released region decoder: a Hugging Face repo + tag, or a local release."""
 
-    def __init__(self, parent, repo_id: str, revision: str, local_dir: Path | None) -> None:
+    def __init__(
+        self, parent, title: str, repo_id: str, revision: str, local_dir: Path | None
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle('Load inference model')
+        self.setWindowTitle(title)
         self.setMinimumWidth(560)
+        self._default_repo = repo_id
         form = QtWidgets.QFormLayout()
         self._repo = QtWidgets.QLineEdit(repo_id)
         self._revision = QtWidgets.QLineEdit(revision)
@@ -96,7 +101,8 @@ class _InferenceModelDialog(QtWidgets.QDialog):
         local_row = QtWidgets.QHBoxLayout()
         self._local = QtWidgets.QLineEdit('' if local_dir is None else str(local_dir))
         self._local.setPlaceholderText(
-            f'optional: a local release directory (containing {MANIFEST_FILE}) instead of the Hub'
+            'optional: a local release directory (containing ephysatlas_model.json) instead of '
+            'the Hub'
         )
         browse = QtWidgets.QPushButton('Browse…')
         browse.clicked.connect(self._browse)
@@ -105,8 +111,9 @@ class _InferenceModelDialog(QtWidgets.QDialog):
         form.addRow('Local release', local_row)
 
         note = QtWidgets.QLabel(
-            'The model is downloaded once from the Hugging Face Hub and cached '
-            '(~/.cache/ephysatlas/models). A local release takes precedence over the Hub.'
+            'The model is loaded with ephysatlas.load_pretrained, downloaded once from the '
+            'Hugging Face Hub and cached (~/.cache/ephysatlas/models). A local release takes '
+            'precedence over the Hub.'
         )
         note.setWordWrap(True)
         buttons = QtWidgets.QDialogButtonBox(
@@ -120,32 +127,29 @@ class _InferenceModelDialog(QtWidgets.QDialog):
         layout.addWidget(buttons)
 
     def _browse(self) -> None:
+        # load_pretrained reports a directory that is not a release (no manifest) when loading.
         chosen = QtWidgets.QFileDialog.getExistingDirectory(
-            self, f'Select a local release directory (containing {MANIFEST_FILE})'
+            self, 'Select a local release directory (containing ephysatlas_model.json)'
         )
-        if not chosen:
-            return
-        if not validate_model_folder(Path(chosen)):
-            QtWidgets.QMessageBox.warning(
-                self, 'Inference model', f'No {MANIFEST_FILE} found in:\n{chosen}'
-            )
-            return
-        self._local.setText(chosen)
+        if chosen:
+            self._local.setText(chosen)
 
     def source(self) -> tuple[str, str]:
         """``(repo_id_or_directory, revision)`` to load."""
         local = self._local.text().strip()
         revision = self._revision.text().strip() or MODEL_REVISION
-        return (local or self._repo.text().strip() or MODEL_REPO_ID), revision
+        return (local or self._repo.text().strip() or self._default_repo), revision
 
 
-def load_model_dialog(controller: AlignmentGUIController) -> bool:
-    """Ask which release to use and load it (only when the source changed).
+def load_model_dialog(controller: AlignmentGUIController, name: str) -> bool:
+    """Ask which release of decoder ``name`` to use and load it (only when the source changed).
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
+    name : str
+        The decoder, a key of :data:`DECODERS`.
 
     Returns
     -------
@@ -153,8 +157,8 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         True when a model is loaded, False when the user cancelled or loading failed.
     """
     plugin = plugin_state(controller)
-    state = plugin.get(MODEL_NAME) or dict(model=None, source=None)
-    plugin[MODEL_NAME] = state
+    state = plugin.get(name) or dict(model=None, source=None)
+    plugin[name] = state
     if not has_features(controller):
         QtWidgets.QMessageBox.warning(
             controller.view,
@@ -164,10 +168,11 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
         )
         return False
 
-    repo, revision = state['source'] or (MODEL_REPO_ID, MODEL_REVISION)
+    default_repo = DECODERS[name].repo
+    repo, revision = state['source'] or (default_repo, MODEL_REVISION)
     local = Path(repo) if Path(str(repo)).is_dir() else None
     dialog = _InferenceModelDialog(
-        controller.view, MODEL_REPO_ID if local else repo, revision, local
+        controller.view, f'Load {name} model', default_repo if local else repo, revision, local
     )
     if dialog.exec() != QtWidgets.QDialog.Accepted:
         return state['model'] is not None
@@ -178,25 +183,36 @@ def load_model_dialog(controller: AlignmentGUIController) -> bool:
     if not _load_into_state(controller, state, source):
         return False
     invalidate_predictions(controller)
-    logger.info('Inference model set to %s@%s', *source)
+    logger.info('%s model set to %s@%s', name, *source)
     return True
 
 
 def _load_into_state(controller: AlignmentGUIController, state: dict, source: tuple) -> bool:
     """Load ``source`` behind a wait cursor and cache it on ``state``; report failures."""
+    from ephysatlas import load_pretrained  # noqa: PLC0415 - heavy, lazy
+
+    repo, revision = source
     QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
     try:
-        model = load_inference_model(source)
+        # A Hub repo id or a local release directory; the manifest picks the model class.
+        model = load_pretrained(repo, revision=revision)
     except Exception as exc:  # noqa: BLE001 - show any loading problem to the user
         QtWidgets.QApplication.restoreOverrideCursor()
         QtWidgets.QMessageBox.critical(
             controller.view,
-            'Load inference model',
-            f'Could not load {source[0]}@{source[1]}:\n{exc}',
+            'Load region decoder',
+            f'Could not load {repo}@{revision}:\n{exc}',
         )
         return False
     QtWidgets.QApplication.restoreOverrideCursor()
-    state.update(model=model, source=model.source)
+    state.update(model=model, source=(str(repo), revision))
+    logger.info(
+        'Loaded region decoder %s %s (%d features, %d classes)',
+        model.index.get('model_class'),
+        model.index.get('vintage'),
+        len(model.inputs['features']),
+        len(model.config['classes']),
+    )
     return True
 
 
@@ -204,7 +220,7 @@ def _load_into_state(controller: AlignmentGUIController, state: dict, source: tu
 def invalidate_predictions(
     controller: AlignmentGUIController, items: ShankController, **kwargs
 ) -> None:
-    """Drop cached inference predictions on a shank so the next click recomputes.
+    """Drop every decoder's cached predictions on a shank so the next click recomputes.
 
     Decorated with :func:`shank_loop`, so a single call iterates over every shank/config; the
     ``shank`` and ``config`` keywords injected by the decorator are absorbed via ``**kwargs``.
@@ -216,7 +232,7 @@ def invalidate_predictions(
     items : ShankController
         The shank whose cached predictions are cleared.
     """
-    clear_predictions(items, PREDICTION_KEY, CUMULATIVE_KEY)
+    clear_predictions(items, *DECODERS, *(name + CUMULATIVE_SUFFIX for name in DECODERS))
 
 
 # -----------------------------------------------------------------------------
@@ -224,8 +240,8 @@ def invalidate_predictions(
 # -----------------------------------------------------------------------------
 
 
-def get_model(controller: AlignmentGUIController) -> InferenceModel | None:
-    """Return the loaded model, loading it first when needed (None if the user cancelled).
+def get_model(controller: AlignmentGUIController, name: str):
+    """Return the loaded decoder ``name``, loading it first when needed (None if cancelled).
 
     A ``source`` pre-set on the plugin state (``(repo_id_or_dir, revision)``, e.g. by a launcher
     script) loads without the dialog; otherwise the load dialog opens.
@@ -234,13 +250,16 @@ def get_model(controller: AlignmentGUIController) -> InferenceModel | None:
     ----------
     controller : AlignmentGUIController
         The main application controller.
+    name : str
+        The decoder, a key of :data:`DECODERS`.
 
     Returns
     -------
-    InferenceModel or None
-        The loaded model, or None if the user cancelled or loading failed.
+    RegionClassifier or ProbeTransformerClassifier or None
+        The model returned by ``ephysatlas.load_pretrained``, or None if the user cancelled or
+        loading failed.
     """
-    state = plugin_state(controller).get(MODEL_NAME)
+    state = plugin_state(controller).get(name)
     if (
         state is not None
         and state.get('model') is None
@@ -249,113 +268,10 @@ def get_model(controller: AlignmentGUIController) -> InferenceModel | None:
     ):
         return None
     if state is None or state.get('model') is None:
-        if not load_model_dialog(controller):
+        if not load_model_dialog(controller, name):
             return None
-        state = plugin_state(controller).get(MODEL_NAME)
+        state = plugin_state(controller).get(name)
     return state['model']
-
-
-def load_inference_model(source: tuple[str, str]) -> InferenceModel:
-    """Load the region classifier from a local release directory or the Hugging Face Hub.
-
-    Parameters
-    ----------
-    source : tuple of (str, str)
-        ``(repo_id_or_directory, revision)``. A directory is loaded as is (the revision is then
-        ignored); otherwise the Hugging Face repository is downloaded at ``revision`` and cached.
-
-    Returns
-    -------
-    InferenceModel
-        The loaded model.
-
-    Raises
-    ------
-    FileNotFoundError
-        If a local directory has no ``ephysatlas_model.json`` manifest (e.g. a model exported in
-        the old ``FOLD0X/meta.yaml``-only layout, which must be re-exported).
-    """
-    from ephysatlas.regionclassifier import RegionClassifier  # noqa: PLC0415 - heavy, lazy
-
-    repo, revision = source
-    local = Path(repo).is_dir()
-    if local:
-        if not validate_model_folder(Path(repo)):
-            raise FileNotFoundError(
-                f'{repo} has no {MANIFEST_FILE}; models in the old folds/FOLD0X/meta.yaml layout '
-                'are no longer supported and must be re-exported with ibleatools.'
-            )
-        classifier = RegionClassifier(Path(repo))
-    else:
-        classifier = RegionClassifier.from_pretrained(repo, revision=revision)
-
-    model = InferenceModel(
-        classifier=classifier,
-        features=list(classifier.inputs['features']),
-        classes=[int(c) for c in classifier.config['classes']],
-        # A local release ignores the revision, so record its vintage there for the dialog to show.
-        source=(str(repo), classifier.index.get('vintage') or revision if local else revision),
-        vintage=classifier.index.get('vintage'),
-    )
-    logger.info(
-        'Loaded inference model %s (%d features, %d classes) from %s',
-        classifier.index.get('vintage'),
-        len(model.features),
-        len(model.classes),
-        classifier.path_model,
-    )
-    return model
-
-
-def validate_model_folder(model_dir: Path) -> bool:
-    """Return whether ``model_dir`` is a release directory (it holds the model manifest).
-
-    Parameters
-    ----------
-    model_dir : Path
-        The local model directory to validate.
-
-    Returns
-    -------
-    bool
-        True if ``model_dir`` contains ``ephysatlas_model.json``, else False.
-    """
-    return model_dir.joinpath(MANIFEST_FILE).is_file()
-
-
-def validate_features(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
-    """Ensure the features DataFrame has every column the model expects.
-
-    Fills an absent ``outside`` column with ``0.0`` (in-brain default, matching the upstream
-    inference scripts); any other missing required column is a hard error.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Per-channel features (one row per channel).
-    features : list of str
-        Feature columns the model requires.
-
-    Returns
-    -------
-    pandas.DataFrame
-        The DataFrame, with ``outside`` added if it was missing.
-
-    Raises
-    ------
-    ValueError
-        If a required column other than ``outside`` is absent.
-    """
-    if 'outside' in features and 'outside' not in df.columns:
-        df = df.copy()
-        df['outside'] = 0.0
-        logger.info("Filled missing 'outside' column with 0.0 (in-brain default).")
-
-    missing = [c for c in features if c not in df.columns]
-    if missing:
-        raise ValueError(f'Features file is missing required column(s): {missing}')
-
-    return df
 
 
 @functools.cache
@@ -382,13 +298,14 @@ def classifier_regions() -> ClassifierRegions:
 # -----------------------------------------------------------------------------
 
 
-def _fold_mean_probas(
-    controller: AlignmentGUIController, items: ShankController
-) -> tuple[np.ndarray, np.ndarray, InferenceModel] | None:
-    """Run the region classifier and return its fold-averaged probabilities.
+def _predict_df(
+    controller: AlignmentGUIController, items: ShankController, name: str
+) -> tuple[pd.DataFrame, np.ndarray, object] | None:
+    """Run decoder ``name`` on the shank's features and return its prediction table.
 
-    Shared core of :func:`predict` and :func:`predict_cumulative`: loads the shank's features,
-    validates them against the model contract and runs the classifier.
+    Shared core of :func:`predict` and :func:`predict_cumulative`: loads the shank's features
+    from the table of the model's vintage, gives them the ``(pid, channel)`` index the decoders
+    expect and runs the model's ``predict``.
 
     Parameters
     ----------
@@ -396,21 +313,25 @@ def _fold_mean_probas(
         The main application controller.
     items : ShankController
         The shank being predicted on.
+    name : str
+        The decoder, a key of :data:`DECODERS`.
 
     Returns
     -------
-    tuple of (np.ndarray, np.ndarray, InferenceModel) or None
-        The fold-averaged class probabilities (``n_channels`` x ``n_classes``, in
-        ``model.classes`` order), the channel depths (µm) and the loaded model; or None when no
-        model or no features are available.
+    tuple of (pandas.DataFrame, np.ndarray, model) or None
+        The model's ``predict`` output (one row per predicted channel, with ``predicted_atlas_id``
+        and a ``p_<acronym>`` column per class, in the manifest's class order), the depths (µm)
+        of those channels and the loaded model; or None when no model or no features are
+        available, or the features lack a column the model needs.
     """
     # Resolve the model first so its load dialog (and its "load a features file first" guard)
     # runs before we bail on missing features, matching the spatial encoder path.
-    model = get_model(controller)
+    model = get_model(controller, name)
     if model is None:
         return None
 
-    df = features_for_vintage(controller, items, model.vintage)
+    vintage = model.index.get('vintage')
+    df = features_for_vintage(controller, items, vintage)
     if df is None:
         QtWidgets.QMessageBox.warning(
             controller.view,
@@ -420,28 +341,37 @@ def _fold_mean_probas(
         )
         return None
 
+    if 'outside' in model.inputs['features'] and 'outside' not in df.columns:
+        # In-brain default, matching the upstream inference scripts.
+        df = df.assign(outside=0.0)
+        logger.info("Filled missing 'outside' column with 0.0 (in-brain default).")
+    if list(df.index.names) != ['pid', 'channel']:
+        # The decoders take one probe per pid (the ProbeTransformer attends across all channels
+        # of a pid): a flat table holds this one shank, so give all its rows the same pid.
+        pids = np.zeros(len(df), dtype=int)
+        df = df.set_index(pd.MultiIndex.from_arrays([pids, df.index], names=['pid', 'channel']))
+
     try:
-        df = validate_features(df, model.features)
-    except ValueError as exc:
+        out = model.predict(df)
+    except KeyError as exc:  # a feature the model needs is missing, named in the message
         QtWidgets.QMessageBox.warning(
             controller.view,
             'Channel Prediction',
-            f'{exc}\n\nThe inference model ({model.vintage}) needs features computed with the '
-            f'{model.vintage} feature set.',
+            f'{exc}\n\nThe {name} model ({vintage}) needs features computed with the {vintage} '
+            'feature set.',
         )
         return None
-    out = model.classifier.predict(df)
-    # predict writes one p_<acronym> column per class, in the manifest's class order.
-    mean_probas = out.filter(regex=r'^p_').to_numpy()
-    depths = df['axial_um'].values
+    # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
+    # that were predicted.
+    depths = df.loc[out.index, 'axial_um'].to_numpy()
 
-    return mean_probas, depths, model
+    return out, depths, model
 
 
 def predict(
-    controller: AlignmentGUIController, items: ShankController
+    controller: AlignmentGUIController, items: ShankController, name: str
 ) -> tuple[dict, np.ndarray] | None:
-    """Predict the per-channel region (argmax over fold-averaged probabilities).
+    """Predict the per-channel region with decoder ``name`` (its most probable class).
 
     Parameters
     ----------
@@ -449,6 +379,8 @@ def predict(
         The main application controller.
     items : ShankController
         The shank being predicted on.
+    name : str
+        The decoder, a key of :data:`DECODERS`.
 
     Returns
     -------
@@ -456,20 +388,19 @@ def predict(
         The predicted regions (id, acronym, rgb, ... per channel) and channel depths (µm), or None
         if no prediction is available.
     """
-    result = _fold_mean_probas(controller, items)
+    result = _predict_df(controller, items, name)
     if result is None:
         return None
 
-    mean_probas, depths, model = result
-    region_ids = np.array(model.classes)[np.argmax(mean_probas, axis=1)]
+    out, depths, _ = result
 
-    return classifier_regions().get(region_ids), depths
+    return classifier_regions().get(out['predicted_atlas_id'].to_numpy()), depths
 
 
 def predict_cumulative(
-    controller: AlignmentGUIController, items: ShankController
+    controller: AlignmentGUIController, items: ShankController, name: str
 ) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], np.ndarray] | None:
-    """Return cumulative region probabilities by depth for the stacked-band view.
+    """Return decoder ``name``'s cumulative region probabilities by depth for the stacked view.
 
     Parameters
     ----------
@@ -477,19 +408,22 @@ def predict_cumulative(
         The main application controller.
     items : ShankController
         The shank being predicted on.
+    name : str
+        The decoder, a key of :data:`DECODERS`.
 
     Returns
     -------
     tuple of (np.ndarray, np.ndarray, list of np.ndarray, np.ndarray) or None
         ``(cprobas, depths, colours, region_ids)`` or None if no prediction is available.
     """
-    result = _fold_mean_probas(controller, items)
+    result = _predict_df(controller, items, name)
     if result is None:
         return None
 
-    mean_probas, depths, model = result
-    cprobas = mean_probas.cumsum(axis=1)
-    region_ids = np.array(model.classes).astype(int)
+    out, depths, model = result
+    # One p_<acronym> column per class, in the manifest's class order.
+    cprobas = out.filter(regex=r'^p_').to_numpy().cumsum(axis=1)
+    region_ids = np.array(model.config['classes']).astype(int)
     colours = list(classifier_regions().get(region_ids).rgb)
 
     return cprobas, depths, colours, region_ids

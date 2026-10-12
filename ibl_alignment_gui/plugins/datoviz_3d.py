@@ -157,8 +157,8 @@ class Features3D:
         The type of plot currently displayed ('channels' or 'clusters').
     plot_type: str or None
         The specific plot name currently displayed.
-    side: oursin.utils.Side
-        The hemisphere side for displaying regions.
+    side: str
+        The hemisphere side for displaying regions ('left', 'right' or 'both').
     region_toggle: QtWidgets.QAction or None
         The action to toggle region visibility.
     ba: AllenAtlas
@@ -228,7 +228,11 @@ class Features3D:
             if 'fiber tracts' not in region_info['acronym']:
                 keep_regions.append(acr)
 
-        self.add_regions(keep_regions)
+        # Find the hemisphere the shanks are in
+        signs = {s for s in get_hemisphere(self.controller) if s}
+        hemisphere = 'both' if len(signs) != 1 else ('left' if signs.pop() < 0 else 'right')
+
+        self.add_regions(keep_regions, hemisphere=hemisphere)
         self.view.regions.setChecked(True)
 
         # Plot initial channels
@@ -239,7 +243,7 @@ class Features3D:
 
         self.view.panel.update()
 
-    def add_regions(self, regions: list | np.ndarray, hemisphere: int = -1) -> None:
+    def add_regions(self, regions: list | np.ndarray, hemisphere: str = 'left') -> None:
         """
         Add a list of brain regions to the 3D view.
 
@@ -247,11 +251,12 @@ class Features3D:
         ----------
         regions: list or np.ndarray
             A list of region names to add.
-        hemisphere: int, optional
-            The hemisphere to display the regions in (-1 for left, 1 for right). Default is -1.
+        hemisphere: str, optional
+            The hemisphere to display the regions in ('left', 'right' or 'both').
+            Default is 'left'.
         """
         self.regions = [r for r in regions if r not in ['void', 'root']]
-        self.side = 'left' if hemisphere == -1 else 'right'
+        self.side = hemisphere
         self.viewer.meshes.add_regions(self.regions, hemisphere=self.side)
         for reg in self.regions:
             self.viewer.meshes.set_alpha(60, reg)
@@ -540,6 +545,27 @@ def get_regions(_, items: 'ShankController', **kwargs):
         An array of unique region names.
     """
     return np.unique(items.model.hist_data['axis_label'][:, 1])
+
+
+@shank_loop
+def get_hemisphere(_, items: 'ShankController', **kwargs) -> float | None:
+    """
+    Get the hemisphere that the shank is in.
+
+    Parameters
+    ----------
+    items: ShankController
+        A ShankController instance containing model data.
+
+    Returns
+    -------
+    float or None
+        -1 for the left hemisphere, 1 for the right hemisphere, or None if no picks available.
+    """
+    xyz = items.model.xyz_picks
+    if xyz is None or len(xyz) == 0:
+        return None
+    return np.sign(np.median(xyz[:, 0]))
 
 
 @shank_loop

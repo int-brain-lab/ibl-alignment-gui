@@ -210,8 +210,9 @@ class TestPathFallbacks(unittest.TestCase):
 
     def test_ephys_fallbacks(self):
         with self.subTest('both given'):
-            paths = self.load({'spike_sorting': 'ks', 'processed_ephys': 'proc',
-                               'raw_ephys': 'raw'})
+            paths = self.load(
+                {'spike_sorting': 'ks', 'processed_ephys': 'proc', 'raw_ephys': 'raw'}
+            )
             self.assertEqual(paths.processed_ephys, self.root.joinpath('proc'))
             self.assertEqual(paths.raw_ephys, self.root.joinpath('raw'))
 
@@ -323,10 +324,18 @@ class TestDefaults(unittest.TestCase):
 
     def test_the_defaults_section_takes_datasets_not_a_base_path(self):
         # `path` under defaults is read as a dataset named "path", whose value must be a mapping
-        text = '\n'.join([
-            f'path: {self.root}', 'defaults:', '  path: /mnt/base', 'probes:', '  probe_00:',
-            '    datasets:', '      spike_sorting:', '        path: ks',
-        ])
+        text = '\n'.join(
+            [
+                f'path: {self.root}',
+                'defaults:',
+                '  path: /mnt/base',
+                'probes:',
+                '  probe_00:',
+                '    datasets:',
+                '      spike_sorting:',
+                '        path: ks',
+            ]
+        )
         yaml_file = self.root.joinpath('session.yaml')
         yaml_file.write_text(text + '\n')
 
@@ -386,8 +395,12 @@ class TestMatchingProbes(unittest.TestCase):
         for cname, probes in config_probes.items():
             lines += [f'  {cname}:', '    probes:']
             for probe in probes:
-                lines += [f'      {probe}:', '        datasets:', '          spike_sorting:',
-                          f'            path: {probe}']
+                lines += [
+                    f'      {probe}:',
+                    '        datasets:',
+                    '          spike_sorting:',
+                    f'            path: {probe}',
+                ]
         path = self.root.joinpath('session.yaml')
         path.write_text('\n'.join(lines) + '\n')
 
@@ -446,15 +459,24 @@ class TestLoaderErrors(unittest.TestCase):
     def test_more_than_two_configurations(self):
         text = '\n'.join(
             [f'path: {self.root}', 'configurations:']
-            + [f'  config_{i}:\n    probes:\n      probe_00:\n        datasets:'
-               f'\n          spike_sorting:\n            path: ks' for i in range(3)]
+            + [
+                f'  config_{i}:\n    probes:\n      probe_00:\n        datasets:'
+                f'\n          spike_sorting:\n            path: ks'
+                for i in range(3)
+            ]
         )
         with self.assertRaises(AssertionError):
             load_alignment_yaml(self.write(text + '\n'))
 
     def test_histology_space(self):
-        base = [f'path: {self.root}', 'probes:', '  probe_00:', '    datasets:',
-                '      spike_sorting:', '        path: ks']
+        base = [
+            f'path: {self.root}',
+            'probes:',
+            '  probe_00:',
+            '    datasets:',
+            '      spike_sorting:',
+            '        path: ks',
+        ]
 
         with self.subTest('defaults to ccf'):
             _, _, _, space = load_alignment_yaml(self.write('\n'.join(base) + '\n'))
@@ -462,22 +484,35 @@ class TestLoaderErrors(unittest.TestCase):
 
         with self.subTest('read from the defaults section'):
             text = '\n'.join(
-                [f'path: {self.root}', 'defaults:', '  histology:', '    path: hist',
-                 '    space: anatomical'] + base[1:]
+                [
+                    f'path: {self.root}',
+                    'defaults:',
+                    '  histology:',
+                    '    path: hist',
+                    '    space: anatomical',
+                ]
+                + base[1:]
             )
             _, _, _, space = load_alignment_yaml(self.write(text + '\n'))
             self.assertEqual(space, 'anatomical')
 
         with self.subTest('a probe level space is ignored'):
-            text = '\n'.join(base + ['      histology:', '        path: hist',
-                                     '        space: anatomical'])
+            text = '\n'.join(
+                base + ['      histology:', '        path: hist', '        space: anatomical']
+            )
             _, _, _, space = load_alignment_yaml(self.write(text + '\n'))
             self.assertEqual(space, 'ccf')
 
         with self.subTest('an unknown space is rejected'):
             text = '\n'.join(
-                [f'path: {self.root}', 'defaults:', '  histology:', '    path: hist',
-                 '    space: nonsense'] + base[1:]
+                [
+                    f'path: {self.root}',
+                    'defaults:',
+                    '  histology:',
+                    '    path: hist',
+                    '    space: nonsense',
+                ]
+                + base[1:]
             )
             with self.assertRaises(ValidationError):
                 load_alignment_yaml(self.write(text + '\n'))

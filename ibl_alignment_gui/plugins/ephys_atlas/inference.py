@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class Decoder(NamedTuple):
     """A released region decoder.
 

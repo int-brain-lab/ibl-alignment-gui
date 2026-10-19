@@ -191,6 +191,17 @@ python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+# Any new warning fails the run, so deprecations are dealt with when they appear. Ignore only
+# warnings raised inside third-party code that this package cannot fix.
+filterwarnings = [
+  "error",
+  # SWIG-generated bindings (SimpleITK) on Python >= 3.12
+  "ignore:builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute:DeprecationWarning",
+]
+
 [tool.coverage.run]
 source_pkgs = ["ibl_alignment_gui"]
 relative_files = true

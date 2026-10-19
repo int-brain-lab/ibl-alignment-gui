@@ -8,7 +8,7 @@ root = true
 end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
-max_line_length = 88
+max_line_length = 99
 
 # Set default charset
 [*.{py,rst,md,toml,yaml}]

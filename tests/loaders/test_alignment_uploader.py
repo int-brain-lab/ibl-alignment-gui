@@ -1,4 +1,4 @@
-import datetime
+import datetime as dt
 import json
 import tempfile
 import unittest
@@ -99,7 +99,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
     @patch('ibl_alignment_gui.loaders.alignment_uploader.datetime')
     def test_upload_alignments(self, mock_datetime, mock_save_alignments):
         """Test the upload_alignments method"""
-        mock_datetime.now.return_value = datetime.datetime(2025, 8, 4)
+        mock_datetime.now.return_value = dt.datetime(2025, 8, 4)
 
         self.uploader.user = 'user1'
         self.uploader.qc_str = 'PASS'
@@ -298,7 +298,7 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
     @patch('ibl_alignment_gui.loaders.alignment_uploader.datetime')
     def test_upload_alignments(self, mock_datetime, mock_save_alignments):
         """Test the upload_alignments method"""
-        mock_datetime.now.return_value = datetime.datetime(2025, 8, 4)
+        mock_datetime.now.return_value = dt.datetime(2025, 8, 4)
 
         user = 'user1'
         expected_time = mock_datetime.now.return_value.replace(second=0, microsecond=0).isoformat()

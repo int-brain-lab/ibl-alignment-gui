@@ -123,6 +123,19 @@ Pull requests that change the code or documentation also build the documentation
 (``.github/workflows/documentation.yml``), without deploying it, so Sphinx errors are caught
 before they reach ``main``. Pushes to ``main`` build and deploy it to GitHub Pages.
 
+Dependency updates
+^^^^^^^^^^^^^^^^^^
+
+`Dependabot <https://docs.github.com/en/code-security/dependabot>`_ opens pull requests once a
+month (``.github/dependabot.yml``) that update ``uv.lock``: one for minor and patch updates, one
+for major updates, and one for the GitHub Actions used by the workflows. CI runs on each of them.
+Merge them when CI passes. When an update touches Qt, pyqtgraph or datoviz, also start the GUI
+and check it by hand, as the tests cover little of the GUI. If an update breaks something, fix
+it on the pull request's branch, or tell Dependabot to skip that package and merge the rest.
+
+Git dependencies pinned to a commit, such as ``ibl-datoviz``, are not updated by Dependabot.
+To move one, change the commit in ``pyproject.toml`` and run ``uv lock``.
+
 .. note::
    `mypy <https://mypy-lang.org/>`_ is available in the ``typing`` dependency group and can be
    run with ``uv run mypy``, but the code base is not yet free of type errors, so it is not part

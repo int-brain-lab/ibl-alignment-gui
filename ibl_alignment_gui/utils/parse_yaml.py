@@ -340,9 +340,7 @@ def load_alignment_yaml(
         detail = '; '.join(
             f'{cname}: {sorted(names)}' for cname, names in probes_per_config.items()
         )
-        raise ValueError(
-            f'Every configuration must contain the same probes, found {detail}'
-        )
+        raise ValueError(f'Every configuration must contain the same probes, found {detail}')
 
     # dict.fromkeys rather than a set, so that duplicates across configurations are dropped
     # while the order the probes are given in the yaml is kept. The order reaches the shank tabs

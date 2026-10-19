@@ -297,4 +297,3 @@ shank suffix, counting from 1 and with no separator before the number:
     channel_locations_shank1.json
     prev_alignments_shank1.json
     alignment_progress_shank1.json
-

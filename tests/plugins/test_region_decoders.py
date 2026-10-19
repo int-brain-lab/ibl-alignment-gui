@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from ibl_alignment_gui.plugins.ephys_atlas import inference
+from ibl_alignment_gui.plugins.ephys_atlas._common import PredictionError
 from iblutil.util import Bunch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -38,6 +39,52 @@ def _fake_shank(df: pd.DataFrame) -> SimpleNamespace:
     """A shank whose features come from ``df`` (no ONE loader, so they are used as is)."""
     model = SimpleNamespace(raw_data={'features': Bunch(df=df, exists=True)}, loaders={})
     return SimpleNamespace(model=model)
+
+
+class TestRunDecoder(unittest.TestCase):
+    """run_decoder with a stand-in model: no GUI and no ephysatlas needed."""
+
+    @staticmethod
+    def _model(features: list[str], predict) -> SimpleNamespace:
+        return SimpleNamespace(
+            inputs={'features': features}, index={'vintage': 'V1'}, predict=predict
+        )
+
+    def test_flat_table(self):
+        """A flat table gets the (pid, channel) index and 'outside', and depths are returned"""
+        df = pd.DataFrame({'a': [1.0, 2.0], 'axial_um': [20.0, 40.0]})
+        seen = {}
+
+        def predict(x):
+            seen['df'] = x
+            return pd.DataFrame({'predicted_atlas_id': [1, 2]}, index=x.index)
+
+        out, depths = inference.run_decoder(self._model(['a', 'outside'], predict), df)
+        self.assertEqual(list(seen['df'].index.names), ['pid', 'channel'])
+        self.assertTrue((seen['df']['outside'] == 0).all())
+        np.testing.assert_array_equal(out['predicted_atlas_id'], [1, 2])
+        np.testing.assert_array_equal(depths, [20.0, 40.0])
+
+    def test_dropped_channels(self):
+        """Depths are those of the channels the model predicted"""
+        df = pd.DataFrame({'a': [1.0, np.nan, 3.0], 'axial_um': [20.0, 40.0, 60.0]})
+
+        def predict(x):
+            kept = x.dropna()
+            return pd.DataFrame({'predicted_atlas_id': [1] * len(kept)}, index=kept.index)
+
+        _, depths = inference.run_decoder(self._model(['a'], predict), df)
+        np.testing.assert_array_equal(depths, [20.0, 60.0])
+
+    def test_missing_feature(self):
+        """A model KeyError becomes a PredictionError naming the vintage"""
+
+        def predict(x):
+            raise KeyError("missing ['b']")
+
+        df = pd.DataFrame({'a': [1.0], 'axial_um': [0.0]})
+        with self.assertRaisesRegex(PredictionError, 'V1'):
+            inference.run_decoder(self._model(['a', 'b'], predict), df)
 
 
 @unittest.skipUnless(HAS_DEPS, 'needs ephysatlas, torch and xgboost')

@@ -42,10 +42,12 @@ def rmsmap(fbin, spectra=True):
     # the window generator will generates window indices
     wingen = utils.WindowGenerator(ns=sglx.ns, nswin=rms_win_length_samples, overlap=0)
     # pre-allocate output dictionary of numpy arrays
-    win = {'TRMS': np.zeros((wingen.nwin, sglx.nc)),
-           'nsamples': np.zeros((wingen.nwin,)),
-           'fscale': fourier.fscale(WELCH_WIN_LENGTH_SAMPLES, 1 / sglx.fs, one_sided=True),
-           'tscale': wingen.tscale(fs=sglx.fs)}
+    win = {
+        'TRMS': np.zeros((wingen.nwin, sglx.nc)),
+        'nsamples': np.zeros((wingen.nwin,)),
+        'fscale': fourier.fscale(WELCH_WIN_LENGTH_SAMPLES, 1 / sglx.fs, one_sided=True),
+        'tscale': wingen.tscale(fs=sglx.fs),
+    }
     win['spectral_density'] = np.zeros((len(win['fscale']), sglx.nc))
     # loop through the whole session
     with tqdm(total=wingen.nwin) as pbar:
@@ -62,8 +64,14 @@ def rmsmap(fbin, spectra=True):
                     continue
                 # compute a smoothed spectrum using welch method
                 _, w = signal.welch(
-                    data, fs=sglx.fs, window='hann', nperseg=WELCH_WIN_LENGTH_SAMPLES,
-                    detrend='constant', return_onesided=True, scaling='density', axis=-1
+                    data,
+                    fs=sglx.fs,
+                    window='hann',
+                    nperseg=WELCH_WIN_LENGTH_SAMPLES,
+                    detrend='constant',
+                    return_onesided=True,
+                    scaling='density',
+                    axis=-1,
                 )
                 win['spectral_density'] += w.T
             # print at least every 20 windows
@@ -87,7 +95,7 @@ def extract_rmsmap(fbin, out_folder=None, spectra=True):
     spectra : bool
         Whether to compute the power spectrum, which is only needed for LF data.
     """
-    _logger.info(f"Computing QC for {fbin}")
+    _logger.info(f'Computing QC for {fbin}')
     sglx = spikeglx.Reader(fbin)
     # check if output ALF files exist already:
     out_folder = Path(fbin).parent if out_folder is None else Path(out_folder)
@@ -102,10 +110,11 @@ def extract_rmsmap(fbin, out_folder=None, spectra=True):
     tdict = {'rms': rms['TRMS'].astype(np.single), 'timestamps': rms['tscale'].astype(np.single)}
     alfio.save_object_npy(out_folder, object=alf_object_time, dico=tdict, namespace='iblqc')
     if spectra:
-        fdict = {'power': rms['spectral_density'].astype(np.single),
-                 'freqs': rms['fscale'].astype(np.single)}
-        alfio.save_object_npy(
-            out_folder, object=alf_object_freq, dico=fdict, namespace='iblqc')
+        fdict = {
+            'power': rms['spectral_density'].astype(np.single),
+            'freqs': rms['fscale'].astype(np.single),
+        }
+        alfio.save_object_npy(out_folder, object=alf_object_freq, dico=fdict, namespace='iblqc')
 
 
 def _sample2v(ap_file):
@@ -179,8 +188,15 @@ def extract_data(ks_path, ephys_path, out_path):
 
     for efile in efiles:
         if efile.get('ap') and efile.ap.exists():
-            ks2_to_alf(ks_path, ephys_path, out_path, bin_file=efile.ap,
-                       ampfactor=_sample2v(efile.ap), label=None, force=True)
+            ks2_to_alf(
+                ks_path,
+                ephys_path,
+                out_path,
+                bin_file=efile.ap,
+                ampfactor=_sample2v(efile.ap),
+                label=None,
+                force=True,
+            )
 
             extract_rmsmap(efile.ap, out_folder=out_path, spectra=False)
         if efile.get('lf') and efile.lf.exists():

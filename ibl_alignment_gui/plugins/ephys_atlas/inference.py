@@ -21,6 +21,7 @@ import pandas as pd
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    PredictionError,
     clear_predictions,
     features_for_vintage,
     has_features,
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
 logger = logging.getLogger(__name__)
+
 
 class Decoder(NamedTuple):
     """A released region decoder.
@@ -298,49 +300,33 @@ def classifier_regions() -> ClassifierRegions:
 # -----------------------------------------------------------------------------
 
 
-def _predict_df(
-    controller: AlignmentGUIController, items: ShankController, name: str
-) -> tuple[pd.DataFrame, np.ndarray, object] | None:
-    """Run decoder ``name`` on the shank's features and return its prediction table.
+def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
+    """Run a loaded region decoder on a features table.
 
-    Shared core of :func:`predict` and :func:`predict_cumulative`: loads the shank's features
-    from the table of the model's vintage, gives them the ``(pid, channel)`` index the decoders
-    expect and runs the model's ``predict``.
+    Fills a missing ``outside`` column (in-brain default) and gives a flat table the
+    ``(pid, channel)`` index the decoders expect, as one probe. No GUI is involved, so failures
+    are raised for the caller to report.
 
     Parameters
     ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank being predicted on.
-    name : str
-        The decoder, a key of :data:`DECODERS`.
+    model : RegionClassifier or ProbeTransformerClassifier
+        A decoder returned by ``ephysatlas.load_pretrained``.
+    df : pandas.DataFrame
+        The probe's features, with an ``axial_um`` column.
 
     Returns
     -------
-    tuple of (pandas.DataFrame, np.ndarray, model) or None
-        The model's ``predict`` output (one row per predicted channel, with ``predicted_atlas_id``
-        and a ``p_<acronym>`` column per class, in the manifest's class order), the depths (µm)
-        of those channels and the loaded model; or None when no model or no features are
-        available, or the features lack a column the model needs.
+    pandas.DataFrame
+        The model's ``predict`` output: one row per predicted channel, with ``predicted_atlas_id``
+        and a ``p_<acronym>`` column per class, in the manifest's class order.
+    np.ndarray
+        The depths (µm) of the predicted channels.
+
+    Raises
+    ------
+    PredictionError
+        If ``df`` lacks a feature the model needs.
     """
-    # Resolve the model first so its load dialog (and its "load a features file first" guard)
-    # runs before we bail on missing features, matching the spatial encoder path.
-    model = get_model(controller, name)
-    if model is None:
-        return None
-
-    vintage = model.index.get('vintage')
-    df = features_for_vintage(controller, items, vintage)
-    if df is None:
-        QtWidgets.QMessageBox.warning(
-            controller.view,
-            'Channel Prediction',
-            'No features found for this probe. Set via '
-            'Plugins -> Channel Prediction -> Load features file...',
-        )
-        return None
-
     if 'outside' in model.inputs['features'] and 'outside' not in df.columns:
         # In-brain default, matching the upstream inference scripts.
         df = df.assign(outside=0.0)
@@ -354,16 +340,60 @@ def _predict_df(
     try:
         out = model.predict(df)
     except KeyError as exc:  # a feature the model needs is missing, named in the message
-        QtWidgets.QMessageBox.warning(
-            controller.view,
-            'Channel Prediction',
-            f'{exc}\n\nThe {name} model ({vintage}) needs features computed with the {vintage} '
-            'feature set.',
-        )
-        return None
+        vintage = model.index.get('vintage')
+        raise PredictionError(
+            f'{exc}\n\nThe model ({vintage}) needs features computed with the {vintage} '
+            'feature set.'
+        ) from exc
     # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
     # that were predicted.
     depths = df.loc[out.index, 'axial_um'].to_numpy()
+
+    return out, depths
+
+
+def _predict_df(
+    controller: AlignmentGUIController, items: ShankController, name: str
+) -> tuple[pd.DataFrame, np.ndarray, object] | None:
+    """Run decoder ``name`` on the shank's features and return its prediction table.
+
+    Shared core of :func:`predict` and :func:`predict_cumulative`: loads the model (asking the
+    user when none is loaded yet) and the shank's features from the table of the model's vintage,
+    then runs :func:`run_decoder`.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    items : ShankController
+        The shank being predicted on.
+    name : str
+        The decoder, a key of :data:`DECODERS`.
+
+    Returns
+    -------
+    tuple of (pandas.DataFrame, np.ndarray, model) or None
+        The model's ``predict`` output, the depths (µm) of the predicted channels and the loaded
+        model; or None when the user cancelled loading the model.
+
+    Raises
+    ------
+    PredictionError
+        If the shank has no features, or they lack a column the model needs.
+    """
+    # Resolve the model first so its load dialog (and its "load a features file first" guard)
+    # runs before we bail on missing features, matching the spatial encoder path.
+    model = get_model(controller, name)
+    if model is None:
+        return None
+
+    df = features_for_vintage(controller, items, model.index.get('vintage'))
+    if df is None:
+        raise PredictionError(
+            'No features found for this probe. Set via '
+            'Plugins -> Channel Prediction -> Load features file...'
+        )
+    out, depths = run_decoder(model, df)
 
     return out, depths, model
 
@@ -386,7 +416,12 @@ def predict(
     -------
     tuple of (dict, np.ndarray) or None
         The predicted regions (id, acronym, rgb, ... per channel) and channel depths (µm), or None
-        if no prediction is available.
+        if the user cancelled loading the model.
+
+    Raises
+    ------
+    PredictionError
+        If the shank has no features, or they lack a column the model needs.
     """
     result = _predict_df(controller, items, name)
     if result is None:
@@ -414,7 +449,13 @@ def predict_cumulative(
     Returns
     -------
     tuple of (np.ndarray, np.ndarray, list of np.ndarray, np.ndarray) or None
-        ``(cprobas, depths, colours, region_ids)`` or None if no prediction is available.
+        ``(cprobas, depths, colours, region_ids)``, or None if the user cancelled loading the
+        model.
+
+    Raises
+    ------
+    PredictionError
+        If the shank has no features, or they lack a column the model needs.
     """
     result = _predict_df(controller, items, name)
     if result is None:

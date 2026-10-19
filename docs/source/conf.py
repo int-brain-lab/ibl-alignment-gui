@@ -109,6 +109,7 @@ autodoc_mock_imports = [
     'ants',
 ]
 
+
 # Qt signals are class attributes whose docstring comes from PyQt (``pyqtSignal(*types, ...)``),
 # which is not valid reStructuredText. They carry no useful documentation, so skip them.
 def _skip_qt_signals(app, what, name, obj, skip, options):

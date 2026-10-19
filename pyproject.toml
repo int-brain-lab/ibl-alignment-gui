@@ -113,7 +113,9 @@ typing = [
 required-environments = [
   "sys_platform == 'win32'",
   "sys_platform == 'linux'",
-  "sys_platform == 'darwin'",
+  # Apple Silicon only: some packages (recent torch, pyqt5-qt5 builds) have no Intel macOS
+  # wheels, so requiring Intel too would hold them back for every Mac.
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [tool.uv.build-backend]

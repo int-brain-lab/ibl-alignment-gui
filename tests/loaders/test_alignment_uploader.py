@@ -13,6 +13,7 @@ from ibl_alignment_gui.loaders.alignment_uploader import (
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
 )
+from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from iblutil.util import Bunch
 
 
@@ -72,6 +73,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
         with self.subTest('No changes'):
             self.assertIn('No changes made', self.uploader.get_upload_info(False, False))
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('ibllib.pipes.histology.register_aligned_track')
     def test_upload_channels(self, mock_register):
         """Test the upload_channels method"""
@@ -153,6 +155,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
         self.uploader.save_alignments({})
         self.assertEqual(self.mock_one.alyx.rest.call_count, 2)
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('ibllib.qc.critical_reasons.main_gui')
     def test_set_user_qc(self, mock_note):
         """Test the set_user_qc method"""
@@ -181,6 +184,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
             self.uploader.set_user_qc('High', 'Pass', [], True)
             self.assertTrue(self.uploader.force_resolve)
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('ibllib.qc.alignment_qc.AlignmentQC')
     def test_upload_qc(self, mock_align_qc_class):
         """Test the upload_qc method"""

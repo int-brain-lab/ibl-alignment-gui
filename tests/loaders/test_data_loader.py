@@ -16,6 +16,7 @@ from ibl_alignment_gui.loaders.data_loader import (
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
 )
+from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -621,6 +622,7 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
             data = self.loader.load_meta_data()
             self.assertIsNone(data)
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('brainbox.io.spikeglx.Streamer')
     def test_load_ap_data(self, mock_streamer):
         """Test the load_ap_data method"""

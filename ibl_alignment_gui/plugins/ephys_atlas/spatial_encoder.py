@@ -29,6 +29,7 @@ from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_KEY,
+    PredictionError,
     clear_predictions,
     features_for_vintage,
     has_features,
@@ -179,6 +180,11 @@ def get_model(controller: AlignmentGUIController) -> ChannelModel | None:
 
     A ``source`` pre-set on the plugin state (``(repo_id_or_dir, revision)``, e.g. by a launcher
     script) loads without the dialog; otherwise the load dialog opens.
+
+    Raises
+    ------
+    PredictionError
+        If the pre-set ``source`` cannot be loaded.
     """
     state = plugin_state(controller).get(MODEL_NAME)
     if state is not None and state.get('model') is None and state.get('source'):
@@ -189,9 +195,8 @@ def get_model(controller: AlignmentGUIController) -> ChannelModel | None:
                 lambda progress: _load(tuple(state['source']), progress),
                 cancellable=False,
             )
-        except Exception as exc:  # noqa: BLE001
-            QtWidgets.QMessageBox.critical(controller.view, 'Load alignment model', str(exc))
-            return None
+        except Exception as exc:
+            raise PredictionError(f'Could not load the alignment model:\n{exc}') from exc
     if state is None or state.get('model') is None:
         if not load_model_dialog(controller):
             return None
@@ -434,13 +439,17 @@ def _warped_track_depths(n_track: int, channel_to_trace_work, channel_depth_um) 
 def align_shank(controller: AlignmentGUIController, items: ShankController) -> dict | None:
     """Return the shank's alignment, computing it (and opening its window) on first use.
 
-    None when the user cancelled or the alignment failed.
-
     Returns
     -------
-    dict
+    dict or None
         ``result`` (``AlignmentResult``), ``probe`` inputs, the GUI ``track`` (bottom -> top) and
-        ``track_depth_um`` (probe depth of each track sample), plus the result ``window``.
+        ``track_depth_um`` (probe depth of each track sample), plus the result ``window``; or
+        None when the user cancelled.
+
+    Raises
+    ------
+    PredictionError
+        If the model cannot be loaded, the probe has no usable features or the alignment fails.
     """
     state = getattr(items.model, 'auto_alignment', None)
     if state:
@@ -450,9 +459,8 @@ def align_shank(controller: AlignmentGUIController, items: ShankController) -> d
         return None
     try:
         probe = _probe_inputs(controller, items, model)
-    except Exception as exc:  # noqa: BLE001 - show any feature-loading problem to the user
-        QtWidgets.QMessageBox.critical(controller.view, 'Auto-alignment', str(exc))
-        return None
+    except Exception as exc:
+        raise PredictionError(str(exc)) from exc
     # GUI track: bottom -> top along the histology picks, 10 µm apart, top to bottom of the brain.
     track_gui = np.asarray(items.model.align_handle.xyz_samples, dtype=np.float32)
     try:
@@ -469,9 +477,8 @@ def align_shank(controller: AlignmentGUIController, items: ShankController) -> d
         )
     except AlignmentCancelledError:
         return None
-    except Exception as exc:  # noqa: BLE001
-        QtWidgets.QMessageBox.critical(controller.view, 'Auto-alignment', str(exc))
-        return None
+    except Exception as exc:
+        raise PredictionError(str(exc)) from exc
     state = dict(
         result=result,
         probe=probe,
@@ -490,7 +497,10 @@ def align_shank(controller: AlignmentGUIController, items: ShankController) -> d
 # The region-panel column: predicted regions or confidence
 # -----------------------------------------------------------------------------
 def predict_regions(controller, items):
-    """Regions along the shank's whole histology track: ``(region_ids, depths_m)``."""
+    """Regions along the shank's whole histology track: ``(region_ids, depths_m)``.
+
+    None when the user cancelled; raises :class:`PredictionError` as :func:`align_shank` does.
+    """
     state = align_shank(controller, items)
     if state is None:
         return None
@@ -504,6 +514,7 @@ def predict_confidence(controller, items) -> Bunch | None:
 
     Green is high and red low confidence (``RdYlGn``); the track beyond the probe and channels
     without a value are grey. Depths are the channels' probe depths (µm), like the region column.
+    None when the user cancelled; raises :class:`PredictionError` as :func:`align_shank` does.
     """
     import matplotlib as mpl  # noqa: PLC0415 - only needed here
 

@@ -39,6 +39,10 @@ DISPLAY_REGIONS = 'Regions'
 DISPLAY_CONFIDENCE = 'Confidence'
 
 
+class PredictionError(Exception):
+    """A model could not make a prediction; the message is meant for the user."""
+
+
 def auto_alignment_display(controller: AlignmentGUIController) -> str:
     """How the auto-alignment column is coloured: ``DISPLAY_REGIONS`` or ``DISPLAY_CONFIDENCE``."""
     return plugin_state(controller).get(DISPLAY_STATE_KEY) or DISPLAY_REGIONS

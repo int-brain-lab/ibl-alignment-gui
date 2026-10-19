@@ -14,6 +14,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     DISPLAY_CONFIDENCE,
     DISPLAY_REGIONS,
     DISPLAY_STATE_KEY,
+    PredictionError,
     auto_alignment_display,
     is_model_loaded,
 )
@@ -283,7 +284,11 @@ class ChannelPrediction:
         if func is None:
             return
 
-        _plot_region_panels(self.controller, model, func)
+        errors = _plot_region_panels(self.controller, model, func)
+        # One dialog for all shanks; the shanks that succeeded are still drawn.
+        messages = list(dict.fromkeys(error for error in errors if error))
+        if messages:
+            QtWidgets.QMessageBox.warning(self.controller.view, model, '\n\n'.join(messages))
 
         user_selected = not getattr(self.controller.view, 'triggering_menu_option', False)
         if model == AUTO_ALIGNMENT_KEY and user_selected:
@@ -299,7 +304,7 @@ def _plot_region_panels(
     model: str,
     func: Callable[..., Bunch | None],
     **kwargs,
-) -> None:
+) -> str | None:
     """Compute (and cache) a shank's prediction for ``model`` and draw it.
 
     Decorated with :func:`shank_loop`, so a single call iterates over every shank/config (the
@@ -317,12 +322,21 @@ def _plot_region_panels(
         Region-model key, also the per-shank prediction cache key.
     func : Callable
         The ``compute_*`` function producing the prediction Bunch for ``model``.
+
+    Returns
+    -------
+    str or None
+        The error message when the prediction failed, else None. Errors are returned rather than
+        shown so that the caller reports them once for all shanks.
     """
     if not getattr(items.model, 'predictions', None):
         items.model.predictions = Bunch()
 
     if items.model.predictions.get(model) is None:
-        items.model.predictions[model] = func(controller, items)
+        try:
+            items.model.predictions[model] = func(controller, items)
+        except PredictionError as exc:
+            return str(exc)
 
     pred = items.model.predictions[model]
     if pred is not None:

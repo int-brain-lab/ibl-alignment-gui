@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qtpy import QtCore, QtWidgets
@@ -21,6 +23,8 @@ from qtpy import QtCore, QtWidgets
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal, FeatureLoaderOne
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pandas as pd
 
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
@@ -41,6 +45,259 @@ DISPLAY_CONFIDENCE = 'Confidence'
 
 class PredictionError(Exception):
     """A model could not make a prediction; the message is meant for the user."""
+
+
+class AlignmentCancelledError(Exception):
+    """Raised from the progress callback when the user presses Cancel."""
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """A loadable Ephys Atlas model, as the shared load dialog and model cache need it.
+
+    Attributes
+    ----------
+    key : str
+        The plugin-state key the loaded model is cached under: a decoder's name, or 'Encoding'.
+    title : str
+        Title of the load dialog, e.g. 'Load alignment model'.
+    repo : str
+        Default Hugging Face repository.
+    revision : str
+        Default release tag, e.g. '2026_W39'.
+    note : str
+        Explanation shown in the load dialog.
+    load : Callable
+        ``load(source, progress) -> model``: loads ``source`` (``(repo_or_dir, revision)``),
+        reporting through ``progress(fraction, message)``. It does its heavy imports itself, so
+        this module stays light.
+    invalidate : Callable
+        ``invalidate(controller)``: drops the shanks' cached predictions of this model.
+    """
+
+    key: str
+    title: str
+    repo: str
+    revision: str
+    note: str
+    load: Callable[[tuple[str, str], Callable[[float, str], None]], object]
+    invalidate: Callable[[AlignmentGUIController], None]
+
+
+class ModelSourceDialog(QtWidgets.QDialog):
+    """Choose a model release: a Hugging Face repository and release tag, or a local release.
+
+    Parameters
+    ----------
+    parent : QtWidgets.QWidget or None
+        The parent window.
+    spec : ModelSpec
+        The model: its dialog title and note, and the defaults used for empty fields.
+    repo : str
+        The repository the dialog opens with.
+    revision : str
+        The release tag the dialog opens with.
+    local_dir : Path or None
+        The local release directory the dialog opens with, if any.
+    """
+
+    def __init__(
+        self, parent, spec: ModelSpec, repo: str, revision: str, local_dir: Path | None
+    ) -> None:
+        super().__init__(parent)
+        self._spec = spec
+        self.setWindowTitle(spec.title)
+        self.setMinimumWidth(560)
+        form = QtWidgets.QFormLayout()
+        self._repo = QtWidgets.QLineEdit(repo)
+        self._revision = QtWidgets.QLineEdit(revision)
+        form.addRow('Hugging Face repository', self._repo)
+        form.addRow('Release tag', self._revision)
+
+        local_row = QtWidgets.QHBoxLayout()
+        self._local = QtWidgets.QLineEdit('' if local_dir is None else str(local_dir))
+        self._local.setPlaceholderText(
+            'optional: a local release directory (containing ephysatlas_model.json) instead of '
+            'the Hub'
+        )
+        browse = QtWidgets.QPushButton('Browse…')
+        browse.clicked.connect(self._browse)
+        local_row.addWidget(self._local)
+        local_row.addWidget(browse)
+        form.addRow('Local release', local_row)
+
+        note = QtWidgets.QLabel(spec.note)
+        note.setWordWrap(True)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+
+    def _browse(self) -> None:
+        # Loading reports a directory that is not a release (no manifest).
+        chosen = QtWidgets.QFileDialog.getExistingDirectory(
+            self, 'Select a local release directory (containing ephysatlas_model.json)'
+        )
+        if chosen:
+            self._local.setText(chosen)
+
+    def source(self) -> tuple[str, str]:
+        """``(repo_id_or_directory, revision)`` to load; empty fields use the spec's defaults."""
+        local = self._local.text().strip()
+        revision = self._revision.text().strip() or self._spec.revision
+        return (local or self._repo.text().strip() or self._spec.repo), revision
+
+
+NO_FEATURES_MESSAGE = (
+    'No features found for this probe. '
+    'Set via Plugins -> Channel Prediction -> Load features file...'
+)
+
+
+def _load_source(controller: AlignmentGUIController, spec: ModelSpec, source: tuple[str, str]):
+    """Load ``source`` with ``spec.load`` behind a progress dialog.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    spec : ModelSpec
+        The model to load.
+    source : tuple of (str, str)
+        ``(repo_id_or_directory, revision)`` to load.
+
+    Returns
+    -------
+    object
+        The loaded model.
+
+    Raises
+    ------
+    PredictionError
+        If the model cannot be loaded, naming the source and the reason.
+    """
+    try:
+        return run_with_progress(
+            controller, spec.title, lambda progress: spec.load(source, progress), cancellable=False
+        )
+    except Exception as exc:
+        raise PredictionError(f'Could not load {source[0]}@{source[1]}:\n{exc}') from exc
+
+
+def load_model_dialog(controller: AlignmentGUIController, spec: ModelSpec) -> bool:
+    """Ask which release of ``spec``'s model to use and load it (only when the source changed).
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    spec : ModelSpec
+        The model to load.
+
+    Returns
+    -------
+    bool
+        True when a model is loaded, False when the user cancelled or loading failed.
+    """
+    plugin = plugin_state(controller)
+    state = plugin.get(spec.key) or dict(model=None, source=None)
+    plugin[spec.key] = state
+    if not has_features(controller):
+        QtWidgets.QMessageBox.warning(controller.view, PLUGIN_KEY, NO_FEATURES_MESSAGE)
+        return False
+
+    repo, revision = state['source'] or (spec.repo, spec.revision)
+    local = Path(repo) if Path(str(repo)).is_dir() else None
+    dialog = ModelSourceDialog(
+        controller.view, spec, spec.repo if local else repo, revision, local
+    )
+    if dialog.exec() != QtWidgets.QDialog.Accepted:
+        return state['model'] is not None
+
+    source = dialog.source()
+    if state['model'] is not None and tuple(state['source']) == source:
+        return True
+    try:
+        model = _load_source(controller, spec, source)
+    except PredictionError as exc:
+        QtWidgets.QMessageBox.critical(controller.view, spec.title, str(exc))
+        return False
+    state.update(model=model, source=source)
+    spec.invalidate(controller)
+    logger.info('%s set to %s@%s', spec.key, *source)
+    return True
+
+
+def get_model(controller: AlignmentGUIController, spec: ModelSpec):
+    """Return ``spec``'s loaded model, loading it first when needed.
+
+    A ``source`` preset on the plugin state (``(repo_id_or_dir, revision)``, e.g. by a launcher
+    script) loads without the dialog; otherwise the load dialog opens.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    spec : ModelSpec
+        The model to return.
+
+    Returns
+    -------
+    object or None
+        The loaded model, or None if the user cancelled or loading from the dialog failed.
+
+    Raises
+    ------
+    PredictionError
+        If a preset source cannot be loaded.
+    """
+    state = plugin_state(controller).get(spec.key)
+    if state is not None and state.get('model') is None and state.get('source'):
+        state['model'] = _load_source(controller, spec, tuple(state['source']))
+    if state is None or state.get('model') is None:
+        if not load_model_dialog(controller, spec):
+            return None
+        state = plugin_state(controller)[spec.key]
+    return state['model']
+
+
+def run_with_progress(
+    controller: AlignmentGUIController, title: str, work: Callable, *, cancellable: bool = True
+):
+    """Run ``work(progress)`` behind a modal progress dialog showing its fraction and message.
+
+    ``progress(fraction, message)`` updates the bar and its text and keeps the GUI responsive;
+    Cancel raises :class:`AlignmentCancelledError` inside ``work`` at its next progress report.
+    """
+    dialog = QtWidgets.QProgressDialog(
+        title, 'Cancel' if cancellable else None, 0, 1000, controller.view
+    )
+    dialog.setWindowTitle(title)
+    dialog.setWindowModality(QtCore.Qt.WindowModal)
+    dialog.setMinimumDuration(0)
+    dialog.setMinimumWidth(420)
+    dialog.setAutoClose(False)
+    dialog.setValue(0)
+    QtWidgets.QApplication.processEvents()
+
+    def progress(fraction: float, message: str) -> None:
+        if cancellable and dialog.wasCanceled():
+            raise AlignmentCancelledError()
+        dialog.setLabelText(f'{title}\n\n{message}')
+        dialog.setValue(int(round(1000 * float(fraction))))
+        QtWidgets.QApplication.processEvents()
+
+    QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+    try:
+        return work(progress)
+    finally:
+        QtWidgets.QApplication.restoreOverrideCursor()
+        dialog.close()
 
 
 def auto_alignment_display(controller: AlignmentGUIController) -> str:

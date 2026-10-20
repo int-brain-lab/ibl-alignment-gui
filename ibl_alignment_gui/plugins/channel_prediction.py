@@ -17,6 +17,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
     auto_alignment_display,
     is_model_loaded,
+    load_model_dialog,
 )
 from ibl_alignment_gui.plugins.ephys_atlas.inference import CUMULATIVE_SUFFIX, DECODERS
 from ibl_alignment_gui.utils.helpers import shank_loop
@@ -173,7 +174,7 @@ def _load_decoder(controller: 'AlignmentGUIController', name: str) -> None:
     """Load region decoder ``name`` via dialog; reveal its region options, refresh on success."""
     from ibl_alignment_gui.plugins.ephys_atlas import inference
 
-    if inference.load_model_dialog(controller, name):
+    if load_model_dialog(controller, inference.DECODER_SPECS[name]):
         # Reveal the now-loaded model's region options (offline only adds them once loaded).
         _refresh_model_options(controller)
         controller.view.trigger_menu_option('region', name)
@@ -183,7 +184,7 @@ def _load_spatial_model(controller: 'AlignmentGUIController') -> None:
     """Load the alignment model via dialog; reveal its region options and refresh on success."""
     import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
 
-    if spatial.load_model_dialog(controller):
+    if load_model_dialog(controller, spatial.ENCODER_SPEC):
         # Reveal the now-loaded model's region option (offline only adds it once loaded).
         _refresh_model_options(controller)
         controller.view.trigger_menu_option('region', spatial.PREDICTION_KEY)

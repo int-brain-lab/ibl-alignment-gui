@@ -18,30 +18,29 @@ The heavy ``torch``/``ephysatlas`` imports load with this module, so the plugin 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 from ephysatlas.alignment import CHANNEL_MODEL_REPO_ID, VINTAGE, ChannelModel, align_histology
 from ephysatlas.alignment.data import load_probe
 from ephysatlas.spatial_encoder.utils import FEATURE_LIST
-from qtpy import QtCore, QtWidgets
+from qtpy import QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_KEY,
+    AlignmentCancelledError,
+    ModelSpec,
     PredictionError,
     clear_predictions,
     features_for_vintage,
-    has_features,
+    get_model,
     has_local_features,
-    plugin_state,
+    run_with_progress,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
@@ -53,155 +52,39 @@ PREDICTION_KEY = AUTO_ALIGNMENT_KEY
 # confidence merge into one segment; channels without a value are drawn grey.
 CONFIDENCE_STEP = 0.05
 NO_VALUE_RGB = (170, 170, 170)
-
-
-class AlignmentCancelledError(Exception):
-    """Raised from the progress callback when the user presses Cancel."""
+# Explanation shown in the alignment model's load dialog.
+ENCODER_NOTE = (
+    'The model is loaded with ephysatlas.load_pretrained, downloaded once and cached '
+    '(~/.cache/ephysatlas/models). It ships its molecular-context volumes and training '
+    'neighbour bank, so no other data is needed.'
+)
 
 
 # -----------------------------------------------------------------------------
 # Model loading
 # -----------------------------------------------------------------------------
-class _ModelDialog(QtWidgets.QDialog):
-    """Choose the released channel-level model: a Hugging Face repo + tag, or a local release."""
+def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:
+    """Load an alignment model release, with its probe-confidence model.
 
-    def __init__(self, parent, repo_id: str, revision: str, local_dir: Path | None):
-        super().__init__(parent)
-        self.setWindowTitle('Load alignment model')
-        self.setMinimumWidth(560)
-        form = QtWidgets.QFormLayout()
-        self._repo = QtWidgets.QLineEdit(repo_id)
-        self._revision = QtWidgets.QLineEdit(revision)
-        form.addRow('Hugging Face repository', self._repo)
-        form.addRow('Release tag', self._revision)
-
-        local_row = QtWidgets.QHBoxLayout()
-        self._local = QtWidgets.QLineEdit('' if local_dir is None else str(local_dir))
-        self._local.setPlaceholderText('optional: a local release directory instead of the Hub')
-        browse = QtWidgets.QPushButton('Browse…')
-        browse.clicked.connect(self._browse)
-        local_row.addWidget(self._local)
-        local_row.addWidget(browse)
-        form.addRow('Local release', local_row)
-
-        note = QtWidgets.QLabel(
-            'The model is loaded with ephysatlas.load_pretrained, downloaded once and cached '
-            '(~/.cache/ephysatlas/models). It ships its molecular-context volumes and training '
-            'neighbour bank, so no other data is needed.'
-        )
-        note.setWordWrap(True)
-        buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(note)
-        layout.addWidget(buttons)
-
-    def _browse(self) -> None:
-        chosen = QtWidgets.QFileDialog.getExistingDirectory(
-            self, 'Select a local release directory'
-        )
-        if chosen:
-            self._local.setText(chosen)
-
-    def source(self) -> tuple[str, str]:
-        """``(repo_id_or_directory, revision)`` to load."""
-        local = self._local.text().strip()
-        if local:
-            return local, self._revision.text().strip() or VINTAGE
-        return (
-            self._repo.text().strip() or CHANNEL_MODEL_REPO_ID,
-            self._revision.text().strip() or VINTAGE,
-        )
-
-
-def load_model_dialog(controller: AlignmentGUIController) -> bool:
-    """Ask which release to use and load it (only when the source changed).
+    Parameters
+    ----------
+    source : tuple of (str, str)
+        ``(repo_id_or_directory, revision)``: a Hugging Face repository and release tag, or a
+        local release directory.
+    progress : Callable
+        ``progress(fraction, message)``, called as loading proceeds.
 
     Returns
     -------
-    bool
-        True when a model is loaded, False when the user cancelled or loading failed.
+    ChannelModel
+        The loaded model.
     """
-    plugin = plugin_state(controller)
-    state = plugin.get(MODEL_NAME) or dict(model=None, source=None)
-    plugin[MODEL_NAME] = state
-    if not has_features(controller):
-        QtWidgets.QMessageBox.warning(
-            controller.view,
-            'Channel Prediction',
-            'No features found for this probe. '
-            'Set via Plugins -> Channel Prediction -> Load features file...',
-        )
-        return False
-    repo, revision = state['source'] or (CHANNEL_MODEL_REPO_ID, VINTAGE)
-    local = Path(repo) if Path(str(repo)).is_dir() else None
-    dialog = _ModelDialog(
-        controller.view, CHANNEL_MODEL_REPO_ID if local else repo, revision, local
-    )
-    if dialog.exec() != QtWidgets.QDialog.Accepted:
-        return state['model'] is not None
-    source = dialog.source()
-    if state['model'] is not None and state['source'] == source:
-        return True
-    try:
-        model = run_with_progress(
-            controller,
-            'Loading alignment model',
-            lambda progress: _load(source, progress),
-            cancellable=False,
-        )
-    except Exception as exc:  # noqa: BLE001 - show any loading problem to the user
-        QtWidgets.QMessageBox.critical(
-            controller.view,
-            'Load alignment model',
-            f'Could not load {source[0]}@{source[1]}:\n{exc}',
-        )
-        return False
-    state.update(model=model, source=source)
-    invalidate_predictions(controller)
-    return True
-
-
-def _load(source: tuple[str, str], progress) -> ChannelModel:
     progress(0.1, f'Loading {source[0]}@{source[1]} (downloaded on first use)…')
     model = ChannelModel(*source)  # ephysatlas.load_pretrained(repo_id, revision=...)
     progress(0.8, 'Loading the probe-confidence model…')
     _ = model.conf_model
     progress(1.0, 'Model ready')
     return model
-
-
-def get_model(controller: AlignmentGUIController) -> ChannelModel | None:
-    """Return the loaded model, loading it first when needed (None if the user cancelled).
-
-    A ``source`` pre-set on the plugin state (``(repo_id_or_dir, revision)``, e.g. by a launcher
-    script) loads without the dialog; otherwise the load dialog opens.
-
-    Raises
-    ------
-    PredictionError
-        If the pre-set ``source`` cannot be loaded.
-    """
-    state = plugin_state(controller).get(MODEL_NAME)
-    if state is not None and state.get('model') is None and state.get('source'):
-        try:
-            state['model'] = run_with_progress(
-                controller,
-                'Loading alignment model',
-                lambda progress: _load(tuple(state['source']), progress),
-                cancellable=False,
-            )
-        except Exception as exc:
-            raise PredictionError(f'Could not load the alignment model:\n{exc}') from exc
-    if state is None or state.get('model') is None:
-        if not load_model_dialog(controller):
-            return None
-        state = plugin_state(controller).get(MODEL_NAME)
-    return state['model']
 
 
 @shank_loop
@@ -219,6 +102,18 @@ def invalidate_predictions(
     items.model.auto_alignment = None
 
 
+# The alignment model, as the shared load dialog and model cache need it.
+ENCODER_SPEC = ModelSpec(
+    key=MODEL_NAME,
+    title='Load alignment model',
+    repo=CHANNEL_MODEL_REPO_ID,
+    revision=VINTAGE,
+    note=ENCODER_NOTE,
+    load=_load_encoder,
+    invalidate=invalidate_predictions,
+)
+
+
 @shank_loop
 def clear_display(controller: AlignmentGUIController, items: ShankController, **kwargs) -> None:
     """Drop a shank's drawn auto-alignment column (not its alignment), e.g. to recolour it."""
@@ -226,42 +121,8 @@ def clear_display(controller: AlignmentGUIController, items: ShankController, **
 
 
 # -----------------------------------------------------------------------------
-# Progress and result windows
+# Result windows
 # -----------------------------------------------------------------------------
-def run_with_progress(
-    controller: AlignmentGUIController, title: str, work: Callable, *, cancellable: bool = True
-):
-    """Run ``work(progress)`` behind a modal progress dialog showing its fraction and message.
-
-    ``progress(fraction, message)`` updates the bar and its text and keeps the GUI responsive;
-    Cancel raises :class:`AlignmentCancelledError` inside ``work`` at its next progress report.
-    """
-    dialog = QtWidgets.QProgressDialog(
-        title, 'Cancel' if cancellable else None, 0, 1000, controller.view
-    )
-    dialog.setWindowTitle(title)
-    dialog.setWindowModality(QtCore.Qt.WindowModal)
-    dialog.setMinimumDuration(0)
-    dialog.setMinimumWidth(420)
-    dialog.setAutoClose(False)
-    dialog.setValue(0)
-    QtWidgets.QApplication.processEvents()
-
-    def progress(fraction: float, message: str) -> None:
-        if cancellable and dialog.wasCanceled():
-            raise AlignmentCancelledError()
-        dialog.setLabelText(f'{title}\n\n{message}')
-        dialog.setValue(int(round(1000 * float(fraction))))
-        QtWidgets.QApplication.processEvents()
-
-    QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-    try:
-        return work(progress)
-    finally:
-        QtWidgets.QApplication.restoreOverrideCursor()
-        dialog.close()
-
-
 class AlignmentResultWindow(QtWidgets.QDialog):
     """A non-modal window with the alignment result figure, a toolbar and a save button.
 
@@ -454,7 +315,7 @@ def align_shank(controller: AlignmentGUIController, items: ShankController) -> d
     state = getattr(items.model, 'auto_alignment', None)
     if state:
         return state
-    model = get_model(controller)
+    model = get_model(controller, ENCODER_SPEC)
     if model is None:
         return None
     try:

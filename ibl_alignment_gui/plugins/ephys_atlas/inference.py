@@ -13,23 +13,24 @@ from __future__ import annotations
 
 import functools
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import pandas as pd
-from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    NO_FEATURES_MESSAGE,
+    ModelSpec,
     PredictionError,
     clear_predictions,
     features_for_vintage,
-    has_features,
-    plugin_state,
+    get_model,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from ephysatlas.anatomy import ClassifierRegions
 
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
@@ -77,137 +78,40 @@ DECODERS = {
 MODEL_REVISION = '2026_W39'
 # Suffix of the region-plot option showing a decoder's cumulative class probabilities.
 CUMULATIVE_SUFFIX = ' (cumulative)'
+# Explanation shown in the decoders' load dialog.
+DECODER_NOTE = (
+    'The model is loaded with ephysatlas.load_pretrained, downloaded once from the Hugging Face '
+    'Hub and cached (~/.cache/ephysatlas/models). A local release takes precedence over the Hub.'
+)
 
 
 # -----------------------------------------------------------------------------
-# GUI interaction
+# Model loading
 # -----------------------------------------------------------------------------
 
 
-class _InferenceModelDialog(QtWidgets.QDialog):
-    """Choose a released region decoder: a Hugging Face repo + tag, or a local release."""
-
-    def __init__(
-        self, parent, title: str, repo_id: str, revision: str, local_dir: Path | None
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setMinimumWidth(560)
-        self._default_repo = repo_id
-        form = QtWidgets.QFormLayout()
-        self._repo = QtWidgets.QLineEdit(repo_id)
-        self._revision = QtWidgets.QLineEdit(revision)
-        form.addRow('Hugging Face repository', self._repo)
-        form.addRow('Release tag', self._revision)
-
-        local_row = QtWidgets.QHBoxLayout()
-        self._local = QtWidgets.QLineEdit('' if local_dir is None else str(local_dir))
-        self._local.setPlaceholderText(
-            'optional: a local release directory (containing ephysatlas_model.json) instead of '
-            'the Hub'
-        )
-        browse = QtWidgets.QPushButton('Browse…')
-        browse.clicked.connect(self._browse)
-        local_row.addWidget(self._local)
-        local_row.addWidget(browse)
-        form.addRow('Local release', local_row)
-
-        note = QtWidgets.QLabel(
-            'The model is loaded with ephysatlas.load_pretrained, downloaded once from the '
-            'Hugging Face Hub and cached (~/.cache/ephysatlas/models). A local release takes '
-            'precedence over the Hub.'
-        )
-        note.setWordWrap(True)
-        buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(note)
-        layout.addWidget(buttons)
-
-    def _browse(self) -> None:
-        # load_pretrained reports a directory that is not a release (no manifest) when loading.
-        chosen = QtWidgets.QFileDialog.getExistingDirectory(
-            self, 'Select a local release directory (containing ephysatlas_model.json)'
-        )
-        if chosen:
-            self._local.setText(chosen)
-
-    def source(self) -> tuple[str, str]:
-        """``(repo_id_or_directory, revision)`` to load."""
-        local = self._local.text().strip()
-        revision = self._revision.text().strip() or MODEL_REVISION
-        return (local or self._repo.text().strip() or self._default_repo), revision
-
-
-def load_model_dialog(controller: AlignmentGUIController, name: str) -> bool:
-    """Ask which release of decoder ``name`` to use and load it (only when the source changed).
+def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None]):
+    """Load a region decoder release.
 
     Parameters
     ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    name : str
-        The decoder, a key of :data:`DECODERS`.
+    source : tuple of (str, str)
+        ``(repo_id_or_directory, revision)``: a Hugging Face repository and release tag, or a
+        local release directory.
+    progress : Callable
+        ``progress(fraction, message)``, called as loading proceeds.
 
     Returns
     -------
-    bool
-        True when a model is loaded, False when the user cancelled or loading failed.
+    RegionClassifier or ProbeTransformerClassifier
+        The model returned by ``ephysatlas.load_pretrained``.
     """
-    plugin = plugin_state(controller)
-    state = plugin.get(name) or dict(model=None, source=None)
-    plugin[name] = state
-    if not has_features(controller):
-        QtWidgets.QMessageBox.warning(
-            controller.view,
-            'Channel Prediction',
-            'No features found for this probe. '
-            'Set via Plugins -> Channel Prediction -> Load features file...',
-        )
-        return False
-
-    default_repo = DECODERS[name].repo
-    repo, revision = state['source'] or (default_repo, MODEL_REVISION)
-    local = Path(repo) if Path(str(repo)).is_dir() else None
-    dialog = _InferenceModelDialog(
-        controller.view, f'Load {name} model', default_repo if local else repo, revision, local
-    )
-    if dialog.exec() != QtWidgets.QDialog.Accepted:
-        return state['model'] is not None
-
-    source = dialog.source()
-    if state['model'] is not None and state['source'] == source:
-        return True
-    if not _load_into_state(controller, state, source):
-        return False
-    invalidate_predictions(controller)
-    logger.info('%s model set to %s@%s', name, *source)
-    return True
-
-
-def _load_into_state(controller: AlignmentGUIController, state: dict, source: tuple) -> bool:
-    """Load ``source`` behind a wait cursor and cache it on ``state``; report failures."""
     from ephysatlas import load_pretrained  # noqa: PLC0415 - heavy, lazy
 
     repo, revision = source
-    QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-    try:
-        # A Hub repo id or a local release directory; the manifest picks the model class.
-        model = load_pretrained(repo, revision=revision)
-    except Exception as exc:  # noqa: BLE001 - show any loading problem to the user
-        QtWidgets.QApplication.restoreOverrideCursor()
-        QtWidgets.QMessageBox.critical(
-            controller.view,
-            'Load region decoder',
-            f'Could not load {repo}@{revision}:\n{exc}',
-        )
-        return False
-    QtWidgets.QApplication.restoreOverrideCursor()
-    state.update(model=model, source=(str(repo), revision))
+    progress(0.1, f'Loading {repo}@{revision} (downloaded on first use)…')
+    # A Hub repo id or a local release directory; the manifest picks the model class.
+    model = load_pretrained(repo, revision=revision)
     logger.info(
         'Loaded region decoder %s %s (%d features, %d classes)',
         model.index.get('model_class'),
@@ -215,14 +119,18 @@ def _load_into_state(controller: AlignmentGUIController, state: dict, source: tu
         len(model.inputs['features']),
         len(model.config['classes']),
     )
-    return True
+    progress(1.0, 'Model ready')
+    return model
 
 
 @shank_loop
 def invalidate_predictions(
-    controller: AlignmentGUIController, items: ShankController, **kwargs
+    controller: AlignmentGUIController,
+    items: ShankController,
+    names: Iterable[str] = tuple(DECODERS),
+    **kwargs,
 ) -> None:
-    """Drop every decoder's cached predictions on a shank so the next click recomputes.
+    """Drop decoders' cached predictions on a shank so the next click recomputes.
 
     Decorated with :func:`shank_loop`, so a single call iterates over every shank/config; the
     ``shank`` and ``config`` keywords injected by the decorator are absorbed via ``**kwargs``.
@@ -233,47 +141,30 @@ def invalidate_predictions(
         The main application controller.
     items : ShankController
         The shank whose cached predictions are cleared.
+    names : iterable of str
+        The decoders whose predictions are cleared, keys of :data:`DECODERS`; all by default.
     """
-    clear_predictions(items, *DECODERS, *(name + CUMULATIVE_SUFFIX for name in DECODERS))
+    clear_predictions(items, *names, *(name + CUMULATIVE_SUFFIX for name in names))
+
+
+# The decoders, as the shared load dialog and model cache need them.
+DECODER_SPECS = {
+    name: ModelSpec(
+        key=name,
+        title=f'Load {name} model',
+        repo=decoder.repo,
+        revision=MODEL_REVISION,
+        note=DECODER_NOTE,
+        load=_load_decoder,
+        invalidate=functools.partial(invalidate_predictions, names=(name,)),
+    )
+    for name, decoder in DECODERS.items()
+}
 
 
 # -----------------------------------------------------------------------------
 # Loading utils
 # -----------------------------------------------------------------------------
-
-
-def get_model(controller: AlignmentGUIController, name: str):
-    """Return the loaded decoder ``name``, loading it first when needed (None if cancelled).
-
-    A ``source`` pre-set on the plugin state (``(repo_id_or_dir, revision)``, e.g. by a launcher
-    script) loads without the dialog; otherwise the load dialog opens.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    name : str
-        The decoder, a key of :data:`DECODERS`.
-
-    Returns
-    -------
-    RegionClassifier or ProbeTransformerClassifier or None
-        The model returned by ``ephysatlas.load_pretrained``, or None if the user cancelled or
-        loading failed.
-    """
-    state = plugin_state(controller).get(name)
-    if (
-        state is not None
-        and state.get('model') is None
-        and state.get('source')
-        and not _load_into_state(controller, state, tuple(state['source']))
-    ):
-        return None
-    if state is None or state.get('model') is None:
-        if not load_model_dialog(controller, name):
-            return None
-        state = plugin_state(controller).get(name)
-    return state['model']
 
 
 @functools.cache
@@ -383,16 +274,13 @@ def _predict_df(
     """
     # Resolve the model first so its load dialog (and its "load a features file first" guard)
     # runs before we bail on missing features, matching the spatial encoder path.
-    model = get_model(controller, name)
+    model = get_model(controller, DECODER_SPECS[name])
     if model is None:
         return None
 
     df = features_for_vintage(controller, items, model.index.get('vintage'))
     if df is None:
-        raise PredictionError(
-            'No features found for this probe. Set via '
-            'Plugins -> Channel Prediction -> Load features file...'
-        )
+        raise PredictionError(NO_FEATURES_MESSAGE)
     out, depths = run_decoder(model, df)
 
     return out, depths, model

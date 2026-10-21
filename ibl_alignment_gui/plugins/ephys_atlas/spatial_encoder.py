@@ -9,8 +9,11 @@ its ``predict``. The shank's recorded channel features are then warped along its
 behind a progress dialog. The result figure opens in a pop-up window, and the region panel shows
 either the predicted regions or the alignment confidence along the probe.
 
-Each shank's alignment is computed once and kept, so selecting the region option again re-opens its
-window (when closed) and switching the colouring redraws the column without re-aligning.
+Each shank is aligned once: both region-panel views -- the predicted regions and the alignment
+confidence, two region-plot options -- are built from the alignment straight away and cached by
+the plugin, so switching between them, or selecting one again, does not re-align. The result
+window opens once and is kept in the plugin state; the 'Show auto-alignment results' menu item
+shows it again.
 
 The heavy ``torch``/``ephysatlas`` imports load with this module, so the plugin imports it lazily.
 """
@@ -27,15 +30,20 @@ from ephysatlas.spatial_encoder.utils import FEATURE_LIST
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
+    M_TO_UM,
     AlignmentCancelledError,
     ModelSpec,
     PredictionError,
+    alignment_windows,
     clear_predictions,
     features_for_vintage,
     get_model,
+    get_region_boundaries,
     has_local_features,
     run_with_progress,
+    update_results_action,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
@@ -47,7 +55,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = 'Encoding'  # plugin-state key the loaded model is cached under
-PREDICTION_KEY = AUTO_ALIGNMENT_KEY
 # Confidence colouring: p(good) is rounded to this step so neighbouring channels of similar
 # confidence merge into one segment; channels without a value are drawn grey.
 CONFIDENCE_STEP = 0.05
@@ -91,15 +98,15 @@ def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:
 def invalidate_predictions(
     controller: AlignmentGUIController, items: ShankController, **kwargs
 ) -> None:
-    """Forget a shank's alignment so the next selection recomputes it.
+    """Forget a shank's auto-alignment views so the next selection re-aligns it.
 
     Used after a new model or features file; the shank's result window is closed.
     """
-    clear_predictions(items, PREDICTION_KEY)
-    state = getattr(items.model, 'auto_alignment', None)
-    if state and state.get('window') is not None:
-        state['window'].close()
-    items.model.auto_alignment = None
+    clear_predictions(items, AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY)
+    window = alignment_windows(controller).pop((items.name, items.config), None)
+    if window is not None:
+        window.close()
+    update_results_action(controller)
 
 
 # The alignment model, as the shared load dialog and model cache need it.
@@ -112,12 +119,6 @@ ENCODER_SPEC = ModelSpec(
     load=_load_encoder,
     invalidate=invalidate_predictions,
 )
-
-
-@shank_loop
-def clear_display(controller: AlignmentGUIController, items: ShankController, **kwargs) -> None:
-    """Drop a shank's drawn auto-alignment column (not its alignment), e.g. to recolour it."""
-    clear_predictions(items, PREDICTION_KEY)
 
 
 # -----------------------------------------------------------------------------
@@ -162,44 +163,31 @@ class AlignmentResultWindow(QtWidgets.QDialog):
             self.figure.savefig(path, dpi=200)
 
 
-def show_result_window(controller: AlignmentGUIController, items: ShankController) -> None:
-    """Show the shank's alignment window, drawing it the first time.
-
-    A window that is already open is brought to the front.
-    """
-    state = getattr(items.model, 'auto_alignment', None)
-    if not state:
-        return
-    window = state.get('window')
-    if window is None:
-        from ephysatlas.alignment.plotting import plot_alignment_result  # noqa: PLC0415
-        from matplotlib.figure import Figure  # noqa: PLC0415
-
-        result, probe = state['result'], state['probe']
-        # Only what a new recording has: the histology trace, the planned trajectory and the
-        # inferred alignment (no reference alignment, no region accuracy).
-        fig = plot_alignment_result(
-            result,
-            controller.model.brain_atlas,
-            planned_xyz=probe.get('planned_xyz'),
-            fig=Figure(figsize=(17, 8.5)),
-        )
-        window = AlignmentResultWindow(
-            controller.view, fig, f'{result.label} -- {result.pid or "probe"}'
-        )
-        state['window'] = window
-    if not window.isVisible():
-        window.show()
-    window.raise_()
-    window.activateWindow()
-
-
-@shank_loop
-def show_result_windows(
-    controller: AlignmentGUIController, items: ShankController, **kwargs
+def _open_result_window(
+    controller: AlignmentGUIController, items: ShankController, result, probe: dict
 ) -> None:
-    """Re-open the alignment window of every shank that has been aligned and is not shown."""
-    show_result_window(controller, items)
+    """Draw the shank's alignment result in a new window, keep it and show it once.
+
+    The window is kept in :func:`alignment_windows` under ``(shank, config)``; afterwards it is
+    shown again only from the 'Show auto-alignment results' menu item, which this enables.
+    """
+    from ephysatlas.alignment.plotting import plot_alignment_result  # noqa: PLC0415
+    from matplotlib.figure import Figure  # noqa: PLC0415
+
+    # Only what a new recording has: the histology trace, the planned trajectory and the
+    # inferred alignment (no reference alignment, no region accuracy).
+    fig = plot_alignment_result(
+        result,
+        controller.model.brain_atlas,
+        planned_xyz=probe.get('planned_xyz'),
+        fig=Figure(figsize=(17, 8.5)),
+    )
+    window = AlignmentResultWindow(
+        controller.view, fig, f'{result.label} -- {result.pid or "probe"}'
+    )
+    alignment_windows(controller)[items.name, items.config] = window
+    update_results_action(controller)
+    window.show()
 
 
 # -----------------------------------------------------------------------------
@@ -297,24 +285,26 @@ def _warped_track_depths(n_track: int, channel_to_trace_work, channel_depth_um) 
     return scale * np.arange(n_track, dtype=float) + offset
 
 
-def align_shank(controller: AlignmentGUIController, items: ShankController) -> dict | None:
-    """Return the shank's alignment, computing it (and opening its window) on first use.
+def align_shank(
+    controller: AlignmentGUIController, items: ShankController
+) -> dict[str, Bunch] | None:
+    """Align the shank and return both auto-alignment views, opening its result window.
+
+    Nothing is kept here: the Channel Prediction plugin caches the views it returns, so the shank
+    is aligned again only after they are cleared (:func:`invalidate_predictions`).
 
     Returns
     -------
-    dict or None
-        ``result`` (``AlignmentResult``), ``probe`` inputs, the GUI ``track`` (bottom -> top) and
-        ``track_depth_um`` (probe depth of each track sample), plus the result ``window``; or
-        None when the user cancelled.
+    dict of {str: Bunch} or None
+        The regions view (:func:`predict_regions`) under ``'Auto-alignment'`` and the confidence
+        view (:func:`predict_confidence`) under ``'Auto-alignment (confidence)'``; or None when
+        the user cancelled.
 
     Raises
     ------
     PredictionError
         If the model cannot be loaded, the probe has no usable features or the alignment fails.
     """
-    state = getattr(items.model, 'auto_alignment', None)
-    if state:
-        return state
     model = get_model(controller, ENCODER_SPEC)
     if model is None:
         return None
@@ -340,51 +330,75 @@ def align_shank(controller: AlignmentGUIController, items: ShankController) -> d
         return None
     except Exception as exc:
         raise PredictionError(str(exc)) from exc
-    state = dict(
-        result=result,
-        probe=probe,
-        track=track_gui,
-        track_depth_um=_warped_track_depths(
-            len(track_gui), result.diagnostics['channel_to_trace'], probe['axial_um']
-        ),
-        window=None,
+    track_depth_um = _warped_track_depths(
+        len(track_gui), result.diagnostics['channel_to_trace'], probe['axial_um']
     )
-    items.model.auto_alignment = state
-    show_result_window(controller, items)
-    return state
+    _open_result_window(controller, items, result, probe)
+    return {
+        AUTO_ALIGNMENT_KEY: predict_regions(
+            controller.model.brain_atlas, track_gui, track_depth_um
+        ),
+        AUTO_ALIGNMENT_CONFIDENCE_KEY: predict_confidence(
+            result.p_good, result.valid, probe['axial_um'], track_depth_um
+        ),
+    }
 
 
 # -----------------------------------------------------------------------------
-# The region-panel column: predicted regions or confidence
+# The region-panel views: predicted regions and confidence
 # -----------------------------------------------------------------------------
-def predict_regions(controller, items):
-    """Regions along the shank's whole histology track: ``(region_ids, depths_m)``.
+def predict_regions(brain_atlas, track: np.ndarray, track_depth_um: np.ndarray) -> Bunch:
+    """Return the regions view: the atlas regions along the shank's whole histology track.
 
-    None when the user cancelled; raises :class:`PredictionError` as :func:`align_shank` does.
+    Parameters
+    ----------
+    brain_atlas : AllenAtlas
+        The GUI's brain atlas.
+    track : np.ndarray
+        ``[L, 3]`` histology track samples (m), bottom to top.
+    track_depth_um : np.ndarray
+        ``[L]`` probe depth (µm) of each track sample, from the aligned channels.
+
+    Returns
+    -------
+    Bunch
+        The region boundaries, labels and colours along the probe, for ``plot_histology``.
     """
-    state = align_shank(controller, items)
-    if state is None:
-        return None
     # Allen region ids, as the region panel's ``regions.get`` expects (not region-table indices).
-    ids = controller.model.brain_atlas.get_labels(state['track'], mapping='Allen')
-    return ids, state['track_depth_um'] / 1e6
+    ids = brain_atlas.get_labels(track, mapping='Allen')
+    regions = brain_atlas.regions.get(ids)
+    return get_region_boundaries(regions, np.asarray(track_depth_um, dtype=float) / M_TO_UM)
 
 
-def predict_confidence(controller, items) -> Bunch | None:
-    """Return the alignment confidence p(good) along the probe, for ``plot_histology``.
+def predict_confidence(
+    p_good: np.ndarray, valid: np.ndarray, axial_um: np.ndarray, track_depth_um: np.ndarray
+) -> Bunch:
+    """Return the confidence view: the alignment confidence p(good) along the probe.
 
     Green is high and red low confidence (``RdYlGn``); the track beyond the probe and channels
-    without a value are grey. Depths are the channels' probe depths (µm), like the region column.
-    None when the user cancelled; raises :class:`PredictionError` as :func:`align_shank` does.
+    without a value are grey. Depths are the channels' probe depths (µm), like the regions view.
+
+    Parameters
+    ----------
+    p_good : np.ndarray
+        ``[C]`` alignment confidence of each channel.
+    valid : np.ndarray
+        ``[C]`` whether each channel was aligned; channels that were not have no value.
+    axial_um : np.ndarray
+        ``[C]`` probe depth (µm) of each channel.
+    track_depth_um : np.ndarray
+        ``[L]`` probe depth (µm) of each histology track sample.
+
+    Returns
+    -------
+    Bunch
+        The segments (``region``), their ``colour`` and ``axis_label``, without boundary lines,
+        for ``plot_histology``.
     """
     import matplotlib as mpl  # noqa: PLC0415 - only needed here
 
-    state = align_shank(controller, items)
-    if state is None:
-        return None
-    result, probe = state['result'], state['probe']
-    depth = np.asarray(probe['axial_um'], dtype=float)
-    p_good = np.where(result.valid, result.p_good, np.nan)
+    depth = np.asarray(axial_um, dtype=float)
+    p_good = np.where(valid, p_good, np.nan)
     # One value per probe depth (Neuropixels has two sites per depth), tip first.
     levels = np.unique(depth[np.isfinite(depth)])
     p = np.array(
@@ -398,7 +412,7 @@ def predict_confidence(controller, items) -> Bunch | None:
     cmap = mpl.colormaps['RdYlGn']
     q = np.where(np.isfinite(p), np.round(p / CONFIDENCE_STEP) * CONFIDENCE_STEP, np.nan)
     region, colour, labels = [], [], []
-    track = np.sort(state['track_depth_um'][[0, -1]])
+    track = np.sort(np.asarray(track_depth_um, dtype=float)[[0, -1]])
     if track[0] < edges[0]:
         region.append((track[0], edges[0]))
         colour.append(NO_VALUE_RGB)

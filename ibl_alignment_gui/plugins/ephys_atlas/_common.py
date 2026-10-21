@@ -18,9 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal, FeatureLoaderOne
+from iblutil.util import Bunch
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,18 +31,18 @@ if TYPE_CHECKING:
 
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
-    from iblutil.util import Bunch
 
 logger = logging.getLogger(__name__)
 
 PLUGIN_KEY = 'Channel Prediction'
 
-# Auto-alignment: its region-panel option (also the per-shank prediction cache key) and how its
-# column is coloured -- the predicted regions, or the alignment confidence along the probe.
+# Track depths are stored along the histology track in meters; region plots expect microns.
+M_TO_UM = 1e6
+
+# Auto-alignment's region-plot options (also the per-shank prediction cache keys): the predicted
+# regions, and the alignment confidence along the probe.
 AUTO_ALIGNMENT_KEY = 'Auto-alignment'
-DISPLAY_STATE_KEY = 'auto_alignment_display'
-DISPLAY_REGIONS = 'Regions'
-DISPLAY_CONFIDENCE = 'Confidence'
+AUTO_ALIGNMENT_CONFIDENCE_KEY = 'Auto-alignment (confidence)'
 
 
 class PredictionError(Exception):
@@ -300,11 +302,6 @@ def run_with_progress(
         dialog.close()
 
 
-def auto_alignment_display(controller: AlignmentGUIController) -> str:
-    """How the auto-alignment column is coloured: ``DISPLAY_REGIONS`` or ``DISPLAY_CONFIDENCE``."""
-    return plugin_state(controller).get(DISPLAY_STATE_KEY) or DISPLAY_REGIONS
-
-
 def plugin_state(controller: AlignmentGUIController) -> Bunch:
     """Return the Channel Prediction plugin state Bunch.
 
@@ -319,6 +316,65 @@ def plugin_state(controller: AlignmentGUIController) -> Bunch:
         The plugin's mutable state container.
     """
     return controller.plugins[PLUGIN_KEY]
+
+
+def alignment_windows(controller: AlignmentGUIController) -> dict:
+    """Return the auto-alignment result windows, created empty on first use.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+
+    Returns
+    -------
+    dict
+        The ``AlignmentResultWindow`` of each aligned shank, keyed by ``(shank, config)``.
+    """
+    return plugin_state(controller).setdefault('alignment_windows', {})
+
+
+def close_alignment_windows(controller: AlignmentGUIController) -> None:
+    """Close every auto-alignment result window and forget them (e.g. on a new session).
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    """
+    windows = alignment_windows(controller)
+    for window in windows.values():
+        window.close()
+    windows.clear()
+    update_results_action(controller)
+
+
+def show_alignment_windows(controller: AlignmentGUIController) -> None:
+    """Show every kept auto-alignment result window again, bringing it to the front.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    """
+    for window in alignment_windows(controller).values():
+        if not window.isVisible():
+            window.show()
+        window.raise_()
+        window.activateWindow()
+
+
+def update_results_action(controller: AlignmentGUIController) -> None:
+    """Enable the 'Show auto-alignment results' menu item only while a result window exists.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    """
+    action = plugin_state(controller).get('alignment_results_action')
+    if action is not None:
+        action.setEnabled(bool(alignment_windows(controller)))
 
 
 def is_model_loaded(controller: AlignmentGUIController, state_key: str) -> bool:
@@ -494,3 +550,40 @@ def features_for_vintage(
         logger.warning('No %s features for this insertion; using the GUI features', vintage)
         return _get_features_df(controller, items)
     return feats['df']
+
+
+def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.ndarray]:
+    """
+    Get the boundaries of brain regions along the histology track.
+
+    Parameters
+    ----------
+    regions: dict
+        The brain regions along the histology track.
+    depths: np.ndarray
+        The depths along the histology track, in meters.
+
+    Returns
+    -------
+    Bunch
+        A bunch containing the region boundaries, labels, and colours.
+    """
+    boundaries = np.where(np.diff(regions.id))[0]
+
+    n_regions = len(boundaries) + 1
+    region = np.empty((n_regions, 2))
+    region_label = np.empty((n_regions, 2), dtype=object)
+    region_colour = np.empty((n_regions, 3), dtype=int)
+
+    for i in range(n_regions):
+        # Compute start and end indices for this region
+        start = 0 if i == 0 else boundaries[i - 1] + 1
+        end = boundaries[i] if i < len(boundaries) else regions.id.size - 1
+
+        region[i, :] = depths[[start, end]] * M_TO_UM
+        region_label[i, :] = (np.mean(depths[[start, end]]) * M_TO_UM, regions.acronym[end])
+        region_colour[i, :] = regions.rgb[end]
+
+    data = Bunch(region=region, axis_label=region_label, colour=region_colour)
+
+    return data

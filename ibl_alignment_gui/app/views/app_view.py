@@ -30,9 +30,6 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         super().__init__()
         self.config = config
         self.allen = allen
-        # True while :meth:`trigger_menu_option` selects a menu option from code, so callbacks
-        # can tell a programmatic selection (e.g. re-plotting after a reload) from a user's click.
-        self.triggering_menu_option = False
 
         self.resize(1600, 800)
         self.setWindowTitle('IBL alignment GUI')
@@ -306,13 +303,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The name of the option in the tab to trigger
         """
         if option:
-            self.triggering_menu_option = True
-            try:
-                self.menu_widgets.find_actions(
-                    option, self.menu_widgets.tabs[tab]['group']
-                ).trigger()
-            finally:
-                self.triggering_menu_option = False
+            self.menu_widgets.find_actions(option, self.menu_widgets.tabs[tab]['group']).trigger()
 
     def has_menu_option(self, tab: str, option: str) -> bool:
         """Return whether an option already exists in a menu tab's action group.

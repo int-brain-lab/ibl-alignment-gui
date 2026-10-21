@@ -126,8 +126,9 @@ pre-populates the model paths so the dialogs are skipped.
 Auto-alignment
 --------------
 
-Selecting ``Region Plots -> Auto-alignment`` (loading the model first if needed) aligns each shank
-behind a progress dialog and opens a result window with:
+Selecting ``Region Plots -> Auto-alignment`` or ``Region Plots -> Auto-alignment (confidence)``
+(loading the model first if needed) aligns each shank behind a progress dialog and opens its result
+window once, with:
 
 - the histology track (top to bottom of the brain), the planned trajectory when the features table
   has one, and the inferred alignment, on a coronal and a sagittal slice
@@ -136,13 +137,18 @@ behind a progress dialog and opens a result window with:
   features where the probe was aligned, next to the features the model predicts along the whole
   track
 
-Each shank is aligned once. Selecting the option again re-opens a result window that was closed
-(without re-aligning); a new model or features file starts over.
+The two region entries show the same alignment:
 
-The region column shows either the predicted regions or the alignment confidence along the probe
-(green high, red low; grey beyond the probe), chosen from
-``Plugins -> Channel Prediction -> Auto-alignment colours``. Switching redraws the column without
-re-aligning.
+- ``Auto-alignment``: the atlas regions along the histology track, placed at the probe depths the
+  alignment found
+- ``Auto-alignment (confidence)``: the alignment confidence along the probe (green high, red low;
+  grey beyond the probe and for channels that could not be aligned)
+
+Each shank is aligned once and both are kept, so switching between them, or selecting one again,
+does not re-align and does not reopen the result windows. To see the windows again, use
+``Plugins -> Channel Prediction -> Show auto-alignment results``, which is greyed out until a shank
+has been aligned. Loading a new model or features file closes the windows and starts over, and
+loading a new session closes them.
 
 
 Where the results appear
@@ -158,8 +164,8 @@ The predictions and the features are added to three of the menu bars:
      - Added entries
    * - ``Region Plots``
      - ``XGBoost region prediction`` and ``ProbeTransformer region prediction`` (the most probable region per channel), each with a
-       ``(cumulative)`` entry showing the stacked class probabilities, and ``Auto-alignment`` for
-       the auto-alignment
+       ``(cumulative)`` entry showing the stacked class probabilities, and ``Auto-alignment`` and
+       ``Auto-alignment (confidence)`` for the auto-alignment
    * - ``Feature Plots``
      - A single ``Ephys Atlas`` entry, tiling every feature side by side
    * - ``Probe Plots``

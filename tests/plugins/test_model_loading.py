@@ -7,7 +7,6 @@ and the prediction caches are replaced by stand-ins: no model, network or window
 """
 
 import dataclasses
-import importlib
 import os
 import sys
 import tempfile
@@ -27,39 +26,13 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
 )
 from iblutil.util import Bunch
+from tests.plugins._stubs import import_spatial_encoder
 
 DECODER = 'XGBoost region prediction'
 NEW_SOURCE = ('org/new-model', '2026_W40')
 
 
-def _import_spatial_encoder() -> types.ModuleType:
-    """Import ``spatial_encoder``, with stand-ins for ``ephysatlas`` when it is not installed."""
-    name = 'ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder'
-    try:
-        return importlib.import_module(name)
-    except ImportError:
-        pass
-    alignment = types.ModuleType('ephysatlas.alignment')
-    alignment.CHANNEL_MODEL_REPO_ID = 'int-brain-lab/ea-encoder-channel'
-    alignment.VINTAGE = '2026_W39'
-    alignment.ChannelModel = object
-    alignment.align_histology = None
-    data = types.ModuleType('ephysatlas.alignment.data')
-    data.load_probe = None
-    utils = types.ModuleType('ephysatlas.spatial_encoder.utils')
-    utils.FEATURE_LIST = []
-    stubs = {
-        'ephysatlas': types.ModuleType('ephysatlas'),
-        'ephysatlas.alignment': alignment,
-        'ephysatlas.alignment.data': data,
-        'ephysatlas.spatial_encoder': types.ModuleType('ephysatlas.spatial_encoder'),
-        'ephysatlas.spatial_encoder.utils': utils,
-    }
-    with patch.dict(sys.modules, stubs):
-        return importlib.import_module(name)
-
-
-spatial_encoder = _import_spatial_encoder()
+spatial_encoder = import_spatial_encoder()
 
 
 def _fake_controller(features: bool = True) -> SimpleNamespace:

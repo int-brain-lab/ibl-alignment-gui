@@ -9,18 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Auto-alignment in the Channel Prediction plugin (`Region Plots -> Auto-alignment`): the recorded
-  channel features are warped along the shank's histology track onto the Ephys Atlas channel-level
-  model's predictions (`ephysatlas.alignment` in ibleatools). The released model is loaded with
+- Auto-alignment in the Channel Prediction plugin: the recorded channel features are warped along
+  the shank's histology track onto the Ephys Atlas channel-level model's predictions
+  (`ephysatlas.alignment` in ibleatools). The released model is loaded with
   `ephysatlas.load_pretrained` from the Hugging Face Hub or a local release
-  (`Load alignment model (Hugging Face)…`). A result window shows the histology track, the planned
-  trajectory and the inferred alignment on two slices, the cost matrix with the alignment path, and
-  the recorded vs predicted features along the track. Selecting the option again re-opens a closed
-  result window without re-aligning.
-- `Plugins -> Channel Prediction -> Auto-alignment colours`: colour the auto-alignment column by the
-  predicted regions or by the alignment confidence (green high, red low).
-- `ShankView.plot_histology(..., boundaries=False)` draws a column without region boundary lines;
-  `AppView.triggering_menu_option` tells callbacks a programmatic menu selection from a user's.
+  (`Load alignment model (Hugging Face)…`). Two Region Plots entries show the result:
+  `Auto-alignment` (the atlas regions along the track, at the aligned probe depths) and
+  `Auto-alignment (confidence)` (green high, red low). Each shank is aligned once for both, so
+  switching between them does not re-align.
+- The auto-alignment result window shows the histology track, the planned trajectory and the
+  inferred alignment on two slices, the cost matrix with the alignment path, and the recorded vs
+  predicted features along the track. It opens once when a shank is aligned;
+  `Plugins -> Channel Prediction -> Show auto-alignment results` (greyed out until then) shows the
+  windows again. They close when a new model, features file or session is loaded.
+- `ShankView.plot_histology(..., boundaries=False)` draws a column without region boundary lines.
 
 ### Changed
 - The inference model is replaced by two released region decoders, `XGBoost region prediction`

@@ -10,14 +10,15 @@ from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
-    DISPLAY_CONFIDENCE,
-    DISPLAY_REGIONS,
-    DISPLAY_STATE_KEY,
+    M_TO_UM,
     PredictionError,
-    auto_alignment_display,
+    close_alignment_windows,
+    get_region_boundaries,
     is_model_loaded,
     load_model_dialog,
+    show_alignment_windows,
 )
 from ibl_alignment_gui.plugins.ephys_atlas.inference import CUMULATIVE_SUFFIX, DECODERS
 from ibl_alignment_gui.utils.helpers import shank_loop
@@ -36,23 +37,15 @@ if TYPE_CHECKING:
 
 PLUGIN_NAME = 'Channel Prediction'
 
-# Track depths are stored along the histology track in meters; region plots expect microns.
-M_TO_UM = 1e6
-
 # Region-plot dropdown options contributed by loadable models. Each entry maps the plugin-state
 # key the backend caches its model under (its ``MODEL_NAME``) to the region keys it enables, plus
 # whether torch is required. In offline mode an option is only shown once its model is loaded.
 _MODEL_OPTIONS = (
-    ('Encoding', [AUTO_ALIGNMENT_KEY], True),
+    ('Encoding', [AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY], True),
     *(
         (name, [name, name + CUMULATIVE_SUFFIX], decoder.needs_torch)
         for name, decoder in DECODERS.items()
     ),
-)
-# Colourings of the auto-alignment column: (menu label, display mode).
-_DISPLAY_OPTIONS = (
-    ('Regions (IBL colours)', DISPLAY_REGIONS),
-    ('Confidence (green high → red low)', DISPLAY_CONFIDENCE),
 )
 
 
@@ -96,42 +89,15 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)
 
-    if importlib.util.find_spec('torch') is not None:
-        _add_display_menu(controller, plugin_menu)
+    if has_torch:
+        # Re-opens the auto-alignment result windows; greyed out until a shank has been aligned.
+        action = QtWidgets.QAction('Show auto-alignment results', controller.view)
+        action.triggered.connect(lambda _=False: show_alignment_windows(controller))
+        action.setEnabled(False)
+        plugin_menu.addAction(action)
+        controller.plugins[PLUGIN_NAME]['alignment_results_action'] = action
 
     controller.plugins[PLUGIN_NAME]['data_button_pressed'] = partial(_on_data_loaded, controller)
-
-
-def _add_display_menu(controller: 'AlignmentGUIController', plugin_menu: QtWidgets.QMenu) -> None:
-    """Add the 'Auto-alignment colours' submenu: predicted regions or alignment confidence."""
-    controller.plugins[PLUGIN_NAME][DISPLAY_STATE_KEY] = DISPLAY_REGIONS
-    menu = plugin_menu.addMenu('Auto-alignment colours')
-    group = QtWidgets.QActionGroup(menu)
-    group.setExclusive(True)
-    for label, mode in _DISPLAY_OPTIONS:
-        action = QtWidgets.QAction(label, menu)
-        action.setCheckable(True)
-        action.setChecked(mode == DISPLAY_REGIONS)
-        action.triggered.connect(
-            lambda _=False, m=mode: _set_auto_alignment_display(controller, m)
-        )
-        group.addAction(action)
-        menu.addAction(action)
-    controller.plugins[PLUGIN_NAME]['display_actions'] = group
-
-
-def _set_auto_alignment_display(controller: 'AlignmentGUIController', mode: str) -> None:
-    """Colour the auto-alignment column by ``mode``; redraw it (without re-aligning) if shown."""
-    if auto_alignment_display(controller) == mode:
-        return
-    controller.plugins[PLUGIN_NAME][DISPLAY_STATE_KEY] = mode
-    if not is_model_loaded(controller, 'Encoding'):
-        return
-    import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-    spatial.clear_display(controller)
-    if controller.region_init == AUTO_ALIGNMENT_KEY:
-        _plot_region_panels(controller, AUTO_ALIGNMENT_KEY, compute_spatial_encoder_predictions)
 
 
 def _set_local_features(controller: 'AlignmentGUIController') -> None:
@@ -187,15 +153,16 @@ def _load_spatial_model(controller: 'AlignmentGUIController') -> None:
     if load_model_dialog(controller, spatial.ENCODER_SPEC):
         # Reveal the now-loaded model's region option (offline only adds it once loaded).
         _refresh_model_options(controller)
-        controller.view.trigger_menu_option('region', spatial.PREDICTION_KEY)
+        controller.view.trigger_menu_option('region', AUTO_ALIGNMENT_KEY)
 
 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
     """Data-load hook: reset per-session plugin state and expose available model region options.
 
     Runs on every data load (i.e. each new session). Drops any manual features override so it does
-    not leak across sessions (each session supplies its own features), then refreshes which model
-    region-plot options are offered.
+    not leak across sessions (each session supplies its own features), closes the previous
+    session's auto-alignment result windows, then refreshes which model region-plot options are
+    offered.
 
     Parameters
     ----------
@@ -203,6 +170,7 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
         The main application controller.
     """
     controller.plugins[PLUGIN_NAME]['features_path'] = None
+    close_alignment_windows(controller)
     _refresh_model_options(controller)
 
 
@@ -255,6 +223,7 @@ class ChannelPrediction:
             'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
             'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
             AUTO_ALIGNMENT_KEY: compute_spatial_encoder_predictions,
+            AUTO_ALIGNMENT_CONFIDENCE_KEY: compute_spatial_encoder_predictions,
         }
         # Each region decoder: its most probable region, and its cumulative probabilities.
         for name in DECODERS:
@@ -291,19 +260,13 @@ class ChannelPrediction:
         if messages:
             QtWidgets.QMessageBox.warning(self.controller.view, model, '\n\n'.join(messages))
 
-        user_selected = not getattr(self.controller.view, 'triggering_menu_option', False)
-        if model == AUTO_ALIGNMENT_KEY and user_selected:
-            import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-            spatial.show_result_windows(self.controller)
-
 
 @shank_loop
 def _plot_region_panels(
     controller: 'AlignmentGUIController',
     items: 'ShankController',
     model: str,
-    func: Callable[..., Bunch | None],
+    func: Callable[..., dict[str, Bunch] | None],
     **kwargs,
 ) -> str | None:
     """Compute (and cache) a shank's prediction for ``model`` and draw it.
@@ -311,7 +274,8 @@ def _plot_region_panels(
     Decorated with :func:`shank_loop`, so a single call iterates over every shank/config (the
     injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The prediction is
     computed once per shank and cached on ``items.model.predictions``; cumulative results are
-    drawn as stacked bands, others as a region histology column.
+    drawn as stacked bands, others as a region histology column. Every view ``func`` returns is
+    cached, so a model's other region-plot options are later drawn without computing again.
 
     Parameters
     ----------
@@ -322,7 +286,9 @@ def _plot_region_panels(
     model : str
         Region-model key, also the per-shank prediction cache key.
     func : Callable
-        The ``compute_*`` function producing the prediction Bunch for ``model``.
+        The ``compute_*`` function for ``model``: it returns the views of every region-plot
+        option one run of its model gives, ``{option: view}`` (including ``model``), or None
+        when the user cancelled.
 
     Returns
     -------
@@ -335,11 +301,13 @@ def _plot_region_panels(
 
     if items.model.predictions.get(model) is None:
         try:
-            items.model.predictions[model] = func(controller, items)
+            views = func(controller, items)
         except PredictionError as exc:
             return str(exc)
+        if views is not None:
+            items.model.predictions.update(views)
 
-    pred = items.model.predictions[model]
+    pred = items.model.predictions.get(model)
     if pred is not None:
         if 'probability' in pred:
             items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
@@ -351,7 +319,7 @@ def _plot_region_panels(
 
 def compute_mapping_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController', mapping: str = 'Beryl'
-) -> Bunch[str, np.ndarray]:
+) -> dict[str, Bunch]:
     """
     Return brain regions based on a specified atlas mapping, as an example prediction model.
 
@@ -362,12 +330,13 @@ def compute_mapping_predictions(
     items: 'ShankController'
         The shank controller containing the model and view for the current shank.
     mapping: str
-        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos').
+        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos'), also its
+        region-plot option.
 
     Returns
     -------
-    Bunch
-        A bunch containing the predicted brain regions.
+    dict of {str: Bunch}
+        The predicted brain regions, keyed by the region-plot option (the mapping).
     """
     # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
     xyz_samples = items.model.align_handle.xyz_samples
@@ -377,7 +346,7 @@ def compute_mapping_predictions(
     region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping=mapping)
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
-    return get_region_boundaries(regions, depth_samples)
+    return {mapping: get_region_boundaries(regions, depth_samples)}
 
 
 def _compute_region_id_predictions(
@@ -420,14 +389,13 @@ def _compute_region_id_predictions(
 
 def compute_spatial_encoder_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController'
-) -> Bunch[str, np.ndarray] | None:
+) -> dict[str, Bunch] | None:
     """
     Automatic alignment with the Ephys Atlas channel-level model.
 
-    Warps the shank's recorded features along its histology track (once per shank, behind a
-    progress dialog, opening the result figure in a pop-up window) and returns the column to draw:
-    the predicted regions, or the alignment confidence along the probe, per the 'Auto-alignment
-    colours' menu.
+    Warps the shank's recorded features along its histology track (behind a progress dialog,
+    opening the result figure in a pop-up window) and returns both of its region-plot views: the
+    predicted regions and the alignment confidence along the probe.
 
     Parameters
     ----------
@@ -438,26 +406,19 @@ def compute_spatial_encoder_predictions(
 
     Returns
     -------
-    Bunch or None
-        The column along the probe, or None if no alignment is available.
+    dict of {str: Bunch} or None
+        Both views, keyed by their region-plot options ('Auto-alignment' and
+        'Auto-alignment (confidence)'), or None if no alignment is available.
     """
     # Lazy import: pulls in torch + the alignment model.
     import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
 
-    if auto_alignment_display(controller) == DISPLAY_CONFIDENCE:
-        return spatial.predict_confidence(controller, items)
-    result = spatial.predict_regions(controller, items)
-    if result is None:
-        return
-    region_ids, depths = result
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return get_region_boundaries(regions, depths)
+    return spatial.align_shank(controller, items)
 
 
 def compute_inference_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController', name: str
-) -> Bunch[str, np.ndarray] | None:
+) -> dict[str, Bunch] | None:
     """
     Prediction model using a region decoder (its most probable region per channel).
 
@@ -468,28 +429,29 @@ def compute_inference_predictions(
     items : ShankController
         The shank controller containing the model and view for the current shank.
     name : str
-        The region decoder, a key of ``inference.DECODERS``.
+        The region decoder, a key of ``inference.DECODERS``, also its region-plot option.
 
     Returns
     -------
-    Bunch or None
-        The predicted brain regions along the probe, or None if no prediction is available.
+    dict of {str: Bunch} or None
+        The predicted brain regions along the probe, keyed by the region-plot option, or None if
+        no prediction is available.
     """
     # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
     from ibl_alignment_gui.plugins.ephys_atlas import inference
 
     result = inference.predict(controller, items, name)
     if result is None:
-        return
+        return None
 
     regions, depths = result
 
-    return get_region_boundaries(regions, depths / M_TO_UM)
+    return {name: get_region_boundaries(regions, depths / M_TO_UM)}
 
 
 def compute_cumulative_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController', name: str
-) -> Bunch[str, np.ndarray] | None:
+) -> dict[str, Bunch] | None:
     """
     Cumulative prediction model using a region decoder.
 
@@ -504,55 +466,18 @@ def compute_cumulative_predictions(
 
     Returns
     -------
-    Bunch or None
-        A bunch containing the probability of predicted brain regions along the probe, or None if
-        no prediction is available.
+    dict of {str: Bunch} or None
+        The probability of predicted brain regions along the probe, keyed by the region-plot
+        option (``name`` + ``' (cumulative)'``), or None if no prediction is available.
     """
     # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
     from ibl_alignment_gui.plugins.ephys_atlas import inference
 
     result = inference.predict_cumulative(controller, items, name)
     if result is None:
-        return
+        return None
 
     cprobas, depths, colours, regions = result
     data = Bunch(depths=depths, regions=regions, colours=colours, probability=cprobas)
 
-    return data
-
-
-def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.ndarray]:
-    """
-    Get the boundaries of brain regions along the histology track.
-
-    Parameters
-    ----------
-    regions: dict
-        The brain regions along the histology track.
-    depths: np.ndarray
-        The depths along the histology track, in meters.
-
-    Returns
-    -------
-    Bunch
-        A bunch containing the region boundaries, labels, and colours.
-    """
-    boundaries = np.where(np.diff(regions.id))[0]
-
-    n_regions = len(boundaries) + 1
-    region = np.empty((n_regions, 2))
-    region_label = np.empty((n_regions, 2), dtype=object)
-    region_colour = np.empty((n_regions, 3), dtype=int)
-
-    for i in range(n_regions):
-        # Compute start and end indices for this region
-        start = 0 if i == 0 else boundaries[i - 1] + 1
-        end = boundaries[i] if i < len(boundaries) else regions.id.size - 1
-
-        region[i, :] = depths[[start, end]] * M_TO_UM
-        region_label[i, :] = (np.mean(depths[[start, end]]) * M_TO_UM, regions.acronym[end])
-        region_colour[i, :] = regions.rgb[end]
-
-    data = Bunch(region=region, axis_label=region_label, colour=region_colour)
-
-    return data
+    return {name + CUMULATIVE_SUFFIX: data}

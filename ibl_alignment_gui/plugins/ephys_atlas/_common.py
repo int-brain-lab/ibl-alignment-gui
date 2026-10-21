@@ -161,6 +161,54 @@ NO_FEATURES_MESSAGE = (
 )
 
 
+def model_vintage(index: dict | None) -> str:
+    """Return the feature vintage a model release was trained on (its manifest ``vintage``).
+
+    Parameters
+    ----------
+    index : dict or None
+        The release's manifest (``ephysatlas_model.json``), as loaded with the model.
+
+    Returns
+    -------
+    str
+        The vintage, e.g. ``2026_W39``.
+
+    Raises
+    ------
+    PredictionError
+        If the manifest does not name one.
+    """
+    vintage = (index or {}).get('vintage')
+    if not vintage:
+        raise PredictionError(
+            "The model's release does not say which feature vintage it was trained on (no "
+            "'vintage' in its ephysatlas_model.json), so the features to run it on are unknown."
+        )
+    return vintage
+
+
+def missing_features_error(missing: list[str], vintage: str) -> PredictionError:
+    """Return the error for a features table lacking columns a model needs.
+
+    Parameters
+    ----------
+    missing : list of str
+        The columns the model needs that the table lacks.
+    vintage : str
+        The feature vintage the model was trained on.
+
+    Returns
+    -------
+    PredictionError
+        The error, naming the missing columns and the vintage.
+    """
+    return PredictionError(
+        f'Features file is missing required column(s): {missing}\n\n'
+        f'The model ({vintage}) needs features computed with the {vintage} feature set.'
+    )
+
+
 def _load_source(controller: AlignmentGUIController, spec: ModelSpec, source: tuple[str, str]):
     """Load ``source`` with ``spec.load`` behind a progress dialog.
 
@@ -497,7 +545,7 @@ def _get_features_df(
 
 
 def features_for_vintage(
-    controller: AlignmentGUIController, items: ShankController, vintage: str | None
+    controller: AlignmentGUIController, items: ShankController, vintage: str
 ) -> pd.DataFrame | None:
     """Return the shank's features from the feature table a model was trained on.
 
@@ -507,15 +555,17 @@ def features_for_vintage(
     feature plots keep the latest table. A local features file (from the session or chosen with
     ``Load features file…``) is used as is.
 
+    The ephys-atlas tables are already outlier-treated when ephysatlas builds them (the alpha
+    features), so the features are not treated again here.
+
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
     items : ShankController
         The shank being predicted on.
-    vintage : str or None
-        Label of the feature table the model was trained on (e.g. ``2026_W26``); None uses the
-        GUI's features.
+    vintage : str
+        Label of the feature table the model was trained on (e.g. ``2026_W26``).
 
     Returns
     -------
@@ -531,7 +581,6 @@ def features_for_vintage(
     if (
         has_local_features(controller)
         or not isinstance(loader, FeatureLoaderOne)
-        or vintage is None
         or loader.feature_version == vintage
     ):
         return _get_features_df(controller, items)

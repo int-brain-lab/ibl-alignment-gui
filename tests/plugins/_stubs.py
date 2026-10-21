@@ -34,16 +34,9 @@ def import_spatial_encoder() -> types.ModuleType:
     alignment.VINTAGE = '2026_W39'
     alignment.ChannelModel = object
     alignment.align_histology = None
-    data = types.ModuleType('ephysatlas.alignment.data')
-    data.load_probe = None
-    utils = types.ModuleType('ephysatlas.spatial_encoder.utils')
-    utils.FEATURE_LIST = []
     stubs = {
         'ephysatlas': types.ModuleType('ephysatlas'),
         'ephysatlas.alignment': alignment,
-        'ephysatlas.alignment.data': data,
-        'ephysatlas.spatial_encoder': types.ModuleType('ephysatlas.spatial_encoder'),
-        'ephysatlas.spatial_encoder.utils': utils,
     }
     with patch.dict(sys.modules, stubs):
         return importlib.import_module(SPATIAL_ENCODER)

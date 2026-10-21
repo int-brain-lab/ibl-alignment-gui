@@ -27,6 +27,8 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     features_for_vintage,
     get_model,
     get_region_boundaries,
+    missing_features_error,
+    model_vintage,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
@@ -220,6 +222,8 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
     ------
     PredictionError
         If ``df`` lacks a feature the model needs.
+    KeyError
+        If the model raises one that is not about a missing feature.
     """
     if 'outside' in model.inputs['features'] and 'outside' not in df.columns:
         # In-brain default, matching the upstream inference scripts.
@@ -233,12 +237,11 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
 
     try:
         out = model.predict(df)
-    except KeyError as exc:  # a feature the model needs is missing, named in the message
-        vintage = model.index.get('vintage')
-        raise PredictionError(
-            f'{exc}\n\nThe model ({vintage}) needs features computed with the {vintage} '
-            'feature set.'
-        ) from exc
+    except KeyError as exc:
+        missing = [c for c in model.inputs['features'] if c not in df.columns]
+        if not missing:  # not a missing feature: an error in the model, for the safety net
+            raise
+        raise missing_features_error(missing, model.index.get('vintage')) from exc
     # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
     # that were predicted.
     depths = df.loc[out.index, 'axial_um'].to_numpy()
@@ -273,7 +276,8 @@ def _predict_df(
     Raises
     ------
     PredictionError
-        If the shank has no features, or they lack a column the model needs.
+        If the model's release names no feature vintage, or the shank has no features, or they
+        lack a column the model needs.
     """
     # Resolve the model first so its load dialog (and its "load a features file first" guard)
     # runs before we bail on missing features, matching the spatial encoder path.
@@ -281,7 +285,7 @@ def _predict_df(
     if model is None:
         return None
 
-    df = features_for_vintage(controller, items, model.index.get('vintage'))
+    df = features_for_vintage(controller, items, model_vintage(model.index))
     if df is None:
         raise PredictionError(NO_FEATURES_MESSAGE)
     out, depths = run_decoder(model, df)

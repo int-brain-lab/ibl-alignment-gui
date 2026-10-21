@@ -25,14 +25,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ephysatlas.alignment import CHANNEL_MODEL_REPO_ID, VINTAGE, ChannelModel, align_histology
-from ephysatlas.alignment.data import load_probe
-from ephysatlas.spatial_encoder.utils import FEATURE_LIST
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
     M_TO_UM,
+    NO_FEATURES_MESSAGE,
     AlignmentCancelledError,
     ModelSpec,
     PredictionError,
@@ -41,7 +40,8 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     features_for_vintage,
     get_model,
     get_region_boundaries,
-    has_local_features,
+    missing_features_error,
+    model_vintage,
     run_with_progress,
     update_results_action,
 )
@@ -202,69 +202,42 @@ def _current_pid(controller, items) -> str:
     return ''
 
 
-def model_vintage(model: ChannelModel) -> str:
-    """Label of the feature table the release was trained on (its manifest ``vintage``).
-
-    Falls back to the release tag, which names the vintage for the published tags but not for a
-    branch such as ``main``.
-    """
-    index = getattr(model.encoder, 'index', None) or {}
-    return index.get('vintage') or model.revision
-
-
 def _probe_inputs(controller, items, model: ChannelModel) -> dict:
     """Return the shank's recorded features, in row order (top first), and planned trajectory.
 
-    A features file chosen with ``Load features file…`` is always used. Otherwise prefers the
-    model's own feature release for an IBL insertion (the features it was trained on), then the
-    features the GUI loaded for this shank, from the table of the model's vintage when they come
-    from ONE. ``planned_xyz`` is the planned trajectory from the feature
-    table when it has one.
+    The features come from the table of the model's vintage, as for the region decoders
+    (:func:`features_for_vintage`). Non-finite features are set to 0. ``planned_xyz`` is the
+    planned trajectory from the feature table when it has one.
 
     Raises
     ------
-    RuntimeError
-        If there are no features for the probe, or they lack a feature the model needs.
+    PredictionError
+        If the model's release names no feature vintage, or there are no features for the probe,
+        or they lack a feature the model needs.
     """
-    pid = _current_pid(controller, items)
-    vintage = model_vintage(model)
-    # load_probe reads the release table with the code's FEATURE_LIST, so it only fits a release
-    # trained on that feature set.
-    use_release = (
-        pid and not has_local_features(controller) and model.features == list(FEATURE_LIST)
+    vintage = model_vintage(getattr(model.encoder, 'index', None))
+    df = features_for_vintage(controller, items, vintage)
+    if df is None:
+        raise PredictionError(NO_FEATURES_MESSAGE)
+    missing = [c for c in model.features if c not in df.columns]
+    if missing:
+        raise missing_features_error(missing, vintage)
+    df = df.sort_values(
+        ['axial_um', 'channel'] if 'channel' in df else ['axial_um'], ascending=False
+    ).reset_index(drop=True)
+    features = df[model.features].to_numpy(dtype=np.float32, copy=True)
+    features[~np.isfinite(features)] = 0.0
+    planned = (
+        df[['x_target', 'y_target', 'z_target']].to_numpy(dtype=np.float32)
+        if {'x_target', 'y_target', 'z_target'} <= set(df.columns)
+        else None
     )
-    probe = load_probe(pid, vintage) if use_release else None
-    if probe is None:
-        df = features_for_vintage(controller, items, vintage)
-        if df is None:
-            raise RuntimeError('No features found for this probe.')
-        missing = [c for c in model.features if c not in df.columns]
-        if missing:
-            raise RuntimeError(
-                f'Features file is missing required column(s): {missing}\n\nThe alignment '
-                f'model ({vintage}) needs features computed with the {vintage} feature set.'
-            )
-        df = df.sort_values(
-            ['axial_um', 'channel'] if 'channel' in df else ['axial_um'], ascending=False
-        ).reset_index(drop=True)
-        features = df[model.features].to_numpy(dtype=np.float32, copy=True)
-        features[~np.isfinite(features)] = 0.0
-        planned = (
-            df[['x_target', 'y_target', 'z_target']].to_numpy(dtype=np.float32)
-            if {'x_target', 'y_target', 'z_target'} <= set(df.columns)
-            else None
-        )
-        probe = dict(
-            pid=pid,
-            features=features,
-            planned_xyz=planned,
-            axial_um=df['axial_um'].to_numpy(dtype=float),
-        )
     return dict(
-        pid=probe['pid'],
-        features=probe['features'],
-        planned_xyz=probe.get('planned_xyz'),
-        axial_um=np.asarray(probe['axial_um'], dtype=float),
+        # The model leaves this insertion out of the neighbours it predicts from.
+        pid=_current_pid(controller, items),
+        features=features,
+        planned_xyz=planned,
+        axial_um=df['axial_um'].to_numpy(dtype=float),
     )
 
 
@@ -308,10 +281,7 @@ def align_shank(
     model = get_model(controller, ENCODER_SPEC)
     if model is None:
         return None
-    try:
-        probe = _probe_inputs(controller, items, model)
-    except Exception as exc:
-        raise PredictionError(str(exc)) from exc
+    probe = _probe_inputs(controller, items, model)
     # GUI track: bottom -> top along the histology picks, 10 µm apart, top to bottom of the brain.
     track_gui = np.asarray(items.model.align_handle.xyz_samples, dtype=np.float32)
     try:

@@ -95,7 +95,8 @@ without multi-area tables), the model reports it instead of running on the featu
 vintage, and suggests loading a release of the model trained on the session's vintage instead
 (when one exists, from ``Load … model`` with that release tag). A file chosen from the menu always
 takes precedence. A local file must hold the features
-of the model's vintage; missing columns are reported when the model runs.
+of the model's vintage; missing columns are reported when the model runs. A model release whose
+``ephysatlas_model.json`` names no ``vintage`` is refused, as the features to run it on are unknown.
 
 .. note::
    A features file chosen from the menu applies to the session that is currently loaded only. It is

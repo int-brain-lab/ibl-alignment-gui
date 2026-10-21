@@ -37,7 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model's vintage (its manifest `vintage`, e.g. `2026_W39`), not the latest table the GUI loads for
   its feature plots, whose feature set can differ. Auto-alignment takes the feature list from the
   loaded release rather than the code's `FEATURE_LIST`, so older release tags work. Missing feature
-  columns are reported in a dialog instead of raising.
+  columns are reported in a dialog instead of raising, with the same message for every model.
+- Auto-alignment reads its features like the region decoders, from the GUI's ephys-atlas feature
+  tables (or the features file), instead of downloading the feature release separately into
+  `~/ephys-atlas/data`, which can be deleted.
+- A model whose release names no feature vintage (`vintage` in its `ephysatlas_model.json`) is
+  refused, rather than run on the GUI's features (region decoders) or on the table named after its
+  release tag (auto-alignment).
 - A features file chosen with `Load features file…` is used by both models, also for an IBL
   insertion (auto-alignment previously used the model's feature release instead).
 - An unexpected error while computing a region prediction is reported in the plot's warning and

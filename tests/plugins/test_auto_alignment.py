@@ -10,12 +10,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pandas as pd
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
     PLUGIN_KEY,
+    PredictionError,
 )
 from iblutil.util import Bunch
 from tests.plugins._stubs import SPATIAL_ENCODER, import_spatial_encoder
@@ -202,6 +204,74 @@ class TestAlignShank(unittest.TestCase):
         """Apart from the cached views, nothing about the alignment is kept on the shank"""
         self.plot(AUTO_ALIGNMENT_KEY)
         self.assertEqual(set(vars(self.items.model)), {'align_handle', 'predictions'})
+
+
+class TestProbeInputs(unittest.TestCase):
+    """``_probe_inputs`` with a stand-in model and the features table faked."""
+
+    def setUp(self):
+        self.items = SimpleNamespace(model=SimpleNamespace(pid='pid'))
+        self.controller = SimpleNamespace(model=SimpleNamespace())
+        self.model = SimpleNamespace(
+            encoder=SimpleNamespace(index={'vintage': '2026_W39'}), features=['a', 'b']
+        )
+        # Bottom channel first, as a table may be ordered; one feature is not finite.
+        self.df = pd.DataFrame(
+            {
+                'a': [1.0, np.nan],
+                'b': [2.0, np.inf],
+                'axial_um': [20.0, 60.0],
+                'x_target': [1.0, 2.0],
+                'y_target': [3.0, 4.0],
+                'z_target': [5.0, 6.0],
+            }
+        )
+        self.features_for_vintage = self.enterContext(
+            patch.object(spatial_encoder, 'features_for_vintage', return_value=self.df)
+        )
+
+    def inputs(self) -> dict:
+        return spatial_encoder._probe_inputs(self.controller, self.items, self.model)
+
+    def test_features_of_model_vintage(self):
+        """The features come from the table of the model's vintage"""
+        self.inputs()
+        self.features_for_vintage.assert_called_once_with(self.controller, self.items, '2026_W39')
+
+    def test_top_first_and_non_finite_zero(self):
+        """Rows are ordered top of the probe first, and non-finite features set to 0"""
+        probe = self.inputs()
+        np.testing.assert_array_equal(probe['axial_um'], [60.0, 20.0])
+        np.testing.assert_array_equal(probe['features'], [[0.0, 0.0], [1.0, 2.0]])
+
+    def test_planned_trajectory(self):
+        """The planned trajectory is taken from the target columns when the table has them"""
+        np.testing.assert_array_equal(self.inputs()['planned_xyz'], [[2, 4, 6], [1, 3, 5]])
+        self.features_for_vintage.return_value = self.df.drop(columns='z_target')
+        self.assertIsNone(self.inputs()['planned_xyz'])
+
+    def test_pid_from_session(self):
+        """The pid is the session's, for the model to leave the insertion out"""
+        self.assertEqual(self.inputs()['pid'], 'pid')
+
+    def test_missing_feature(self):
+        """A table lacking a feature the model needs raises PredictionError naming it"""
+        self.features_for_vintage.return_value = self.df.drop(columns='b')
+        with self.assertRaisesRegex(PredictionError, r"column\(s\): \['b'\]"):
+            self.inputs()
+
+    def test_no_features(self):
+        """No features for the probe raises PredictionError"""
+        self.features_for_vintage.return_value = None
+        with self.assertRaisesRegex(PredictionError, 'No features found'):
+            self.inputs()
+
+    def test_no_vintage(self):
+        """A release naming no vintage is refused before any features are loaded"""
+        self.model.encoder.index = {}
+        with self.assertRaisesRegex(PredictionError, 'vintage'):
+            self.inputs()
+        self.features_for_vintage.assert_not_called()
 
 
 class TestAutoAlignmentOptions(unittest.TestCase):

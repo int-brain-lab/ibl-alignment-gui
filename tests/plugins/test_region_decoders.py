@@ -78,14 +78,27 @@ class TestRunDecoder(unittest.TestCase):
         np.testing.assert_array_equal(depths, [20.0, 60.0])
 
     def test_missing_feature(self):
-        """A model KeyError becomes a PredictionError naming the vintage"""
+        """A model KeyError for a missing feature becomes a PredictionError naming it"""
 
         def predict(x):
             raise KeyError("missing ['b']")
 
         df = pd.DataFrame({'a': [1.0], 'axial_um': [0.0]})
-        with self.assertRaisesRegex(PredictionError, 'V1'):
+        with self.assertRaises(PredictionError) as raised:
             inference.run_decoder(self._model(['a', 'b'], predict), df)
+        message = str(raised.exception)
+        self.assertIn("missing required column(s): ['b']", message)
+        self.assertIn('The model (V1)', message)
+
+    def test_other_key_error_raised(self):
+        """A model KeyError that is not about a missing feature is raised as is"""
+
+        def predict(x):
+            raise KeyError('bug')
+
+        df = pd.DataFrame({'a': [1.0], 'axial_um': [0.0]})
+        with self.assertRaisesRegex(KeyError, 'bug'):
+            inference.run_decoder(self._model(['a'], predict), df)
 
 
 @unittest.skipUnless(HAS_DEPS, 'needs ephysatlas, torch and xgboost')

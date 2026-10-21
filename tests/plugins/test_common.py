@@ -14,6 +14,8 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
     features_for_vintage,
     get_region_boundaries,
+    missing_features_error,
+    model_vintage,
 )
 from iblutil.util import Bunch
 
@@ -110,6 +112,26 @@ class TestFeaturesForVintage(unittest.TestCase):
         self.assertIn(
             'Plugins -> Channel Prediction -> Load ... model, release tag 2026_W26', message
         )
+
+
+class TestModelVintage(unittest.TestCase):
+    def test_manifest_vintage(self):
+        """The vintage is read from the release's manifest"""
+        self.assertEqual(model_vintage({'vintage': '2026_W39'}), '2026_W39')
+
+    def test_no_vintage_refused(self):
+        """A release whose manifest names no vintage is refused"""
+        for index in (None, {}, {'vintage': ''}):
+            with self.subTest(index=index), self.assertRaisesRegex(PredictionError, 'vintage'):
+                model_vintage(index)
+
+
+class TestMissingFeaturesError(unittest.TestCase):
+    def test_message(self):
+        """The error names the missing columns and the vintage"""
+        message = str(missing_features_error(['a', 'b'], '2026_W39'))
+        self.assertIn("missing required column(s): ['a', 'b']", message)
+        self.assertIn('features computed with the 2026_W39 feature set', message)
 
 
 if __name__ == '__main__':

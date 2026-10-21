@@ -2,16 +2,19 @@
 
 import os
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderOne
+from ibl_alignment_gui.plugins.ephys_atlas import _common
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PLUGIN_KEY,
     PredictionError,
+    _get_features_df,
     features_for_vintage,
     get_region_boundaries,
     missing_features_error,
@@ -112,6 +115,20 @@ class TestFeaturesForVintage(unittest.TestCase):
         self.assertIn(
             'Plugins -> Channel Prediction -> Load ... model, release tag 2026_W26', message
         )
+
+
+class TestGetFeaturesDf(unittest.TestCase):
+    def test_features_file_loaded_through_shank(self):
+        """Without features, the shank loads the plugin's features file itself"""
+        handler = MagicMock(raw_data={'features': Bunch(exists=False)})
+        handler.load_ephys_features.return_value = Bunch(exists=True, df='features')
+        items = SimpleNamespace(model=handler)
+        path = Path('features.pqt')
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch(features_path=path)})
+        with patch.object(_common, 'FeatureLoaderLocal') as loader:
+            self.assertEqual(_get_features_df(controller, items), 'features')
+        loader.assert_called_once_with(path)
+        handler.load_ephys_features.assert_called_once_with(loader.return_value)
 
 
 class TestModelVintage(unittest.TestCase):

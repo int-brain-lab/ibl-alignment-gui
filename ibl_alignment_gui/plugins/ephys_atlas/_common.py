@@ -530,8 +530,8 @@ def _get_features_df(
 
     Uses the already-loaded features (online ONE path) when present. Otherwise, in offline/yaml
     mode where no features loader exists, loads them from the local parquet configured on the
-    plugin (``features_path``) and injects the result into ``raw_data['features']`` so the rest of
-    the inference path is unchanged.
+    plugin (``features_path``) through the shank (:meth:`ShankHandler.load_ephys_features`), which
+    keeps them for the next prediction.
 
     Parameters
     ----------
@@ -550,10 +550,8 @@ def _get_features_df(
         features_path = plugin_state(controller).get('features_path')
         if features_path is None:
             return None
-        # Split a combined features file down to this shank using its raw channel indices.
-        shank_sites = items.model.loaders['geom'].get_sites_for_shank(items.model.shank_idx)
-        feats = FeatureLoaderLocal(features_path).load_features(shank_sites)
-        items.model.raw_data['features'] = feats
+        # The shank loads the file, split down to its own channels.
+        feats = items.model.load_ephys_features(FeatureLoaderLocal(features_path))
         if not feats.get('exists', False):
             return None
     return feats['df']

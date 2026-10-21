@@ -114,16 +114,13 @@ def _set_local_features(controller: 'AlignmentGUIController') -> None:
         return
 
     controller.plugins[PLUGIN_NAME]['features_path'] = path
-    # Inject into any already-loaded shanks so inference (and re-runs) use the new file; a single
-    # combined file is split per shank via shank_sites['raw_ind']. If data is not loaded yet,
-    # ephys_atlas._common._get_features_df will load (and split) it lazily from this path.
+    # Load the file into every shank whose data is loaded, so the models (and re-runs) use it; a
+    # combined file is split per shank. The other shanks load it from this path when they are
+    # predicted on (ephys_atlas._common._get_features_df).
     for shank_dict in controller.model.shanks.values():
         for shank_handler in shank_dict.values():
-            if getattr(shank_handler, 'raw_data', None) is not None:
-                shank_sites = shank_handler.loaders['geom'].get_sites_for_shank(
-                    shank_handler.shank_idx
-                )
-                shank_handler.raw_data['features'] = loader.load_features(shank_sites)
+            if shank_handler.data_loaded:
+                shank_handler.load_ephys_features(loader)
     _invalidate_loaded_models(controller)
     logger.info('Local features file set to %s', path)
 

@@ -365,6 +365,30 @@ class TestModelRegistry(unittest.TestCase):
                 spec.invalidate.assert_not_called()
 
 
+class TestSetLocalFeatures(unittest.TestCase):
+    def test_loaded_shanks_load_file(self):
+        """A chosen features file is loaded by the shanks whose data is loaded, not the others"""
+        loaded = MagicMock(data_loaded=True)
+        not_loaded = MagicMock(data_loaded=False)
+        controller = SimpleNamespace(
+            view=None,
+            plugins={PLUGIN_KEY: Bunch()},
+            model=SimpleNamespace(shanks={'a': {'default': loaded}, 'b': {'default': not_loaded}}),
+        )
+        dialog = cp.QtWidgets.QFileDialog
+        with (
+            patch.object(dialog, 'getOpenFileName', return_value=('/data/f.pqt', '')),
+            patch.object(cp, 'FeatureLoaderLocal') as loader,
+            patch.object(cp, '_invalidate_loaded_models') as invalidate,
+        ):
+            loader.return_value.load_features.return_value = Bunch(exists=True)
+            cp._set_local_features(controller)
+        loaded.load_ephys_features.assert_called_once_with(loader.return_value)
+        not_loaded.load_ephys_features.assert_not_called()
+        invalidate.assert_called_once_with(controller)
+        self.assertEqual(controller.plugins[PLUGIN_KEY]['features_path'], cp.Path('/data/f.pqt'))
+
+
 class TestLazyImports(unittest.TestCase):
     def test_no_heavy_imports(self):
         """The plugin and both backends import without importing torch or the alignment model

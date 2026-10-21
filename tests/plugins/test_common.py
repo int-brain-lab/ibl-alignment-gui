@@ -90,6 +90,27 @@ class TestFeaturesForVintage(unittest.TestCase):
                     features_for_vintage(controller, items, '2026_W39')
         load.assert_called_once()
 
+    def test_vintage_refusal_suggests_session_vintage(self):
+        """The refusal also suggests loading a release of the model for the session's vintage"""
+        loader = FeatureLoaderOne.__new__(FeatureLoaderOne)
+        loader.feature_version = '2026_W26'
+        loader.pid = 'pid'
+        loader.one = None
+        loader.multi_area = True
+        items = SimpleNamespace(model=SimpleNamespace(loaders={'features': loader}, raw_data={}))
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
+        with (
+            patch.object(FeatureLoaderOne, 'load_features', return_value=Bunch(exists=False)),
+            self.assertRaises(PredictionError) as raised,
+        ):
+            features_for_vintage(controller, items, '2026_W39')
+        message = str(raised.exception)
+        self.assertIn('No 2026_W39 features are available', message)
+        self.assertIn('load a 2026_W26 release of the model', message)
+        self.assertIn(
+            'Plugins -> Channel Prediction -> Load ... model, release tag 2026_W26', message
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

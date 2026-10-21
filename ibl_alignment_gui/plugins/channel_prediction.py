@@ -13,12 +13,17 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_KEY,
     PredictionError,
     close_alignment_windows,
+    get_model,
     get_region_boundaries,
     is_model_loaded,
     load_model_dialog,
     show_alignment_windows,
 )
-from ibl_alignment_gui.plugins.ephys_atlas.inference import CUMULATIVE_SUFFIX, DECODERS
+from ibl_alignment_gui.plugins.ephys_atlas.inference import (
+    CUMULATIVE_SUFFIX,
+    DECODER_SPECS,
+    DECODERS,
+)
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
@@ -31,6 +36,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+    from ibl_alignment_gui.plugins.ephys_atlas._common import ModelSpec
     from iblatlas.atlas import AllenAtlas
 
 PLUGIN_NAME = 'Channel Prediction'
@@ -200,6 +206,30 @@ def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
         )
 
 
+def _spec_for_option(option: str) -> 'ModelSpec | None':
+    """Return the model behind a region-plot option, or None for options without one.
+
+    Parameters
+    ----------
+    option : str
+        A region-plot option, e.g. 'XGBoost region prediction (cumulative)' or 'Beryl'.
+
+    Returns
+    -------
+    ModelSpec or None
+        The decoder's or the alignment model's spec; None for the atlas mappings.
+    """
+    for name in DECODERS:
+        if option in (name, name + CUMULATIVE_SUFFIX):
+            return DECODER_SPECS[name]
+    if option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
+        # Lazy import: pulls in torch + the alignment model (only offered when torch is installed).
+        import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
+
+        return spatial.ENCODER_SPEC
+    return None
+
+
 class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
@@ -251,6 +281,26 @@ class ChannelPrediction:
         func = self.func_map.get(model)
         if func is None:
             return
+
+        # Get the option's model once, before the shanks: its load dialog (or a failing preset
+        # source) then happens once, and cancelling it stops the whole plot.
+        spec = _spec_for_option(model)
+        if spec is not None:
+            try:
+                if get_model(self.controller, spec) is None:
+                    return  # the user cancelled
+            except PredictionError as exc:
+                QtWidgets.QMessageBox.warning(self.controller.view, model, str(exc))
+                return
+            except Exception as exc:
+                logger.exception('Getting the %s model failed', model)
+                QtWidgets.QMessageBox.warning(
+                    self.controller.view,
+                    model,
+                    f'Unexpected error in {model}: {type(exc).__name__}: {exc}\n\n'
+                    'See the log for details.',
+                )
+                return
 
         errors = _plot_region_panels(self.controller, model, func)
         # One dialog for all shanks; the shanks that succeeded are still drawn.

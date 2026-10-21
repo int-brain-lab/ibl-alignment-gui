@@ -19,7 +19,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     show_alignment_windows,
 )
 from iblutil.util import Bunch
-from tests.plugins._stubs import import_spatial_encoder
+from tests.plugins._stubs import SPATIAL_ENCODER, import_spatial_encoder
 
 spatial_encoder = import_spatial_encoder()
 
@@ -105,9 +105,15 @@ class TestAlignmentWindows(unittest.TestCase):
         self.controller.shank_items = {'probe00a': {'default': items}}
         self.controller.model.configs = ['default']
         self.controller.model.get_current_shank = lambda s, c: SimpleNamespace(align_exists=True)
+        # The alignment model is loaded, as it is once its views exist.
+        self.controller.plugins[PLUGIN_KEY][spatial_encoder.MODEL_NAME] = dict(
+            model=object(), source=('repo', '2026_W39')
+        )
         loader = cp.ChannelPrediction(self.controller)
-        for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
-            loader.plot_regions(option)
+        # The plugin imports spatial_encoder lazily: make that import find this module.
+        with patch.dict(sys.modules, {SPATIAL_ENCODER: spatial_encoder}):
+            for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
+                loader.plot_regions(option)
         self.assertEqual(items.view.plot_histology.call_count, 2)
         self.windows_made[0].show.assert_called_once()  # only when it was opened
 

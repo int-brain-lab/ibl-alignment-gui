@@ -1,5 +1,6 @@
 """Tests for the Channel Prediction plugin's per-shank compute, cache and draw loop."""
 
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -7,8 +8,15 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
-from ibl_alignment_gui.plugins.ephys_atlas._common import PredictionError
+from ibl_alignment_gui.plugins.ephys_atlas import _common, inference
+from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    AUTO_ALIGNMENT_CONFIDENCE_KEY,
+    AUTO_ALIGNMENT_KEY,
+    PLUGIN_KEY,
+    PredictionError,
+)
 from iblutil.util import Bunch
+from tests.plugins._stubs import SPATIAL_ENCODER, import_spatial_encoder
 
 SHANKS = ('a', 'b')
 
@@ -148,6 +156,80 @@ class TestComputeMappingPredictions(unittest.TestCase):
                 views = cp.compute_mapping_predictions(controller, items, mapping)
                 self.assertEqual(list(views), [mapping])
                 self.assertEqual(views[mapping].axis_label[:, 1].tolist(), ['A'])
+
+
+DECODER = 'XGBoost region prediction'
+
+
+class TestPlotRegionsModelLookup(unittest.TestCase):
+    """plot_regions gets the option's model once, before computing any shank."""
+
+    def setUp(self):
+        self.controller = _fake_controller()
+        self.controller.view = None
+        self.controller.model.brain_atlas = None
+        self.controller.plugins = {PLUGIN_KEY: Bunch()}
+        self.loader = cp.ChannelPrediction(self.controller)
+        # The decoder's computation, per shank, as a stand-in.
+        self.compute = MagicMock(return_value={DECODER: Bunch(region='regions view')})
+        self.loader.func_map[DECODER] = self.compute
+        self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
+
+    def test_spec_for_option(self):
+        """Decoder options give their decoder, auto-alignment options the alignment model"""
+        for name, spec in inference.DECODER_SPECS.items():
+            for option in (name, name + inference.CUMULATIVE_SUFFIX):
+                self.assertIs(cp._spec_for_option(option), spec)
+        spatial_encoder = import_spatial_encoder()
+        with patch.dict(sys.modules, {SPATIAL_ENCODER: spatial_encoder}):
+            for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
+                self.assertIs(cp._spec_for_option(option), spatial_encoder.ENCODER_SPEC)
+        for option in ('Beryl', 'Cosmos'):
+            self.assertIsNone(cp._spec_for_option(option))
+
+    def test_cancel_opens_dialog_once(self):
+        """With no model loaded, a cancelled load dialog opens once and nothing is computed"""
+        with patch.object(_common, 'load_model_dialog', return_value=False) as dialog:
+            self.loader.plot_regions(DECODER)
+        dialog.assert_called_once()
+        self.compute.assert_not_called()
+
+    def test_model_failure_one_warning(self):
+        """A model that cannot be loaded gives one warning and nothing is computed"""
+        error = PredictionError('Could not load org/missing@2026_W39:\nnot found')
+        with patch.object(cp, 'get_model', side_effect=error) as get_model:
+            self.loader.plot_regions(DECODER)
+        get_model.assert_called_once()
+        self.warning.assert_called_once()
+        self.assertEqual(self.warning.call_args.args[1:], (DECODER, str(error)))
+        self.compute.assert_not_called()
+
+    def test_unexpected_failure_one_warning(self):
+        """Any other error getting the model gives one warning and is logged"""
+        with (
+            patch.object(cp, 'get_model', side_effect=RuntimeError('boom')),
+            self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'),
+        ):
+            self.loader.plot_regions(DECODER)
+        self.warning.assert_called_once()
+        self.assertIn('Unexpected error in', self.warning.call_args.args[2])
+        self.compute.assert_not_called()
+
+    def test_loaded_model_computes_each_shank(self):
+        """With the model available, it is looked up once and every shank is computed"""
+        with patch.object(cp, 'get_model', return_value=object()) as get_model:
+            self.loader.plot_regions(DECODER)
+        get_model.assert_called_once()
+        self.assertEqual(self.compute.call_count, len(SHANKS))
+        self.warning.assert_not_called()
+
+    def test_mapping_needs_no_model(self):
+        """Beryl is computed without looking up a model"""
+        self.loader.func_map['Beryl'] = MagicMock(return_value={'Beryl': Bunch()})
+        with patch.object(cp, 'get_model') as get_model:
+            self.loader.plot_regions('Beryl')
+        get_model.assert_not_called()
+        self.assertEqual(self.loader.func_map['Beryl'].call_count, len(SHANKS))
 
 
 if __name__ == '__main__':

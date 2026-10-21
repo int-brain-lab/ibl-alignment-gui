@@ -92,7 +92,9 @@ For an IBL insertion loaded from Alyx, the models otherwise use the ephys-atlas 
 the vintage they were trained on (e.g. ``2026_W26``), which may differ from the latest table shown
 in the feature plots. If that table has no features for the insertion (for example a vintage
 without multi-area tables), the model reports it instead of running on the features of another
-vintage. A file chosen from the menu always takes precedence. A local file must hold the features
+vintage, and suggests loading a release of the model trained on the session's vintage instead
+(when one exists, from ``Load … model`` with that release tag). A file chosen from the menu always
+takes precedence. A local file must hold the features
 of the model's vintage; missing columns are reported when the model runs.
 
 .. note::

@@ -556,11 +556,20 @@ def features_for_vintage(
             QtWidgets.QApplication.restoreOverrideCursor()
     feats = cache[vintage]
     if not feats.get('exists', False):
-        # Features of another vintage would give a confident but wrong prediction.
-        raise PredictionError(
+        # Features of another vintage would give a confident but wrong prediction. Instead, point
+        # to the other way out: a release of the model trained on this session's vintage (one may
+        # not exist for every model, so this names the vintage rather than promising a release).
+        message = (
             f'No {vintage} features are available for this insertion; the model needs features '
             f'computed with the {vintage} feature set.'
         )
+        if loader.feature_version:
+            message += (
+                f'\n\nAlternatively, load a {loader.feature_version} release of the model '
+                f'(Plugins -> Channel Prediction -> Load ... model, release tag '
+                f'{loader.feature_version}) to match the features of this session.'
+            )
+        raise PredictionError(message)
     return feats['df']
 
 

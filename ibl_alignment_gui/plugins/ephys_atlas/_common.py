@@ -63,10 +63,9 @@ class ModelSpec:
         The plugin-state key the loaded model is cached under: a decoder's name, or 'Encoding'.
     title : str
         Title of the load dialog, e.g. 'Load alignment model'.
-    repo : str
-        Default Hugging Face repository.
-    revision : str
-        Default release tag, e.g. '2026_W39'.
+    default_source : Callable
+        ``default_source() -> (repo, revision)``: the default Hugging Face repository and release
+        tag. Called only when the load dialog opens, so it may import ``ephysatlas`` itself.
     note : str
         Explanation shown in the load dialog.
     load : Callable
@@ -75,15 +74,29 @@ class ModelSpec:
         this module stays light.
     invalidate : Callable
         ``invalidate(controller)``: drops the shanks' cached predictions of this model.
+    options : tuple of str
+        The region-plot options the model offers, e.g. its most probable region and its
+        cumulative probabilities. The first is selected after the model is loaded from the menu.
+    compute : Callable
+        ``compute(controller, items) -> {option: view} or None``: runs the model on a shank and
+        returns the views of all its options (None when the user cancelled).
+    needs_torch : bool
+        Whether the model needs torch; it is only offered when torch is installed.
+    model_class : str
+        The ``model_class`` its release manifest (``ephysatlas_model.json``) declares, which
+        identifies a local release directory as this model.
     """
 
     key: str
     title: str
-    repo: str
-    revision: str
+    default_source: Callable[[], tuple[str, str]]
     note: str
     load: Callable[[tuple[str, str], Callable[[float, str], None]], object]
     invalidate: Callable[[AlignmentGUIController], None]
+    options: tuple[str, ...]
+    compute: Callable[[AlignmentGUIController, ShankController], dict | None]
+    needs_torch: bool
+    model_class: str
 
 
 class ModelSourceDialog(QtWidgets.QDialog):
@@ -108,6 +121,7 @@ class ModelSourceDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self._spec = spec
+        self._default_repo, self._default_revision = spec.default_source()
         self.setWindowTitle(spec.title)
         self.setMinimumWidth(560)
         form = QtWidgets.QFormLayout()
@@ -151,8 +165,8 @@ class ModelSourceDialog(QtWidgets.QDialog):
     def source(self) -> tuple[str, str]:
         """``(repo_id_or_directory, revision)`` to load; empty fields use the spec's defaults."""
         local = self._local.text().strip()
-        revision = self._revision.text().strip() or self._spec.revision
-        return (local or self._repo.text().strip() or self._spec.repo), revision
+        revision = self._revision.text().strip() or self._default_revision
+        return (local or self._repo.text().strip() or self._default_repo), revision
 
 
 NO_FEATURES_MESSAGE = (
@@ -261,10 +275,11 @@ def load_model_dialog(controller: AlignmentGUIController, spec: ModelSpec) -> bo
         QtWidgets.QMessageBox.warning(controller.view, PLUGIN_KEY, NO_FEATURES_MESSAGE)
         return False
 
-    repo, revision = state['source'] or (spec.repo, spec.revision)
+    default_repo, default_revision = spec.default_source()
+    repo, revision = state['source'] or (default_repo, default_revision)
     local = Path(repo) if Path(str(repo)).is_dir() else None
     dialog = ModelSourceDialog(
-        controller.view, spec, spec.repo if local else repo, revision, local
+        controller.view, spec, default_repo if local else repo, revision, local
     )
     if dialog.exec() != QtWidgets.QDialog.Accepted:
         return state['model'] is not None

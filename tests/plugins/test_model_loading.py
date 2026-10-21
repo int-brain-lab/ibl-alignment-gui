@@ -18,21 +18,19 @@ from unittest.mock import MagicMock, patch
 
 from qtpy import QtWidgets
 
-from ibl_alignment_gui.plugins.ephys_atlas import _common, inference
+from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    AUTO_ALIGNMENT_CONFIDENCE_KEY,
+    AUTO_ALIGNMENT_KEY,
     PLUGIN_KEY,
     ModelSourceDialog,
     ModelSpec,
     PredictionError,
 )
 from iblutil.util import Bunch
-from tests.plugins._stubs import import_spatial_encoder
 
 DECODER = 'XGBoost region prediction'
 NEW_SOURCE = ('org/new-model', '2026_W40')
-
-
-spatial_encoder = import_spatial_encoder()
 
 
 def _fake_controller(features: bool = True) -> SimpleNamespace:
@@ -267,8 +265,8 @@ class _ModelLoadingTests:
     def test_spec(self):
         """The spec holds the state key, dialog title and defaults the dialog uses"""
         self.assertEqual(
-            (self.spec.key, self.spec.title, self.spec.repo, self.spec.revision),
-            (self.key, self.title, self.default_repo, self.default_revision),
+            (self.spec.key, self.spec.title, self.spec.default_source()),
+            (self.key, self.title, (self.default_repo, self.default_revision)),
         )
 
     def test_spec_load(self):
@@ -301,12 +299,18 @@ class TestEncoderModelLoading(_ModelLoadingTests, unittest.TestCase):
 
     spec = spatial_encoder.ENCODER_SPEC
     key = spatial_encoder.MODEL_NAME
-    default_repo = spatial_encoder.CHANNEL_MODEL_REPO_ID
-    default_revision = spatial_encoder.VINTAGE
+    default_repo = 'int-brain-lab/ea-encoder-channel'
+    default_revision = '2026_W39'
     title = 'Load alignment model'
 
     def patch_loader(self):
-        self.enterContext(patch.object(spatial_encoder, 'ChannelModel', self._fake_load))
+        # The encoder imports these from ephysatlas.alignment when it loads a model.
+        alignment = types.ModuleType('ephysatlas.alignment')
+        alignment.ChannelModel = self._fake_load
+        alignment.CHANNEL_MODEL_REPO_ID = self.default_repo
+        alignment.VINTAGE = self.default_revision
+        stubs = {'ephysatlas': types.ModuleType('ephysatlas'), 'ephysatlas.alignment': alignment}
+        self.enterContext(patch.dict(sys.modules, stubs))
 
 
 class TestDecoderSpecs(unittest.TestCase):
@@ -329,6 +333,49 @@ class TestDecoderSpecs(unittest.TestCase):
         self.assertEqual(set(items.model.predictions), {other, other + ' (cumulative)'})
 
 
+class TestModelSpecs(unittest.TestCase):
+    """The registry facts each model's spec carries."""
+
+    SPECS = (*inference.DECODER_SPECS.values(), spatial_encoder.ENCODER_SPEC)
+
+    def test_options(self):
+        """Each model offers its own region-plot options"""
+        for name, spec in inference.DECODER_SPECS.items():
+            self.assertEqual(spec.options, (name, name + ' (cumulative)'))
+        self.assertEqual(
+            spatial_encoder.ENCODER_SPEC.options,
+            (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY),
+        )
+
+    def test_compute(self):
+        """Each model computes with its backend: a decoder runs decode_shank with its own name"""
+        for name, spec in inference.DECODER_SPECS.items():
+            self.assertIs(spec.compute.func, inference.decode_shank)
+            self.assertEqual((spec.compute.args, spec.compute.keywords), ((), {'name': name}))
+        self.assertIs(spatial_encoder.ENCODER_SPEC.compute, spatial_encoder.align_shank)
+
+    def test_needs_torch(self):
+        """Only the XGBoost decoder runs without torch"""
+        self.assertEqual(
+            {spec.key: spec.needs_torch for spec in self.SPECS},
+            {
+                'XGBoost region prediction': False,
+                'ProbeTransformer region prediction': True,
+                'Encoding': True,
+            },
+        )
+
+    def test_unique(self):
+        """No two models share a key, an option or a manifest model class"""
+        options = [option for spec in self.SPECS for option in spec.options]
+        for values in (
+            [spec.key for spec in self.SPECS],
+            options,
+            [spec.model_class for spec in self.SPECS],
+        ):
+            self.assertEqual(len(values), len(set(values)))
+
+
 class TestModelSourceDialog(unittest.TestCase):
     """The shared load dialog itself, built from a stand-in spec (offscreen)."""
 
@@ -341,11 +388,14 @@ class TestModelSourceDialog(unittest.TestCase):
         self.spec = ModelSpec(
             key='Fake model',
             title='Load fake model',
-            repo='org/default-model',
-            revision='2026_W39',
+            default_source=lambda: ('org/default-model', '2026_W39'),
             note='A note about the fake model.',
             load=None,
             invalidate=None,
+            options=('Fake model',),
+            compute=None,
+            needs_torch=False,
+            model_class='FakeModel',
         )
 
     def _dialog(self, repo='org/old-model', revision='2026_W30', local_dir=None):

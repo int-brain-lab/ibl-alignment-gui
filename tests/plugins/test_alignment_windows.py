@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
+from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
@@ -19,9 +20,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     show_alignment_windows,
 )
 from iblutil.util import Bunch
-from tests.plugins._stubs import SPATIAL_ENCODER, import_spatial_encoder
-
-spatial_encoder = import_spatial_encoder()
 
 RESULT = SimpleNamespace(label='Histology', pid='pid')
 PROBE = dict(planned_xyz=None)
@@ -110,10 +108,8 @@ class TestAlignmentWindows(unittest.TestCase):
             model=object(), source=('repo', '2026_W39')
         )
         loader = cp.ChannelPrediction(self.controller)
-        # The plugin imports spatial_encoder lazily: make that import find this module.
-        with patch.dict(sys.modules, {SPATIAL_ENCODER: spatial_encoder}):
-            for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
-                loader.plot_regions(option)
+        for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
+            loader.plot_regions(option)
         self.assertEqual(items.view.plot_histology.call_count, 2)
         self.windows_made[0].show.assert_called_once()  # only when it was opened
 

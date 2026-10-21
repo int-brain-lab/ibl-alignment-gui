@@ -15,7 +15,8 @@ the plugin, so switching between them, or selecting one again, does not re-align
 window opens once and is kept in the plugin state; the 'Show auto-alignment results' menu item
 shows it again.
 
-The heavy ``torch``/``ephysatlas`` imports load with this module, so the plugin imports it lazily.
+``ephysatlas`` (and torch) are imported only when the model is loaded or a shank is aligned, so
+this module can be imported without them, like :mod:`inference`.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
-from ephysatlas.alignment import CHANNEL_MODEL_REPO_ID, VINTAGE, ChannelModel, align_histology
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
@@ -49,6 +49,8 @@ from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
+    from ephysatlas.alignment import ChannelModel
+
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
 
@@ -70,6 +72,13 @@ ENCODER_NOTE = (
 # -----------------------------------------------------------------------------
 # Model loading
 # -----------------------------------------------------------------------------
+def _default_source() -> tuple[str, str]:
+    """Return the alignment model's default repository and release tag, from ephysatlas."""
+    from ephysatlas.alignment import CHANNEL_MODEL_REPO_ID, VINTAGE  # noqa: PLC0415 - heavy, lazy
+
+    return CHANNEL_MODEL_REPO_ID, VINTAGE
+
+
 def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:
     """Load an alignment model release, with its probe-confidence model.
 
@@ -86,6 +95,8 @@ def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:
     ChannelModel
         The loaded model.
     """
+    from ephysatlas.alignment import ChannelModel  # noqa: PLC0415 - heavy, lazy
+
     progress(0.1, f'Loading {source[0]}@{source[1]} (downloaded on first use)…')
     model = ChannelModel(*source)  # ephysatlas.load_pretrained(repo_id, revision=...)
     progress(0.8, 'Loading the probe-confidence model…')
@@ -107,18 +118,6 @@ def invalidate_predictions(
     if window is not None:
         window.close()
     update_results_action(controller)
-
-
-# The alignment model, as the shared load dialog and model cache need it.
-ENCODER_SPEC = ModelSpec(
-    key=MODEL_NAME,
-    title='Load alignment model',
-    repo=CHANNEL_MODEL_REPO_ID,
-    revision=VINTAGE,
-    note=ENCODER_NOTE,
-    load=_load_encoder,
-    invalidate=invalidate_predictions,
-)
 
 
 # -----------------------------------------------------------------------------
@@ -284,18 +283,16 @@ def align_shank(
     probe = _probe_inputs(controller, items, model)
     # GUI track: bottom -> top along the histology picks, 10 µm apart, top to bottom of the brain.
     track_gui = np.asarray(items.model.align_handle.xyz_samples, dtype=np.float32)
-    try:
-        result = run_with_progress(
-            controller,
-            'Auto-alignment',
-            lambda progress: align_histology(
-                model,
-                probe['features'],
-                track_gui[::-1].copy(),
-                pid=probe['pid'],
-                progress=progress,
-            ),
+
+    def align(progress):
+        from ephysatlas.alignment import align_histology  # noqa: PLC0415 - heavy, lazy
+
+        return align_histology(
+            model, probe['features'], track_gui[::-1].copy(), pid=probe['pid'], progress=progress
         )
+
+    try:
+        result = run_with_progress(controller, 'Auto-alignment', align)
     except AlignmentCancelledError:
         return None
     except Exception as exc:
@@ -412,3 +409,21 @@ def predict_confidence(
         colour=np.asarray(colour, dtype=int),
         boundaries=False,
     )
+
+
+# -----------------------------------------------------------------------------
+# Model spec
+# -----------------------------------------------------------------------------
+# The alignment model, as the shared load dialog and model cache need it.
+ENCODER_SPEC = ModelSpec(
+    key=MODEL_NAME,
+    title='Load alignment model',
+    default_source=_default_source,
+    note=ENCODER_NOTE,
+    load=_load_encoder,
+    invalidate=invalidate_predictions,
+    options=(AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY),
+    compute=align_shank,
+    needs_torch=True,
+    model_class='NeighborInpaintingModel',
+)

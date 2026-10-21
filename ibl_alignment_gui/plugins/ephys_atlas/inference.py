@@ -152,21 +152,6 @@ def invalidate_predictions(
     clear_predictions(items, *names, *(name + CUMULATIVE_SUFFIX for name in names))
 
 
-# The decoders, as the shared load dialog and model cache need them.
-DECODER_SPECS = {
-    name: ModelSpec(
-        key=name,
-        title=f'Load {name} model',
-        repo=decoder.repo,
-        revision=MODEL_REVISION,
-        note=DECODER_NOTE,
-        load=_load_decoder,
-        invalidate=functools.partial(invalidate_predictions, names=(name,)),
-    )
-    for name, decoder in DECODERS.items()
-}
-
-
 # -----------------------------------------------------------------------------
 # Loading utils
 # -----------------------------------------------------------------------------
@@ -376,3 +361,27 @@ def predict_cumulative(out: pd.DataFrame, depths: np.ndarray, model) -> Bunch:
     colours = list(classifier_regions().get(region_ids).rgb)
 
     return Bunch(depths=depths, regions=region_ids, colours=colours, probability=cprobas)
+
+
+# -----------------------------------------------------------------------------
+# Model specs
+# -----------------------------------------------------------------------------
+
+
+# The decoders, as the shared load dialog and model cache need them.
+DECODER_SPECS = {
+    name: ModelSpec(
+        key=name,
+        title=f'Load {name} model',
+        # The release tag is pinned here until ibleatools publishes the decoders' vintage.
+        default_source=functools.partial(lambda repo: (repo, MODEL_REVISION), decoder.repo),
+        note=DECODER_NOTE,
+        load=_load_decoder,
+        invalidate=functools.partial(invalidate_predictions, names=(name,)),
+        options=(name, name + CUMULATIVE_SUFFIX),
+        compute=functools.partial(decode_shank, name=name),
+        needs_torch=decoder.needs_torch,
+        model_class=decoder.model_class,
+    )
+    for name, decoder in DECODERS.items()
+}

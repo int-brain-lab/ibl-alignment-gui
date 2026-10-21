@@ -8,9 +8,8 @@ from typing import TYPE_CHECKING
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
+from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder as spatial
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
-    AUTO_ALIGNMENT_CONFIDENCE_KEY,
-    AUTO_ALIGNMENT_KEY,
     PredictionError,
     close_alignment_windows,
     get_model,
@@ -19,17 +18,12 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     load_model_dialog,
     show_alignment_windows,
 )
-from ibl_alignment_gui.plugins.ephys_atlas.inference import (
-    CUMULATIVE_SUFFIX,
-    DECODER_SPECS,
-    DECODERS,
-)
+from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
-# NB: ``spatial_encoder`` (torch) is imported lazily inside the compute functions below, and
-# ``inference`` defers its ``ephysatlas`` imports, so this plugin can be set up in offline mode
-# without those heavy/optional dependencies installed.
+# NB: both backends import ``ephysatlas`` (and torch) only when a model is used, so this plugin
+# can be set up without those heavy/optional dependencies installed.
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +35,21 @@ if TYPE_CHECKING:
 
 PLUGIN_NAME = 'Channel Prediction'
 
-# Region-plot dropdown options contributed by loadable models. Each entry maps the plugin-state
-# key the backend caches its model under (its ``MODEL_NAME``) to the region keys it enables, plus
-# whether torch is required. In offline mode an option is only shown once its model is loaded.
-_MODEL_OPTIONS = (
-    ('Encoding', [AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY], True),
-    *(
-        (name, [name, name + CUMULATIVE_SUFFIX], decoder.needs_torch)
-        for name, decoder in DECODERS.items()
-    ),
-)
+# Every model the plugin offers, as the backends describe them (see ModelSpec).
+MODELS = (*DECODER_SPECS.values(), spatial.ENCODER_SPEC)
+# The model behind each of their region-plot options.
+MODEL_FOR_OPTION = {option: spec for spec in MODELS for option in spec.options}
+
+
+def has_torch() -> bool:
+    """Return whether torch is installed, without importing it."""
+    return importlib.util.find_spec('torch') is not None
+
+
+def available_models() -> list['ModelSpec']:
+    """Return the models offered: those needing torch only when it is installed."""
+    torch = has_torch()
+    return [spec for spec in MODELS if torch or not spec.needs_torch]
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -76,16 +75,11 @@ def setup(controller: 'AlignmentGUIController') -> None:
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
-    has_torch = importlib.util.find_spec('torch') is not None
-    # One load action per region decoder; the torch ones only when torch is installed.
+    # One load action per model; those needing torch only when it is installed.
+    models = available_models()
     menu_actions = [
-        (f'Load {name} model (Hugging Face)…', partial(_load_decoder, name=name))
-        for name, decoder in DECODERS.items()
-        if has_torch or not decoder.needs_torch
+        (f'{spec.title} (Hugging Face)…', partial(_load_model, spec=spec)) for spec in models
     ]
-    # The alignment model needs torch; only offer it when torch is installed.
-    if has_torch:
-        menu_actions.append(('Load alignment model (Hugging Face)…', _load_spatial_model))
     menu_actions.append(('Load features file…', _set_local_features))
 
     for label, handler in menu_actions:
@@ -93,7 +87,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)
 
-    if has_torch:
+    if spatial.ENCODER_SPEC in models:
         # Re-opens the auto-alignment result windows; greyed out until a shank has been aligned.
         action = QtWidgets.QAction('Show auto-alignment results', controller.view)
         action.triggered.connect(lambda _=False: show_alignment_windows(controller))
@@ -106,8 +100,6 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
 def _set_local_features(controller: 'AlignmentGUIController') -> None:
     """Prompt for a per-channel features parquet and use it for inference."""
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
     parent = controller.view
     chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
         parent, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
@@ -132,32 +124,22 @@ def _set_local_features(controller: 'AlignmentGUIController') -> None:
                     shank_handler.shank_idx
                 )
                 shank_handler.raw_data['features'] = loader.load_features(shank_sites)
-    inference.invalidate_predictions(controller)
-    if is_model_loaded(controller, 'Encoding'):
-        import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-        spatial.invalidate_predictions(controller)
+    _invalidate_loaded_models(controller)
     logger.info('Local features file set to %s', path)
 
 
-def _load_decoder(controller: 'AlignmentGUIController', name: str) -> None:
-    """Load region decoder ``name`` via dialog; reveal its region options, refresh on success."""
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
-    if load_model_dialog(controller, inference.DECODER_SPECS[name]):
-        # Reveal the now-loaded model's region options (offline only adds them once loaded).
-        _refresh_model_options(controller)
-        controller.view.trigger_menu_option('region', name)
+def _invalidate_loaded_models(controller: 'AlignmentGUIController') -> None:
+    """Drop every loaded model's cached predictions, e.g. after a new features file."""
+    for spec in MODELS:
+        if is_model_loaded(controller, spec.key):
+            spec.invalidate(controller)
 
 
-def _load_spatial_model(controller: 'AlignmentGUIController') -> None:
-    """Load the alignment model via dialog; reveal its region options and refresh on success."""
-    import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-    if load_model_dialog(controller, spatial.ENCODER_SPEC):
-        # Reveal the now-loaded model's region option (offline only adds it once loaded).
-        _refresh_model_options(controller)
-        controller.view.trigger_menu_option('region', AUTO_ALIGNMENT_KEY)
+def _load_model(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
+    """Load ``spec``'s model via its dialog and show its first region-plot option."""
+    if load_model_dialog(controller, spec):
+        _refresh_model_options(controller)  # make sure its options are offered
+        controller.view.trigger_menu_option('region', spec.options[0])
 
 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
@@ -179,60 +161,35 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
 
 
 def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
-    """Add the region-plot options of every model, the same online and offline.
+    """Add the region-plot options of every available model, the same online and offline.
 
     A model is loaded when one of its options is first selected (or from the Plugins menu). Models
-    that need torch are offered only when it is installed. Options already present are left
-    untouched, so this is safe to call repeatedly (e.g. after each model load and on every data
-    reload).
+    that need torch are offered only when it is installed (:func:`available_models`). Options
+    already present are left untouched, so this is safe to call repeatedly (e.g. after each model
+    load and on every data reload).
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
     """
-    new_keys = []
-    for _state_key, region_keys, needs_torch in _MODEL_OPTIONS:
-        if needs_torch and importlib.util.find_spec('torch') is None:
-            continue
-        new_keys.extend(
-            key for key in region_keys if not controller.view.has_menu_option('region', key)
-        )
+    new_keys = [
+        option
+        for spec in available_models()
+        for option in spec.options
+        if not controller.view.has_menu_option('region', option)
+    ]
     if new_keys:
         controller.view.populate_menu_tab(
             'region', controller.plot_region_ref_panels, new_keys, set_checked=False
         )
 
 
-def _spec_for_option(option: str) -> 'ModelSpec | None':
-    """Return the model behind a region-plot option, or None for options without one.
-
-    Parameters
-    ----------
-    option : str
-        A region-plot option, e.g. 'XGBoost region prediction (cumulative)' or 'Beryl'.
-
-    Returns
-    -------
-    ModelSpec or None
-        The decoder's or the alignment model's spec; None for the atlas mappings.
-    """
-    for name in DECODERS:
-        if option in (name, name + CUMULATIVE_SUFFIX):
-            return DECODER_SPECS[name]
-    if option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
-        # Lazy import: pulls in torch + the alignment model (only offered when torch is installed).
-        import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-        return spatial.ENCODER_SPEC
-    return None
-
-
 class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
     Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` dispatches the
-    selected region model to the matching ``compute_*`` function and draws it on each shank.
+    selected region option to its compute function and draws it on each shank.
     """
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
@@ -248,23 +205,16 @@ class ChannelPrediction:
         self.func_map = {
             'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
             'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
-            AUTO_ALIGNMENT_KEY: compute_spatial_encoder_predictions,
-            AUTO_ALIGNMENT_CONFIDENCE_KEY: compute_spatial_encoder_predictions,
+            # One model run gives the views of all of the model's options.
+            **{option: spec.compute for option, spec in MODEL_FOR_OPTION.items()},
         }
-        # Each region decoder: its most probable region, and its cumulative probabilities.
-        for name in DECODERS:
-            # One model run gives both of its options.
-            compute = partial(compute_inference_predictions, name=name)
-            self.func_map[name] = compute
-            self.func_map[name + CUMULATIVE_SUFFIX] = compute
 
     def plot_regions(self, model: str, data_only: bool = True) -> None:
         """Compute and plot the selected region model across all shanks.
 
-        Looks up ``model`` in the dispatch map and runs the matching ``compute_*`` function on
-        each shank. When the user selects the auto-alignment option, every aligned shank's result
-        window is shown again (if closed); a programmatic re-selection (e.g. after a reload) does
-        not open windows.
+        Looks up ``model`` in the dispatch map and runs the matching compute function on each
+        shank (an atlas mapping, or the model's ``compute``), getting the option's model once
+        first. Problems are reported in one warning for all shanks.
 
         Parameters
         ----------
@@ -282,7 +232,7 @@ class ChannelPrediction:
 
         # Get the option's model once, before the shanks: its load dialog (or a failing preset
         # source) then happens once, and cancelling it stops the whole plot.
-        spec = _spec_for_option(model)
+        spec = MODEL_FOR_OPTION.get(model)
         if spec is not None:
             try:
                 if get_model(self.controller, spec) is None:
@@ -406,62 +356,3 @@ def compute_mapping_predictions(
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
     return {mapping: get_region_boundaries(regions, depth_samples)}
-
-
-def compute_spatial_encoder_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController'
-) -> dict[str, Bunch] | None:
-    """
-    Automatic alignment with the Ephys Atlas channel-level model.
-
-    Warps the shank's recorded features along its histology track (behind a progress dialog,
-    opening the result figure in a pop-up window) and returns both of its region-plot views: the
-    predicted regions and the alignment confidence along the probe.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-
-    Returns
-    -------
-    dict of {str: Bunch} or None
-        Both views, keyed by their region-plot options ('Auto-alignment' and
-        'Auto-alignment (confidence)'), or None if no alignment is available.
-    """
-    # Lazy import: pulls in torch + the alignment model.
-    import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-    return spatial.align_shank(controller, items)
-
-
-def compute_inference_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController', name: str
-) -> dict[str, Bunch] | None:
-    """
-    Prediction model using a region decoder.
-
-    Runs the decoder once on the shank and returns both of its region-plot views: the most
-    probable region per channel and the cumulative class probabilities.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-    name : str
-        The region decoder, a key of ``inference.DECODERS``, also its region-plot option.
-
-    Returns
-    -------
-    dict of {str: Bunch} or None
-        Both views, keyed by their region-plot options (``name`` and ``name`` +
-        ``' (cumulative)'``), or None if no prediction is available.
-    """
-    # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
-    return inference.decode_shank(controller, items, name)

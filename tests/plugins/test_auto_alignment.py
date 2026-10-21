@@ -4,7 +4,6 @@ The model, the alignment and the result window are replaced by stand-ins: no mod
 is drawn on screen and ``ephysatlas`` does not need to be installed.
 """
 
-import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
+from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
@@ -20,9 +20,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
 )
 from iblutil.util import Bunch
-from tests.plugins._stubs import SPATIAL_ENCODER, import_spatial_encoder
-
-spatial_encoder = import_spatial_encoder()
 
 RED, BLUE = [255, 0, 0], [0, 0, 255]
 GREY = list(spatial_encoder.NO_VALUE_RGB)
@@ -150,11 +147,9 @@ class TestAlignShank(unittest.TestCase):
             ('_open_result_window', self.open_window),
         ):
             self.enterContext(patch.object(spatial_encoder, name, value))
-        # The plugin imports spatial_encoder lazily: make that import find this module.
-        self.enterContext(patch.dict(sys.modules, {SPATIAL_ENCODER: spatial_encoder}))
 
     def plot(self, option) -> None:
-        cp._plot_region_panels(self.controller, option, cp.compute_spatial_encoder_predictions)
+        cp._plot_region_panels(self.controller, option, spatial_encoder.align_shank)
 
     def drawn(self) -> list:
         return [c.args[1] for c in self.items.view.plot_histology.call_args_list]
@@ -277,12 +272,13 @@ class TestProbeInputs(unittest.TestCase):
 class TestAutoAlignmentOptions(unittest.TestCase):
     def test_both_options_registered(self):
         """Both options are offered for the alignment model and use the same compute function"""
-        options = {key: regions for key, regions, _ in cp._MODEL_OPTIONS}
-        self.assertEqual(options['Encoding'], [AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY])
+        spec = spatial_encoder.ENCODER_SPEC
+        self.assertEqual(spec.options, (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY))
         controller = SimpleNamespace(model=SimpleNamespace(brain_atlas=None))
         func_map = cp.ChannelPrediction(controller).func_map
         for option in OPTIONS:
-            self.assertIs(func_map[option], cp.compute_spatial_encoder_predictions)
+            self.assertIs(cp.MODEL_FOR_OPTION[option], spec)
+            self.assertIs(func_map[option], spec.compute)
 
 
 if __name__ == '__main__':

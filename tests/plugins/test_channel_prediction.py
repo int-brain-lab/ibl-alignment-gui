@@ -1,14 +1,18 @@
 """Tests for the Channel Prediction plugin's per-shank compute, cache and draw loop."""
 
+import dataclasses
+import os
+import subprocess
 import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from qtpy import QtWidgets
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
-from ibl_alignment_gui.plugins.ephys_atlas import _common, inference
+from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
@@ -16,9 +20,21 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
 )
 from iblutil.util import Bunch
-from tests.plugins._stubs import SPATIAL_ENCODER, import_spatial_encoder
 
 SHANKS = ('a', 'b')
+
+
+def _installed(torch: bool, ephysatlas: bool = True):
+    """Patch the plugin's checks for torch and ephysatlas to say whether they are installed."""
+    real = cp.importlib.util.find_spec
+    installed = {'torch': torch, 'ephysatlas': ephysatlas}
+
+    def find_spec(name, *args, **kwargs):
+        if name in installed:
+            return object() if installed[name] else None
+        return real(name, *args, **kwargs)
+
+    return patch.object(cp.importlib.util, 'find_spec', find_spec)
 
 
 def _fake_controller() -> SimpleNamespace:
@@ -175,17 +191,15 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.loader.func_map[DECODER] = self.compute
         self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
 
-    def test_spec_for_option(self):
+    def test_model_for_option(self):
         """Decoder options give their decoder, auto-alignment options the alignment model"""
         for name, spec in inference.DECODER_SPECS.items():
             for option in (name, name + inference.CUMULATIVE_SUFFIX):
-                self.assertIs(cp._spec_for_option(option), spec)
-        spatial_encoder = import_spatial_encoder()
-        with patch.dict(sys.modules, {SPATIAL_ENCODER: spatial_encoder}):
-            for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
-                self.assertIs(cp._spec_for_option(option), spatial_encoder.ENCODER_SPEC)
+                self.assertIs(cp.MODEL_FOR_OPTION[option], spec)
+        for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
+            self.assertIs(cp.MODEL_FOR_OPTION[option], spatial_encoder.ENCODER_SPEC)
         for option in ('Beryl', 'Cosmos'):
-            self.assertIsNone(cp._spec_for_option(option))
+            self.assertNotIn(option, cp.MODEL_FOR_OPTION)
 
     def test_cancel_opens_dialog_once(self):
         """With no model loaded, a cancelled load dialog opens once and nothing is computed"""
@@ -253,14 +267,7 @@ class TestModelOptions(unittest.TestCase):
             plot_region_ref_panels=MagicMock(),
         )
         controller.view.has_menu_option.side_effect = lambda tab, key: key in present
-        real = cp.importlib.util.find_spec
-
-        def find_spec(name, *args, **kwargs):
-            if name == 'torch':
-                return object() if torch else None
-            return real(name, *args, **kwargs)
-
-        with patch.object(cp.importlib.util, 'find_spec', find_spec):
+        with _installed(torch=torch):
             cp._refresh_model_options(controller)
         populate = controller.view.populate_menu_tab
         return populate.call_args.args[2] if populate.called else []
@@ -285,6 +292,95 @@ class TestModelOptions(unittest.TestCase):
     def test_options_not_duplicated(self):
         """Options already in the dropdown are not added again"""
         self.assertCountEqual(self.offered(present=self.ALL[:2]), self.ALL[2:])
+
+
+class TestModelRegistry(unittest.TestCase):
+    """The models offered, the Plugins menu built from them, and clearing loaded models."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_available_models(self):
+        """Without torch only the XGBoost decoder is offered; with torch every model"""
+        with _installed(torch=False):
+            self.assertEqual([spec.key for spec in cp.available_models()], [DECODER])
+        with _installed(torch=True):
+            self.assertEqual(cp.available_models(), list(cp.MODELS))
+
+    def menu(self, torch: bool) -> list[str]:
+        """The Plugins -> Channel Prediction menu items setup adds."""
+        # A real widget as the view: it owns the menu's actions, as the main window does.
+        view = QtWidgets.QWidget()
+        self.addCleanup(view.deleteLater)
+        controller = SimpleNamespace(
+            view=view,
+            plugins={},
+            plugin_options=MagicMock(),
+            model=SimpleNamespace(brain_atlas=None),
+        )
+        with _installed(torch=torch):
+            cp.setup(controller)
+        menu = controller.plugin_options.addMenu.call_args.args[0]
+        return [action.text() for action in menu.actions()]
+
+    def test_menu_with_torch(self):
+        """With torch, one load item per model, the features file and the results item"""
+        self.assertEqual(
+            self.menu(torch=True),
+            [
+                'Load XGBoost region prediction model (Hugging Face)…',
+                'Load ProbeTransformer region prediction model (Hugging Face)…',
+                'Load alignment model (Hugging Face)…',
+                'Load features file…',
+                'Show auto-alignment results',
+            ],
+        )
+
+    def test_menu_without_torch(self):
+        """Without torch, only the XGBoost load item and the features file"""
+        self.assertEqual(
+            self.menu(torch=False),
+            ['Load XGBoost region prediction model (Hugging Face)…', 'Load features file…'],
+        )
+
+    def test_invalidate_loaded_models(self):
+        """Only the loaded models have their predictions cleared"""
+        loaded = (spatial_encoder.ENCODER_SPEC.key,)
+        controller = SimpleNamespace(
+            plugins={
+                PLUGIN_KEY: Bunch(
+                    {spec.key: dict(model=object()) for spec in cp.MODELS if spec.key in loaded}
+                )
+            }
+        )
+        specs = [dataclasses.replace(spec, invalidate=MagicMock()) for spec in cp.MODELS]
+        with patch.object(cp, 'MODELS', tuple(specs)):
+            cp._invalidate_loaded_models(controller)
+        for spec in specs:
+            if spec.key in loaded:
+                spec.invalidate.assert_called_once_with(controller)
+            else:
+                spec.invalidate.assert_not_called()
+
+
+class TestLazyImports(unittest.TestCase):
+    def test_no_heavy_imports(self):
+        """The plugin and both backends import without importing torch or the alignment model
+
+        (The GUI's feature loader imports the light ``ephysatlas.data`` on its own.)
+        """
+        code = (
+            'import sys\n'
+            'import ibl_alignment_gui.plugins.channel_prediction\n'
+            'from ibl_alignment_gui.plugins.ephys_atlas import inference, spatial_encoder\n'
+            "print(sorted(m for m in ('torch', 'ephysatlas.alignment') if m in sys.modules))\n"
+        )
+        run = subprocess.run(
+            [sys.executable, '-c', code], capture_output=True, text=True, check=True
+        )
+        self.assertEqual(run.stdout.strip(), '[]')
 
 
 if __name__ == '__main__':

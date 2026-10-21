@@ -45,17 +45,16 @@ from pathlib import Path
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
-from ibl_alignment_gui.plugins.channel_prediction import PLUGIN_NAME
-from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODERS, MODEL_REVISION
+from ibl_alignment_gui.plugins.channel_prediction import MODELS, PLUGIN_NAME
+from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
+from ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder import ENCODER_SPEC
 
 # Model locations are machine-specific, so they are passed on the command line rather than
 # defaulted here. Features normally live in the session YAML, so --features is only an override
 # for YAMLs that do not specify a `features` dataset.
 
-# The manifest ``model_class`` of the automatic-alignment model (ea-encoder-channel), and the
-# plugin-state key it is cached under (spatial_encoder.MODEL_NAME; not imported, it pulls torch).
-ENCODER_MODEL_CLASS = 'NeighborInpaintingModel'
-ENCODER_STATE_KEY = 'Encoding'
+# The plugin-state key the automatic-alignment model is cached under.
+ENCODER_STATE_KEY = ENCODER_SPEC.key
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -101,8 +100,7 @@ def model_sources(model_dirs: list[Path]) -> dict[str, str]:
         If a directory has no manifest, declares an unknown ``model_class``, or two directories
         hold the same model.
     """
-    state_keys = {decoder.model_class: name for name, decoder in DECODERS.items()}
-    state_keys[ENCODER_MODEL_CLASS] = ENCODER_STATE_KEY
+    state_keys = {spec.model_class: spec.key for spec in MODELS}
     sources = {}
     for model_dir in model_dirs:
         manifest = model_dir / 'ephysatlas_model.json'
@@ -152,17 +150,16 @@ def main() -> None:
     plugin_state = controller.plugins[PLUGIN_NAME]
 
     # Each region decoder: its local release when given, else its Hugging Face repository.
-    for name, decoder in DECODERS.items():
-        plugin_state[name] = {
-            'source': (sources.get(name, decoder.repo), MODEL_REVISION), 'model': None}
+    for name, spec in DECODER_SPECS.items():
+        repo, revision = spec.default_source()
+        plugin_state[name] = {'source': (sources.get(name, repo), revision), 'model': None}
     if args.features is not None:
         plugin_state['features_path'] = args.features
     # Pre-wire the automatic-alignment model at a local release too, so it runs offline.
     if ENCODER_STATE_KEY in sources:
-        from ephysatlas.alignment import VINTAGE  # noqa: PLC0415 - heavy, only when pre-wiring
-
+        revision = ENCODER_SPEC.default_source()[1]
         plugin_state[ENCODER_STATE_KEY] = {
-            'source': (sources[ENCODER_STATE_KEY], VINTAGE), 'model': None}
+            'source': (sources[ENCODER_STATE_KEY], revision), 'model': None}
     logger.info(
         'Pre-populated %r plugin. Pick a region decoder in Region Plots to run inference.',
         PLUGIN_NAME)

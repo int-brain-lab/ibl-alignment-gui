@@ -179,12 +179,12 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
 
 
 def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
-    """Add the region-plot options for models that should currently be available.
+    """Add the region-plot options of every model, the same online and offline.
 
-    Online, every model's option is offered (the model loads on demand). Offline, an option is
-    added only once its model has been loaded, so the dropdown never lists a model the user cannot
-    run. Options already present are left untouched, so this is safe to call repeatedly (e.g. after
-    each successful model load and on every data reload).
+    A model is loaded when one of its options is first selected (or from the Plugins menu). Models
+    that need torch are offered only when it is installed. Options already present are left
+    untouched, so this is safe to call repeatedly (e.g. after each model load and on every data
+    reload).
 
     Parameters
     ----------
@@ -192,10 +192,8 @@ def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
         The main application controller.
     """
     new_keys = []
-    for state_key, region_keys, needs_torch in _MODEL_OPTIONS:
+    for _state_key, region_keys, needs_torch in _MODEL_OPTIONS:
         if needs_torch and importlib.util.find_spec('torch') is None:
-            continue
-        if controller.offline and not is_model_loaded(controller, state_key):
             continue
         new_keys.extend(
             key for key in region_keys if not controller.view.has_menu_option('region', key)

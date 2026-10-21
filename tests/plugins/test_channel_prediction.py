@@ -232,5 +232,60 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.assertEqual(self.loader.func_map['Beryl'].call_count, len(SHANKS))
 
 
+class TestModelOptions(unittest.TestCase):
+    """Which model options the region dropdown offers: the same online and offline."""
+
+    ALL = [
+        'XGBoost region prediction',
+        'XGBoost region prediction (cumulative)',
+        'ProbeTransformer region prediction',
+        'ProbeTransformer region prediction (cumulative)',
+        AUTO_ALIGNMENT_KEY,
+        AUTO_ALIGNMENT_CONFIDENCE_KEY,
+    ]
+
+    def offered(self, offline=True, torch=True, present=()) -> list:
+        """The options _refresh_model_options adds, with no model loaded."""
+        controller = SimpleNamespace(
+            offline=offline,
+            plugins={PLUGIN_KEY: Bunch()},
+            view=MagicMock(),
+            plot_region_ref_panels=MagicMock(),
+        )
+        controller.view.has_menu_option.side_effect = lambda tab, key: key in present
+        real = cp.importlib.util.find_spec
+
+        def find_spec(name, *args, **kwargs):
+            if name == 'torch':
+                return object() if torch else None
+            return real(name, *args, **kwargs)
+
+        with patch.object(cp.importlib.util, 'find_spec', find_spec):
+            cp._refresh_model_options(controller)
+        populate = controller.view.populate_menu_tab
+        return populate.call_args.args[2] if populate.called else []
+
+    def test_options_offered_offline_before_loading(self):
+        """Offline, with torch and no model loaded, every model's options are offered"""
+        self.assertCountEqual(self.offered(offline=True), self.ALL)
+
+    def test_same_online_and_offline(self):
+        """Online and offline offer the same options"""
+        for torch in (True, False):
+            with self.subTest(torch=torch):
+                self.assertCountEqual(
+                    self.offered(offline=True, torch=torch),
+                    self.offered(offline=False, torch=torch),
+                )
+
+    def test_torch_models_need_torch(self):
+        """Without torch, only the XGBoost options are offered"""
+        self.assertCountEqual(self.offered(torch=False), self.ALL[:2])
+
+    def test_options_not_duplicated(self):
+        """Options already in the dropdown are not added again"""
+        self.assertCountEqual(self.offered(present=self.ALL[:2]), self.ALL[2:])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -190,7 +190,9 @@ predicted regions can be flipped against the histology regions using the same sh
    * - :kbd:`Alt+5` / :kbd:`Shift+Alt+5`
      - Region plots (forward / backward)
 
-The entries only appear once the corresponding model has been loaded.
+The entries are offered as soon as a session is loaded, online and offline; selecting one before
+its model is loaded opens the model's load dialog. The ``ProbeTransformer`` and auto-alignment
+entries need ``torch``.
 
 Features
 ~~~~~~~~

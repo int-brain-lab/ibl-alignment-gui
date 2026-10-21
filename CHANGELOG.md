@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   region and the cumulative probabilities), instead of once for each.
 - A model's load dialog, or a model that fails to load, is handled once per plot rather than once
   per shank; cancelling the dialog stops the plot.
+- Model region options are offered offline too before the model is loaded, as online: selecting one
+  opens its load dialog.
 
 ### Removed
 - The `Inference Model` / `Inference Cumulative` region entries and `Load inference model…`, the

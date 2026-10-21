@@ -19,14 +19,17 @@ import numpy as np
 import pandas as pd
 
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    M_TO_UM,
     NO_FEATURES_MESSAGE,
     ModelSpec,
     PredictionError,
     clear_predictions,
     features_for_vintage,
     get_model,
+    get_region_boundaries,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
+from iblutil.util import Bunch
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -248,7 +251,7 @@ def _predict_df(
 ) -> tuple[pd.DataFrame, np.ndarray, object] | None:
     """Run decoder ``name`` on the shank's features and return its prediction table.
 
-    Shared core of :func:`predict` and :func:`predict_cumulative`: loads the model (asking the
+    The model run behind :func:`decode_shank`: loads the model (asking the
     user when none is loaded yet) and the shank's features from the table of the model's vintage,
     then runs :func:`run_decoder`.
 
@@ -286,10 +289,10 @@ def _predict_df(
     return out, depths, model
 
 
-def predict(
+def decode_shank(
     controller: AlignmentGUIController, items: ShankController, name: str
-) -> tuple[dict, np.ndarray] | None:
-    """Predict the per-channel region with decoder ``name`` (its most probable class).
+) -> dict[str, Bunch] | None:
+    """Run decoder ``name`` on the shank once and return both of its region-plot views.
 
     Parameters
     ----------
@@ -298,47 +301,14 @@ def predict(
     items : ShankController
         The shank being predicted on.
     name : str
-        The decoder, a key of :data:`DECODERS`.
+        The decoder, a key of :data:`DECODERS`, also its region-plot option.
 
     Returns
     -------
-    tuple of (dict, np.ndarray) or None
-        The predicted regions (id, acronym, rgb, ... per channel) and channel depths (µm), or None
-        if the user cancelled loading the model.
-
-    Raises
-    ------
-    PredictionError
-        If the shank has no features, or they lack a column the model needs.
-    """
-    result = _predict_df(controller, items, name)
-    if result is None:
-        return None
-
-    out, depths, _ = result
-
-    return classifier_regions().get(out['predicted_atlas_id'].to_numpy()), depths
-
-
-def predict_cumulative(
-    controller: AlignmentGUIController, items: ShankController, name: str
-) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], np.ndarray] | None:
-    """Return decoder ``name``'s cumulative region probabilities by depth for the stacked view.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank being predicted on.
-    name : str
-        The decoder, a key of :data:`DECODERS`.
-
-    Returns
-    -------
-    tuple of (np.ndarray, np.ndarray, list of np.ndarray, np.ndarray) or None
-        ``(cprobas, depths, colours, region_ids)``, or None if the user cancelled loading the
-        model.
+    dict of {str: Bunch} or None
+        The most probable region per channel (:func:`predict`) under ``name`` and the cumulative
+        class probabilities (:func:`predict_cumulative`) under ``name`` + ``' (cumulative)'``;
+        or None if the user cancelled loading the model.
 
     Raises
     ------
@@ -350,9 +320,55 @@ def predict_cumulative(
         return None
 
     out, depths, model = result
+
+    return {
+        name: predict(out, depths),
+        name + CUMULATIVE_SUFFIX: predict_cumulative(out, depths, model),
+    }
+
+
+def predict(out: pd.DataFrame, depths: np.ndarray) -> Bunch:
+    """Return the view of the most probable region per channel.
+
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        A decoder's ``predict`` output, with ``predicted_atlas_id``.
+    depths : np.ndarray
+        The depths (µm) of the predicted channels.
+
+    Returns
+    -------
+    Bunch
+        The region boundaries, labels and colours along the probe, for ``plot_histology``.
+    """
+    regions = classifier_regions().get(out['predicted_atlas_id'].to_numpy())
+
+    return get_region_boundaries(regions, np.asarray(depths, dtype=float) / M_TO_UM)
+
+
+def predict_cumulative(out: pd.DataFrame, depths: np.ndarray, model) -> Bunch:
+    """Return the view of the cumulative class probabilities by depth, for the stacked plot.
+
+    Parameters
+    ----------
+    out : pandas.DataFrame
+        A decoder's ``predict`` output, with one ``p_<acronym>`` column per class, in the
+        manifest's class order.
+    depths : np.ndarray
+        The depths (µm) of the predicted channels.
+    model : RegionClassifier or ProbeTransformerClassifier
+        The decoder, for its classes.
+
+    Returns
+    -------
+    Bunch
+        ``probability`` (cumulative, channels x classes), ``depths``, ``regions`` (the class
+        region ids) and ``colours`` (one per class), for ``plot_histology_cumulative``.
+    """
     # One p_<acronym> column per class, in the manifest's class order.
     cprobas = out.filter(regex=r'^p_').to_numpy().cumsum(axis=1)
     region_ids = np.array(model.config['classes']).astype(int)
     colours = list(classifier_regions().get(region_ids).rgb)
 
-    return cprobas, depths, colours, region_ids
+    return Bunch(depths=depths, regions=region_ids, colours=colours, probability=cprobas)

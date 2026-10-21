@@ -5,14 +5,12 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
-    M_TO_UM,
     PredictionError,
     close_alignment_windows,
     get_region_boundaries,
@@ -227,10 +225,10 @@ class ChannelPrediction:
         }
         # Each region decoder: its most probable region, and its cumulative probabilities.
         for name in DECODERS:
-            self.func_map[name] = partial(compute_inference_predictions, name=name)
-            self.func_map[name + CUMULATIVE_SUFFIX] = partial(
-                compute_cumulative_predictions, name=name
-            )
+            # One model run gives both of its options.
+            compute = partial(compute_inference_predictions, name=name)
+            self.func_map[name] = compute
+            self.func_map[name + CUMULATIVE_SUFFIX] = compute
 
     def plot_regions(self, model: str, data_only: bool = True) -> None:
         """Compute and plot the selected region model across all shanks.
@@ -362,44 +360,6 @@ def compute_mapping_predictions(
     return {mapping: get_region_boundaries(regions, depth_samples)}
 
 
-def _compute_region_id_predictions(
-    controller: 'AlignmentGUIController',
-    items: 'ShankController',
-    predict: Callable[['AlignmentGUIController', 'ShankController'], tuple | None],
-    depth_scale: float = 1.0,
-) -> Bunch[str, np.ndarray] | None:
-    """Run a region-id ``predict`` callable and convert its output to region boundaries.
-
-    Shared pipeline for the model-backed predictors: it calls ``predict`` (which returns
-    ``(region_ids, depths)`` or ``None``), maps the ids to atlas regions, and reduces them to
-    contiguous region boundaries. ``depth_scale`` converts the predictor's native depth unit to
-    meters (the unit expected by :func:`get_region_boundaries`).
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-    predict : Callable
-        Predictor returning ``(region_ids, depths)`` for the shank, or ``None`` if unavailable.
-    depth_scale : float
-        Multiplier converting the predictor's depths to meters.
-
-    Returns
-    -------
-    Bunch or None
-        The predicted brain regions along the probe, or None if no prediction is available.
-    """
-    result = predict(controller, items)
-    if result is None:
-        return None
-    region_ids, depths = result
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return get_region_boundaries(regions, depths * depth_scale)
-
-
 def compute_spatial_encoder_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController'
 ) -> dict[str, Bunch] | None:
@@ -433,7 +393,10 @@ def compute_inference_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController', name: str
 ) -> dict[str, Bunch] | None:
     """
-    Prediction model using a region decoder (its most probable region per channel).
+    Prediction model using a region decoder.
+
+    Runs the decoder once on the shank and returns both of its region-plot views: the most
+    probable region per channel and the cumulative class probabilities.
 
     Parameters
     ----------
@@ -447,50 +410,10 @@ def compute_inference_predictions(
     Returns
     -------
     dict of {str: Bunch} or None
-        The predicted brain regions along the probe, keyed by the region-plot option, or None if
-        no prediction is available.
+        Both views, keyed by their region-plot options (``name`` and ``name`` +
+        ``' (cumulative)'``), or None if no prediction is available.
     """
     # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
     from ibl_alignment_gui.plugins.ephys_atlas import inference
 
-    result = inference.predict(controller, items, name)
-    if result is None:
-        return None
-
-    regions, depths = result
-
-    return {name: get_region_boundaries(regions, depths / M_TO_UM)}
-
-
-def compute_cumulative_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController', name: str
-) -> dict[str, Bunch] | None:
-    """
-    Cumulative prediction model using a region decoder.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-    name : str
-        The region decoder, a key of ``inference.DECODERS``.
-
-    Returns
-    -------
-    dict of {str: Bunch} or None
-        The probability of predicted brain regions along the probe, keyed by the region-plot
-        option (``name`` + ``' (cumulative)'``), or None if no prediction is available.
-    """
-    # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
-    result = inference.predict_cumulative(controller, items, name)
-    if result is None:
-        return None
-
-    cprobas, depths, colours, regions = result
-    data = Bunch(depths=depths, regions=regions, colours=colours, probability=cprobas)
-
-    return {name + CUMULATIVE_SUFFIX: data}
+    return inference.decode_shank(controller, items, name)

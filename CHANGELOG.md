@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the GUI's features of another vintage.
 - A feature table download that finds nothing, or is interrupted, is retried the next time instead
   of failing until its folder is deleted by hand.
+- A region decoder runs once per shank for both of its Region Plots entries (the most probable
+  region and the cumulative probabilities), instead of once for each.
 
 ### Removed
 - The `Inference Model` / `Inference Cumulative` region entries and `Load inference model…`, the

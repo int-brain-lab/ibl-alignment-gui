@@ -293,8 +293,10 @@ def _plot_region_panels(
     Returns
     -------
     str or None
-        The error message when the prediction failed, else None. Errors are returned rather than
-        shown so that the caller reports them once for all shanks.
+        The error message when the prediction failed, else None: a ``PredictionError``'s message,
+        or a short message naming the error when something unexpected failed (its traceback is
+        logged). Errors are returned rather than shown so that the caller reports them once for
+        all shanks.
     """
     if not getattr(items.model, 'predictions', None):
         items.model.predictions = Bunch()
@@ -304,6 +306,17 @@ def _plot_region_panels(
             views = func(controller, items)
         except PredictionError as exc:
             return str(exc)
+        except Exception as exc:
+            # Anything else is a bug or an unforeseen failure. Keep it out of Qt (an uncaught
+            # exception in a callback aborts the app), log the traceback, and report it with the
+            # other shanks' errors.
+            logger.exception(
+                '%s failed on shank %s (%s)', model, kwargs.get('shank'), kwargs.get('config')
+            )
+            return (
+                f'Unexpected error in {model}: {type(exc).__name__}: {exc}\n\n'
+                'See the log for details.'
+            )
         if views is not None:
             items.model.predictions.update(views)
 

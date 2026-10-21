@@ -90,8 +90,10 @@ Alternatively a features file can be chosen at runtime from
 
 For an IBL insertion loaded from Alyx, the models otherwise use the ephys-atlas feature table of
 the vintage they were trained on (e.g. ``2026_W26``), which may differ from the latest table shown
-in the feature plots. A file chosen from the menu always takes precedence. A local file must hold
-the features of the model's vintage; missing columns are reported when the model runs.
+in the feature plots. If that table has no features for the insertion (for example a vintage
+without multi-area tables), the model reports it instead of running on the features of another
+vintage. A file chosen from the menu always takes precedence. A local file must hold the features
+of the model's vintage; missing columns are reported when the model runs.
 
 .. note::
    A features file chosen from the menu applies to the session that is currently loaded only. It is

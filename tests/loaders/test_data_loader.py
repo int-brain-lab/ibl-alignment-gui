@@ -8,10 +8,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
+from ibl_alignment_gui.loaders import data_loader
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoader,
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderOne,
     SpikeGLXLoader,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
@@ -680,3 +682,54 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
         ):
             data = self.loader.load_ap_data()
             self.assertIsNone(data)
+
+
+class TestFeatureLoaderOneTables(unittest.TestCase):
+    """Reading a feature table, downloading it when it is not complete on disk."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.loader = FeatureLoaderOne({'id': 'pid'}, MagicMock(), '2026_W39')
+        self.table = self.root.joinpath(
+            'ea_active', '2026_W39', 'agg_full', 'df_all_cols_merged.pqt'
+        )
+        self.enterContext(patch.object(data_loader, 'EPHYS_ATLAS', True))
+
+    def write_table(self, *args) -> None:
+        """Stand-in for a download that writes the table."""
+        self.table.parent.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame({'pid': ['pid'], 'channel': [0], 'rms_lf': [1.0]})
+        df.set_index(['pid', 'channel']).to_parquet(self.table)
+
+    def make_folder(self, *args) -> None:
+        """Stand-in for a download that finds nothing: the folder is made, no table."""
+        self.table.parent.mkdir(parents=True, exist_ok=True)
+
+    def read(self) -> pd.DataFrame:
+        return self.loader.read_full_dataframe('ea_active', '2026_W39', self.root)
+
+    def test_table_present_not_downloaded(self):
+        """A table on disk is read without downloading"""
+        self.write_table()
+        with patch.object(self.loader, 'download_features') as download:
+            df = self.read()
+        download.assert_not_called()
+        self.assertEqual(df['rms_lf'].tolist(), [1.0])
+
+    def test_empty_folder_downloads_again(self):
+        """An empty folder left by a failed download is downloaded again"""
+        self.make_folder()
+        with patch.object(self.loader, 'download_features', side_effect=self.write_table) as dl:
+            df = self.read()
+        dl.assert_called_once()
+        self.assertEqual(df['rms_lf'].tolist(), [1.0])
+
+    def test_unavailable_table_is_empty(self):
+        """When the download finds nothing, the table is empty and a warning is logged"""
+        with (
+            patch.object(self.loader, 'download_features', side_effect=self.make_folder),
+            self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs,
+        ):
+            df = self.read()
+        self.assertTrue(df.empty)
+        self.assertIn('ea_active 2026_W39 feature table is not available', logs.output[0])

@@ -2,7 +2,7 @@
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -90,6 +90,35 @@ class TestPlotRegionPanels(unittest.TestCase):
         func.side_effect, func.return_value = None, {'Model': self.regions}
         cp._plot_region_panels(self.controller, 'Model', func)
         self.assertEqual(func.call_count, 2 * len(SHANKS))
+
+    def test_unexpected_error_reported(self):
+        """Any other error is returned per shank with its type and message, logged, not cached"""
+        func = MagicMock(side_effect=ValueError('boom'))
+        with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR') as logs:
+            errors = cp._plot_region_panels(self.controller, 'Model', func)
+        self.assertEqual(len(errors), len(SHANKS))
+        for error in errors:
+            self.assertIn('Unexpected error in Model: ValueError: boom', error)
+            self.assertIn('See the log for details.', error)
+        self.assertEqual(len(logs.records), len(SHANKS))
+        self.assertIn('Traceback', logs.output[0])
+        for items in self.items:
+            self.assertNotIn('Model', items.model.predictions)
+
+    def test_unexpected_error_shown_once(self):
+        """Through plot_regions, the same error on every shank gives one warning"""
+        self.controller.view = None
+        self.controller.model.brain_atlas = None
+        loader = cp.ChannelPrediction(self.controller)
+        loader.func_map['Model'] = MagicMock(side_effect=ValueError('boom'))
+        with (
+            patch.object(cp.QtWidgets.QMessageBox, 'warning') as warning,
+            self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'),
+        ):
+            loader.plot_regions('Model')
+        warning.assert_called_once()
+        self.assertEqual(warning.call_args.args[1], 'Model')
+        self.assertEqual(warning.call_args.args[2].count('Unexpected error in Model'), 1)
 
 
 class TestComputeMappingPredictions(unittest.TestCase):

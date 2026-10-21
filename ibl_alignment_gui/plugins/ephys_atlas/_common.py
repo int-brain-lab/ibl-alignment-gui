@@ -521,6 +521,11 @@ def features_for_vintage(
     -------
     pandas.DataFrame or None
         The features DataFrame, or None when no features are available.
+
+    Raises
+    ------
+    PredictionError
+        If the model's vintage table cannot be loaded, or has no features for this insertion.
     """
     loader = items.model.loaders.get('features')
     if (
@@ -543,12 +548,19 @@ def features_for_vintage(
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             cache[vintage] = vintage_loader.load_features()
+        except Exception as exc:
+            raise PredictionError(
+                f'The {vintage} features could not be loaded for this insertion:\n{exc}'
+            ) from exc
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
     feats = cache[vintage]
     if not feats.get('exists', False):
-        logger.warning('No %s features for this insertion; using the GUI features', vintage)
-        return _get_features_df(controller, items)
+        # Features of another vintage would give a confident but wrong prediction.
+        raise PredictionError(
+            f'No {vintage} features are available for this insertion; the model needs features '
+            f'computed with the {vintage} feature set.'
+        )
     return feats['df']
 
 

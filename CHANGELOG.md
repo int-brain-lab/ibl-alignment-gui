@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   columns are reported in a dialog instead of raising.
 - A features file chosen with `Load features file…` is used by both models, also for an IBL
   insertion (auto-alignment previously used the model's feature release instead).
+- An unexpected error while computing a region prediction is reported in the plot's warning and
+  its traceback logged, instead of escaping (which could close the GUI). A feature table that
+  cannot be loaded for the model's vintage is reported as such.
+- A model whose feature vintage has no features for the insertion reports it, instead of predicting
+  on the GUI's features of another vintage.
+- A feature table download that finds nothing, or is interrupted, is retried the next time instead
+  of failing until its folder is deleted by hand.
 
 ### Removed
 - The `Inference Model` / `Inference Cumulative` region entries and `Load inference model…`, the

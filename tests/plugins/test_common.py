@@ -1,10 +1,20 @@
 """Tests for the helpers shared by the Channel Prediction plugin and its model backends."""
 
+import os
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
+from qtpy import QtWidgets
 
-from ibl_alignment_gui.plugins.ephys_atlas._common import get_region_boundaries
+from ibl_alignment_gui.loaders.data_loader import FeatureLoaderOne
+from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    PLUGIN_KEY,
+    PredictionError,
+    features_for_vintage,
+    get_region_boundaries,
+)
 from iblutil.util import Bunch
 
 RED, BLUE = [255, 0, 0], [0, 0, 255]
@@ -34,6 +44,51 @@ class TestGetRegionBoundaries(unittest.TestCase):
         view = get_region_boundaries(regions, np.array([0.0, 10.0, 20.0]) / 1e6)
         np.testing.assert_allclose(view.region, [[0, 20]])
         self.assertEqual(view.axis_label[:, 1].tolist(), ['C'])
+
+
+class TestFeaturesForVintage(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_vintage_load_failure(self):
+        """A vintage table that cannot be loaded raises PredictionError and is not cached"""
+        # An IBL-mode shank whose GUI features are another vintage than the model's.
+        loader = FeatureLoaderOne.__new__(FeatureLoaderOne)
+        loader.feature_version = '2026_W26'
+        loader.pid = 'pid'
+        loader.one = None
+        loader.multi_area = False
+        items = SimpleNamespace(model=SimpleNamespace(loaders={'features': loader}, raw_data={}))
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
+        error = FileNotFoundError('[Errno 2] No such file or directory: df_all_cols_merged.pqt')
+        with (
+            patch.object(FeatureLoaderOne, 'load_features', side_effect=error),
+            self.assertRaisesRegex(
+                PredictionError, r'2026_W39 features could not be loaded(.|\n)*No such file'
+            ),
+        ):
+            features_for_vintage(controller, items, '2026_W39')
+        self.assertEqual(items.model.raw_data['model_features'], {})
+        self.assertIsNone(QtWidgets.QApplication.overrideCursor())
+
+    def test_vintage_without_features_refused(self):
+        """A vintage with no features for the insertion is refused, and not loaded again"""
+        loader = FeatureLoaderOne.__new__(FeatureLoaderOne)
+        loader.feature_version = '2026_W26'
+        loader.pid = 'pid'
+        loader.one = None
+        loader.multi_area = True
+        items = SimpleNamespace(model=SimpleNamespace(loaders={'features': loader}, raw_data={}))
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
+        with patch.object(
+            FeatureLoaderOne, 'load_features', return_value=Bunch(exists=False)
+        ) as load:
+            for _ in range(2):
+                with self.assertRaisesRegex(PredictionError, 'No 2026_W39 features are available'):
+                    features_for_vintage(controller, items, '2026_W39')
+        load.assert_called_once()
 
 
 if __name__ == '__main__':

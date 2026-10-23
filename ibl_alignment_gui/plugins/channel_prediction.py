@@ -587,7 +587,11 @@ def _prediction_done(
     shanks: list['ShankController'],
     outcome: _Outcome,
 ) -> None:
-    """Keep and draw what the task computed, and report its errors once (main thread)."""
+    """Keep and draw what the task computed, and report its warnings and errors once (main thread).
+
+    The warnings are those the task queued in the plugin state's ``pending_warnings`` (e.g. local
+    features of another feature version than the model's).
+    """
     if outcome.loaded_from is not None:
         store_model(controller, spec, outcome.model, outcome.loaded_from)
     for items, views, extra in outcome.results:
@@ -595,7 +599,8 @@ def _prediction_done(
         if spec.on_computed is not None:
             spec.on_computed(controller, items, extra)
     _draw_all(shanks, option)
-    messages = list(dict.fromkeys(outcome.errors))
+    warnings = plugin_state(controller).pop('pending_warnings', [])
+    messages = list(dict.fromkeys(warnings + outcome.errors))
     if messages:
         QtWidgets.QMessageBox.warning(controller.view, option, '\n\n'.join(messages))
 

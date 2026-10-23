@@ -122,7 +122,8 @@ class TestFeaturesForVintage(unittest.TestCase):
         loader.pid = 'pid'
         loader.one = None
         loader.multi_area = False
-        raw_data = {'features': Bunch(exists=True, df='GUI features')}
+        gui_features = pd.DataFrame({'a': [1.0]})
+        raw_data = {'features': Bunch(exists=True, df=gui_features)}
         items = SimpleNamespace(
             name='probe00',
             config='default',
@@ -141,10 +142,44 @@ class TestFeaturesForVintage(unittest.TestCase):
                     features_for_vintage(controller, items, '2026_W39', progress), 'W39 features'
                 )
             # The GUI's own vintage needs no loading.
-            self.assertEqual(
-                features_for_vintage(controller, items, '2026_W26', progress), 'GUI features'
+            self.assertIs(
+                features_for_vintage(controller, items, '2026_W26', progress), gui_features
             )
         self.assertEqual(reports, [(None, 'Loading the 2026_W39 features for probe00…')])
+
+    @staticmethod
+    def _local_features(attrs):
+        """A shank whose features come from a local file, with the file's ``attrs``."""
+        df = pd.DataFrame({'rms_lf': [1.0, 2.0]})
+        df.attrs.update(attrs)
+        items = SimpleNamespace(
+            name='probe00',
+            config='default',
+            model=SimpleNamespace(loaders={}, raw_data={'features': Bunch(exists=True, df=df)}),
+        )
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
+        return controller, items, df
+
+    def test_other_features_version_warning_queued_each_call(self):
+        """Local features of another version than the model's queue a warning each time used"""
+        controller, items, df = self._local_features({'features_version': '2026_W42'})
+        with patch.object(QtWidgets.QMessageBox, 'warning') as warning:
+            for _ in range(2):  # e.g. two models trained on the same vintage
+                self.assertIs(features_for_vintage(controller, items, '2026_W39'), df)
+        warning.assert_not_called()  # this may run on a background thread: no Qt here
+        messages = controller.plugins[PLUGIN_KEY]['pending_warnings']
+        self.assertEqual(len(messages), 2)
+        for message in messages:
+            self.assertIn('2026_W42', message)
+            self.assertIn('2026_W39', message)
+
+    def test_same_or_unknown_features_version_no_warning(self):
+        """Local features of the model's version, or without a version, queue nothing"""
+        for attrs in ({'features_version': '2026_W39'}, {}):
+            with self.subTest(attrs=attrs):
+                controller, items, df = self._local_features(attrs)
+                self.assertIs(features_for_vintage(controller, items, '2026_W39'), df)
+                self.assertNotIn('pending_warnings', controller.plugins[PLUGIN_KEY])
 
 
 class TestLocalFeaturesPath(unittest.TestCase):
@@ -250,10 +285,10 @@ class TestMissingFeaturesError(unittest.TestCase):
                 )
 
     def test_features_vintage_from_file(self):
-        """A features file's vintage attribute is kept in the parquet file and read back"""
+        """A file's features_version attribute is kept in the parquet file and read back"""
         df = pd.DataFrame({'channel': [0], 'a': [1.0]})
         self.assertIsNone(features_vintage(df))
-        df.attrs['vintage'] = '2026_W26'
+        df.attrs['features_version'] = '2026_W26'
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'features.pqt'
             df.to_parquet(path)

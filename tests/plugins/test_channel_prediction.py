@@ -11,10 +11,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pandas as pd
 from qtpy import QtTest, QtWidgets
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
-from ibl_alignment_gui.plugins.ephys_atlas import inference, spatial_encoder
+from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     ALL_SHANKS,
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
@@ -215,6 +216,53 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         for shank in SHANKS:
             self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
         self.warning.assert_not_called()
+
+    def test_queued_warning_shown_once(self):
+        """A warning queued while computing is shown once when the task ends, then cleared"""
+        self.set_model(model=object(), source=('org/model', '2026_W39'))
+        state = self.controller.plugins[PLUGIN_KEY]
+
+        def compute(controller, items, model, progress):
+            # As features_for_vintage does, on the background thread, for every shank.
+            state.setdefault('pending_warnings', []).append('Features of another version')
+            return {DECODER: Bunch(region='regions view')}, None
+
+        self.compute.side_effect = compute
+        self.loader.plot_regions(DECODER)
+        self.warning.assert_called_once()
+        self.assertEqual(self.warning.call_args.args[1:], (DECODER, 'Features of another version'))
+        self.assertNotIn('pending_warnings', state)
+
+    def test_version_warning_for_each_model(self):
+        """Features of another version warn for every model run on them, not once per session"""
+        transformer = 'ProbeTransformer region prediction'
+        df = pd.DataFrame({'a': [1.0]})
+        df.attrs['features_version'] = '2026_W39'
+        shank = SimpleNamespace(
+            name='probe00',
+            config='default',
+            model=SimpleNamespace(loaders={}, raw_data={'features': Bunch(exists=True, df=df)}),
+        )
+
+        def compute_for(option):
+            def compute(controller, items, model, progress):
+                # The models read their features as the backends do; both trained on 2026_W42.
+                _common.features_for_vintage(controller, shank, '2026_W42')
+                return {option: Bunch(region='regions view')}, None
+
+            return compute
+
+        specs = {
+            name: dataclasses.replace(cp.MODEL_FOR_OPTION[name], compute=compute_for(name))
+            for name in (DECODER, transformer)
+        }
+        self.enterContext(patch.dict(cp.MODEL_FOR_OPTION, specs))
+        for spec in specs.values():
+            self.controller.plugins[PLUGIN_KEY][spec.key] = dict(model=object(), source=None)
+        self.loader.plot_regions(DECODER)
+        self.loader.plot_regions(transformer)
+        # One dialog per model, though each ran on two shanks
+        self.assertEqual([c.args[1] for c in self.warning.call_args_list], [DECODER, transformer])
 
     def test_mapping_needs_no_model(self):
         """Beryl is computed at once, without a model or a background task"""

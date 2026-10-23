@@ -119,7 +119,8 @@ Once the features are available, load a model from the ``Plugins -> Channel Pred
     The released channel-level region decoders, loaded with ``ephysatlas.load_pretrained`` and run
     with their ``predict``: a Hugging Face repository
     (``int-brain-lab/ea-decoder-channel-xgboost`` or ``int-brain-lab/ea-decoder-channel-transformer``
-    by default) and release tag (``2026_W39`` by default), or a local release directory containing
+    by default) and release tag (by default each decoder's release in ibleatools,
+    ``ephysatlas.models.DECODER_VINTAGES``), or a local release directory containing
     its ``ephysatlas_model.json``. Each is downloaded once and cached. The ProbeTransformer requires
     ``torch``; its menu entry is only shown when ``torch`` is installed.
 

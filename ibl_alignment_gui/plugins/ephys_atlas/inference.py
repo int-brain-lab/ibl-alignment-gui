@@ -78,9 +78,6 @@ DECODERS = {
         needs_torch=True,
     ),
 }
-# Release tag of the vintage (the feature set the decoders were trained on), pinned rather than
-# ``main``, which moves whenever a new release is published. Update it when adopting a new release.
-MODEL_REVISION = '2026_W39'
 # Suffix of the region-plot option showing a decoder's cumulative class probabilities.
 CUMULATIVE_SUFFIX = ' (cumulative)'
 # Explanation shown in the decoders' load dialog.
@@ -93,6 +90,13 @@ DECODER_NOTE = (
 # -----------------------------------------------------------------------------
 # Model loading
 # -----------------------------------------------------------------------------
+
+
+def _default_source(repo: str) -> tuple[str, str]:
+    """Return a decoder's default repository and release tag, from ephysatlas."""
+    from ephysatlas.models import DECODER_VINTAGES  # noqa: PLC0415 - heavy, lazy
+
+    return repo, DECODER_VINTAGES[repo]
 
 
 def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None]):
@@ -383,8 +387,7 @@ DECODER_SPECS = {
     name: ModelSpec(
         key=name,
         title=f'Load {name} model',
-        # The release tag is pinned here until ibleatools publishes the decoders' vintage.
-        default_source=functools.partial(lambda repo: (repo, MODEL_REVISION), decoder.repo),
+        default_source=functools.partial(_default_source, decoder.repo),
         note=DECODER_NOTE,
         load=_load_decoder,
         invalidate=functools.partial(invalidate_predictions, names=(name,)),

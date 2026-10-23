@@ -393,14 +393,18 @@ class TestDecoderModelLoading(_LoadingFlowTests, _ModelLoadingTests, unittest.Te
     spec = inference.DECODER_SPECS[DECODER]
     key = DECODER
     default_repo = inference.DECODERS[DECODER].repo
-    default_revision = inference.MODEL_REVISION
+    default_revision = '2026_W41'  # the decoder's release in the stand-in ephysatlas.models
     title = f'Load {DECODER} model'
 
     def patch_loader(self):
-        # The decoders import ephysatlas.load_pretrained when they load a model.
+        # The decoders read their default release from ephysatlas.models and load a model with
+        # ephysatlas.load_pretrained.
         ephysatlas = types.ModuleType('ephysatlas')
         ephysatlas.load_pretrained = lambda repo, revision=None: self._fake_load(repo, revision)
-        self.enterContext(patch.dict(sys.modules, {'ephysatlas': ephysatlas}))
+        models = types.ModuleType('ephysatlas.models')
+        models.DECODER_VINTAGES = {self.default_repo: self.default_revision}
+        stubs = {'ephysatlas': ephysatlas, 'ephysatlas.models': models}
+        self.enterContext(patch.dict(sys.modules, stubs))
 
 
 class TestEncoderModelLoading(_ModelLoadingTests, unittest.TestCase):

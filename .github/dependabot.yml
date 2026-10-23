@@ -1,0 +1,25 @@
+# Monthly dependency update PRs. CI runs on each one; merge when it is green, and for updates to
+# Qt, pyqtgraph or datoviz also give the GUI a quick manual check, as CI barely covers it.
+# Git dependencies pinned to a commit (ibl-datoviz) are not updated: move those by hand.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    # Major versions come in their own PR, so one breaking upgrade does not hold up the rest.
+    groups:
+      python-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+      python-major:
+        patterns: ['*']
+        update-types: [major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']

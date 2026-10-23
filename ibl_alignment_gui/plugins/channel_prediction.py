@@ -1,41 +1,62 @@
 import importlib.util
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 from qtpy import QtWidgets
 
+from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
-from ibl_alignment_gui.plugins.ephys_atlas._common import is_model_loaded
+from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder as spatial
+from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    ALL_SHANKS,
+    NO_FEATURES_MESSAGE,
+    PredictionError,
+    choose_source,
+    close_alignment_windows,
+    get_region_boundaries,
+    has_features,
+    is_model_loaded,
+    load_model,
+    plugin_state,
+    show_alignment_windows,
+    store_model,
+)
+from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
-# NB: ``spatial_encoder`` (torch) and ``inference`` (ephysatlas) are imported lazily inside the
-# compute functions below so this plugin can be set up in offline mode without those heavy/optional
-# dependencies installed.
+# NB: both backends import ``ephysatlas`` (and torch) only when a model is used, so this plugin
+# can be set up without those heavy/optional dependencies installed.
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
+    from ibl_alignment_gui.plugins.ephys_atlas._common import ModelSpec
     from iblatlas.atlas import AllenAtlas
 
 PLUGIN_NAME = 'Channel Prediction'
 
-# Track depths are stored along the histology track in meters; region plots expect microns.
-M_TO_UM = 1e6
+# Every model the plugin offers, as the backends describe them (see ModelSpec).
+MODELS = (*DECODER_SPECS.values(), spatial.ENCODER_SPEC)
+# The model behind each of their region-plot options.
+MODEL_FOR_OPTION = {option: spec for spec in MODELS for option in spec.options}
 
-# Region-plot dropdown options contributed by loadable models. Each entry maps the plugin-state
-# key the backend caches its model under (its ``MODEL_NAME``) to the region keys it enables, plus
-# whether torch is required. In offline mode an option is only shown once its model is loaded.
-_MODEL_OPTIONS = (
-    ('Encoding', ['Spatial Encoder'], True),
-    ('Inference', ['Inference Model', 'Inference Cumulative'], False),
-)
+
+def has_torch() -> bool:
+    """Return whether torch is installed, without importing it."""
+    return importlib.util.find_spec('torch') is not None
+
+
+def available_models() -> list['ModelSpec']:
+    """Return the models offered: those needing torch only when it is installed."""
+    torch = has_torch()
+    return [spec for spec in MODELS if torch or not spec.needs_torch]
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -61,10 +82,11 @@ def setup(controller: 'AlignmentGUIController') -> None:
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
 
-    menu_actions = [('Load inference model', _load_inference_model)]
-    # The spatial encoder needs torch; only offer it when torch is installed.
-    if importlib.util.find_spec('torch') is not None:
-        menu_actions.append(('Load spatial model', _load_spatial_model))
+    # One load action per model; those needing torch only when it is installed.
+    models = available_models()
+    menu_actions = [
+        (f'{spec.title} (Hugging Face)…', partial(_load_model, spec=spec)) for spec in models
+    ]
     menu_actions.append(('Load features file…', _set_local_features))
 
     for label, handler in menu_actions:
@@ -72,99 +94,316 @@ def setup(controller: 'AlignmentGUIController') -> None:
         action.triggered.connect(lambda _=False, h=handler: h(controller))
         plugin_menu.addAction(action)
 
+    if spatial.ENCODER_SPEC in models:
+        # Re-opens the auto-alignment result windows; greyed out until a shank has been aligned.
+        action = QtWidgets.QAction('Show auto-alignment results', controller.view)
+        action.triggered.connect(lambda _=False: show_alignment_windows(controller))
+        action.setEnabled(False)
+        plugin_menu.addAction(action)
+        controller.plugins[PLUGIN_NAME]['alignment_results_action'] = action
+
     controller.plugins[PLUGIN_NAME]['data_button_pressed'] = partial(_on_data_loaded, controller)
 
 
-def _set_local_features(controller: 'AlignmentGUIController') -> None:
-    """Prompt for a per-channel features parquet and use it for inference."""
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
+class FeaturesFilesDialog(QtWidgets.QDialog):
+    """Choose a features file for each shank and configuration, or one file for all shanks.
 
-    parent = controller.view
-    chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
-        parent, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+    Each row opens with the shank's current file; a row left as it is (or emptied) keeps the
+    shank's current features.
+
+    Parameters
+    ----------
+    parent : QtWidgets.QWidget or None
+        The parent window.
+    rows : list of ((str, str), Path or None)
+        Each shank's ``(shank, config)`` and its current features file.
+    """
+
+    def __init__(self, parent, rows: list) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Load features files')
+        self.setMinimumWidth(640)
+        self._initial = {key: '' if path is None else str(path) for key, path in rows}
+
+        self._all = QtWidgets.QCheckBox('One file for all shanks (split by channel)')
+        self._all_field = QtWidgets.QLineEdit()
+        all_row = self._file_row(self._all_field)
+        self._all_widget = QtWidgets.QWidget()
+        self._all_widget.setLayout(all_row)
+        self._all_widget.setVisible(False)
+
+        grid = QtWidgets.QGridLayout()
+        self._fields = {}
+        for row, (key, _) in enumerate(rows):
+            shank, config = key
+            field = QtWidgets.QLineEdit(self._initial[key])
+            self._fields[key] = field
+            grid.addWidget(QtWidgets.QLabel(shank), row, 0)
+            grid.addWidget(QtWidgets.QLabel(config), row, 1)
+            grid.addLayout(self._file_row(field), row, 2)
+        self._rows_widget = QtWidgets.QWidget()
+        self._rows_widget.setLayout(grid)
+        self._all.toggled.connect(self._all_widget.setVisible)
+        self._all.toggled.connect(lambda on: self._rows_widget.setVisible(not on))
+
+        note = QtWidgets.QLabel("Rows left as they are keep the shank's current features.")
+        note.setWordWrap(True)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QtWidgets.QVBoxLayout(self)
+        for widget in (self._all, self._all_widget, self._rows_widget, note, buttons):
+            layout.addWidget(widget)
+
+    def _file_row(self, field: QtWidgets.QLineEdit) -> QtWidgets.QHBoxLayout:
+        """Return a file field with a Browse button."""
+        browse = QtWidgets.QPushButton('Browse…')
+        browse.clicked.connect(lambda: self._browse(field))
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(field)
+        row.addWidget(browse)
+        return row
+
+    def _browse(self, field: QtWidgets.QLineEdit) -> None:
+        chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+        )
+        if chosen:
+            field.setText(chosen)
+
+    def chosen(self) -> dict:
+        """Return the files to apply: one for all shanks, or the changed rows per shank."""
+        if self._all.isChecked():
+            text = self._all_field.text().strip()
+            return {ALL_SHANKS: Path(text)} if text else {}
+        return {
+            key: Path(field.text().strip())
+            for key, field in self._fields.items()
+            if field.text().strip() and field.text().strip() != self._initial[key]
+        }
+
+
+def _shank_handlers(controller: 'AlignmentGUIController') -> list:
+    """Return every shank's ``((shank, config), ShankHandler)``."""
+    return [
+        ((shank, config), handler)
+        for shank, configs in controller.model.shanks.items()
+        for config, handler in configs.items()
+    ]
+
+
+def _current_features_file(controller: 'AlignmentGUIController', key, handler) -> Path | None:
+    """Return the features file a shank uses now: the one chosen before, or its session's file."""
+    paths = plugin_state(controller).get('features_paths') or {}
+    if key in paths or ALL_SHANKS in paths:
+        return paths.get(key, paths.get(ALL_SHANKS))
+    loader = handler.loaders.get('features')
+    return loader.features_path if isinstance(loader, FeatureLoaderLocal) else None
+
+
+def _check_features_files(controller: 'AlignmentGUIController', chosen: dict) -> list[str]:
+    """Return a line for each chosen file that has no features for its shank (none if all do).
+
+    A file for all shanks only needs features in it, as it is split by channel. A file that cannot
+    be read (e.g. not a parquet file) is reported the same way.
+    """
+    handlers = dict(_shank_handlers(controller))
+    problems = []
+    for key, path in chosen.items():
+        if key == ALL_SHANKS:
+            label, sites = 'All shanks', None
+        else:
+            handler = handlers[key]
+            label = f'{key[0]} ({key[1]})'
+            sites = (
+                handler.loaders['geom'].get_sites_for_shank(handler.shank_idx)
+                if handler.data_loaded
+                else None
+            )
+        try:
+            exists = FeatureLoaderLocal(path).load_features(sites).get('exists', False)
+        except Exception as exc:
+            problems.append(f'{label}: {path} could not be read ({type(exc).__name__}: {exc})')
+            continue
+        if not exists:
+            problems.append(f'{label}: no features for this shank in {path}')
+    return problems
+
+
+def _apply_features_files(controller: 'AlignmentGUIController', chosen: dict) -> None:
+    """Remember the chosen files, load them into the loaded shanks and clear old predictions.
+
+    A file for all shanks replaces any shank's own file; a shank's own file overrides the file
+    for all shanks. Shanks whose data is not loaded yet load their file when they are predicted
+    on (``ephys_atlas._common._get_features_df``).
+    """
+    paths = (
+        {} if ALL_SHANKS in chosen else dict(plugin_state(controller).get('features_paths') or {})
     )
+    paths.update(chosen)
+    plugin_state(controller)['features_paths'] = paths
+    for key, handler in _shank_handlers(controller):
+        path = chosen.get(key, chosen.get(ALL_SHANKS))
+        if path is not None and handler.data_loaded:
+            handler.load_ephys_features(FeatureLoaderLocal(path))
+    _invalidate_loaded_models(controller)
+
+
+def _set_local_features(controller: 'AlignmentGUIController') -> None:
+    """Choose features files for the shanks ("Load features file…") and use them for the models.
+
+    With one shank and one configuration, a plain file dialog; otherwise a file per shank and
+    configuration (:class:`FeaturesFilesDialog`). The files are checked before any is applied.
+    """
+    rows = _shank_handlers(controller)
+    if len(rows) <= 1:
+        chosen_file, _ = QtWidgets.QFileDialog.getOpenFileName(
+            controller.view, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+        )
+        chosen = {ALL_SHANKS: Path(chosen_file)} if chosen_file else {}
+    else:
+        dialog = FeaturesFilesDialog(
+            controller.view,
+            [(key, _current_features_file(controller, key, handler)) for key, handler in rows],
+        )
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
+            return
+        chosen = dialog.chosen()
     if not chosen:
         return
 
-    path = Path(chosen)
-    loader = FeatureLoaderLocal(path)
-    if not loader.load_features().get('exists', False):
-        QtWidgets.QMessageBox.warning(parent, PLUGIN_NAME, f'No features found in:\n{path}')
+    problems = _check_features_files(controller, chosen)
+    if problems:
+        QtWidgets.QMessageBox.warning(
+            controller.view,
+            PLUGIN_NAME,
+            'No features found for:\n'
+            + '\n'.join(problems)
+            + '\n\nNo features files were changed.',
+        )
         return
-
-    controller.plugins[PLUGIN_NAME]['features_path'] = path
-    # Inject into any already-loaded shanks so inference (and re-runs) use the new file; a single
-    # combined file is split per shank via shank_sites['raw_ind']. If data is not loaded yet,
-    # ephys_atlas._common._get_features_df will load (and split) it lazily from this path.
-    for shank_dict in controller.model.shanks.values():
-        for shank_handler in shank_dict.values():
-            if getattr(shank_handler, 'raw_data', None) is not None:
-                shank_sites = shank_handler.loaders['geom'].get_sites_for_shank(
-                    shank_handler.shank_idx
-                )
-                shank_handler.raw_data['features'] = loader.load_features(shank_sites)
-    inference.invalidate_predictions(controller)
-    logger.info('Local features file set to %s', path)
+    _apply_features_files(controller, chosen)
+    logger.info('Features files set: %s', {str(k): str(v) for k, v in chosen.items()})
 
 
-def _load_inference_model(controller: 'AlignmentGUIController') -> None:
-    """Load inference model via GUI dialog; reveal its region options and refresh on success."""
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
-    if inference.load_model_dialog(controller):
-        # Reveal the now-loaded model's region options (offline only adds them once loaded).
-        _refresh_model_options(controller)
-        controller.view.trigger_menu_option('region', inference.PREDICTION_KEY)
+def _invalidate_loaded_models(controller: 'AlignmentGUIController') -> None:
+    """Drop every loaded model's cached predictions, e.g. after a new features file."""
+    for spec in MODELS:
+        if is_model_loaded(controller, spec.key):
+            spec.invalidate(controller)
 
 
-def _load_spatial_model(controller: 'AlignmentGUIController') -> None:
-    """Load the spatial model via dialog; reveal its region option and refresh on success."""
-    import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
+def _load_model(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
+    """Load a release of ``spec``'s model chosen in its dialog, then show its first option.
 
-    if spatial.load_model_dialog(controller):
-        # Reveal the now-loaded model's region option (offline only adds it once loaded).
-        _refresh_model_options(controller)
-        controller.view.trigger_menu_option('region', spatial.PREDICTION_KEY)
+    The dialog runs here (main thread); the model loads in the background, behind a progress
+    dialog with Cancel. A source that is already loaded is not loaded again. Cancelling the dialog
+    keeps the current model (and still shows it, if there is one).
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    spec : ModelSpec
+        The model to load.
+    """
+    if not has_features(controller):
+        QtWidgets.QMessageBox.warning(controller.view, PLUGIN_NAME, NO_FEATURES_MESSAGE)
+        return
+    state = plugin_state(controller).get(spec.key) or {}
+    loaded = state.get('model') is not None
+    source = choose_source(controller, spec)
+    if source is None:  # dialog cancelled: keep (and show) the current model, if any
+        if loaded:
+            _show_first_option(controller, spec)
+        return
+    if loaded and tuple(state['source']) == source:  # already loaded: not loaded again
+        _show_first_option(controller, spec)
+        return
+    started = controller.run_in_thread(
+        _load_task,
+        spec,
+        source,
+        on_finished=partial(_load_done, controller, spec),
+        on_error=partial(_task_failed, controller, spec.title),
+        busy_message='Starting…',
+        title=spec.title,
+        report_progress=True,
+        cancellable=True,
+    )
+    if not started:
+        _busy_warning(controller, spec.title)
+
+
+def _load_task(spec: 'ModelSpec', source: tuple[str, str], progress_callback) -> '_Outcome':
+    """Load ``source`` (background thread, no Qt)."""
+    outcome = _Outcome()
+    try:
+        outcome.model = load_model(spec, source, _fraction_progress(progress_callback))
+        outcome.loaded_from = source
+    except TaskCancelledError:
+        outcome.cancelled = True
+    except PredictionError as exc:
+        outcome.errors.append(str(exc))
+    return outcome
+
+
+def _load_done(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome: '_Outcome'):
+    """Keep the loaded model and show its first option, or report the failure (main thread)."""
+    if outcome.errors:
+        QtWidgets.QMessageBox.critical(controller.view, spec.title, outcome.errors[0])
+        return
+    if outcome.loaded_from is None:
+        return  # cancelled: the current model, if any, is kept
+    store_model(controller, spec, outcome.model, outcome.loaded_from)
+    _show_first_option(controller, spec)
+
+
+def _show_first_option(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
+    """Select the model's first region-plot option, which shows its predictions."""
+    _refresh_model_options(controller)  # make sure its options are offered
+    controller.view.trigger_menu_option('region', spec.options[0])
 
 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
     """Data-load hook: reset per-session plugin state and expose available model region options.
 
     Runs on every data load (i.e. each new session). Drops any manual features override so it does
-    not leak across sessions (each session supplies its own features), then refreshes which model
-    region-plot options are offered.
+    not leak across sessions (each session supplies its own features), closes the previous
+    session's auto-alignment result windows, then refreshes which model region-plot options are
+    offered.
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
     """
-    controller.plugins[PLUGIN_NAME]['features_path'] = None
+    controller.plugins[PLUGIN_NAME]['features_paths'] = None
+    close_alignment_windows(controller)
     _refresh_model_options(controller)
 
 
 def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
-    """Add the region-plot options for models that should currently be available.
+    """Add the region-plot options of every available model, the same online and offline.
 
-    Online, every model's option is offered (the model loads on demand). Offline, an option is
-    added only once its model has been loaded, so the dropdown never lists a model the user cannot
-    run. Options already present are left untouched, so this is safe to call repeatedly (e.g. after
-    each successful model load and on every data reload).
+    A model is loaded when one of its options is first selected (or from the Plugins menu). Models
+    that need torch are offered only when it is installed (:func:`available_models`). Options
+    already present are left untouched, so this is safe to call repeatedly (e.g. after each model
+    load and on every data reload).
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
     """
-    new_keys = []
-    for state_key, region_keys, needs_torch in _MODEL_OPTIONS:
-        if needs_torch and importlib.util.find_spec('torch') is None:
-            continue
-        if controller.offline and not is_model_loaded(controller, state_key):
-            continue
-        new_keys.extend(
-            key for key in region_keys if not controller.view.has_menu_option('region', key)
-        )
+    new_keys = [
+        option
+        for spec in available_models()
+        for option in spec.options
+        if not controller.view.has_menu_option('region', option)
+    ]
     if new_keys:
         controller.view.populate_menu_tab(
             'region', controller.plot_region_ref_panels, new_keys, set_checked=False
@@ -174,8 +413,9 @@ def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
 class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
-    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` dispatches the
-    selected region model to the matching ``compute_*`` function and draws it on each shank.
+    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` shows the
+    selected region option on each shank: an atlas mapping (``func_map``) computed at once, or a
+    model's predictions (``MODEL_FOR_OPTION``) computed in the background.
     """
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
@@ -191,31 +431,233 @@ class ChannelPrediction:
         self.func_map = {
             'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
             'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
-            'Spatial Encoder': compute_spatial_encoder_predictions,
-            'Inference Model': compute_inference_predictions,
-            'Inference Cumulative': compute_cumulative_predictions,
         }
 
     def plot_regions(self, model: str, data_only: bool = True) -> None:
-        """Compute and plot the selected region model across all shanks.
+        """Show the selected region option on every aligned shank.
 
-        Looks up ``model`` in the dispatch map and runs the matching ``compute_*`` function on
-        each shank.
+        An atlas mapping is computed and drawn at once. A model's predictions are drawn from the
+        cache, or computed first in the background (:func:`_predict`). Problems are reported in
+        one warning for all shanks.
 
         Parameters
         ----------
         model : str
-            Region-model key (e.g. 'Beryl', 'Cosmos', 'Spatial Encoder', 'Inference Model',
-            'Inference Cumulative'). Unknown keys are ignored.
+            Region-plot option (e.g. 'Beryl', 'Cosmos', 'Auto-alignment',
+            'XGBoost region prediction', 'XGBoost region prediction (cumulative)'). Unknown
+            options are ignored.
         data_only : bool
             Reserved for signature compatibility with the region-plot callback; not used here.
         """
         self.controller.region_init = model
+        spec = MODEL_FOR_OPTION.get(model)
+        if spec is not None:
+            _predict(self.controller, spec, model)
+            return
         func = self.func_map.get(model)
         if func is None:
             return
+        errors = _plot_region_panels(self.controller, model, func)
+        # One dialog for all shanks; the shanks that succeeded are still drawn.
+        messages = list(dict.fromkeys(error for error in errors if error))
+        if messages:
+            QtWidgets.QMessageBox.warning(self.controller.view, model, '\n\n'.join(messages))
 
-        _plot_region_panels(self.controller, model, func)
+
+# -----------------------------------------------------------------------------
+# Model predictions, computed in the background
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class _Outcome:
+    """What a background task did, handed back to the main thread when it ends."""
+
+    model: object = None
+    loaded_from: tuple[str, str] | None = None  # set when the task loaded the model
+    results: list = field(default_factory=list)  # (items, views, extra) per finished shank
+    errors: list[str] = field(default_factory=list)
+    cancelled: bool = False
+
+
+def _fraction_progress(progress_callback: Callable, prefix: str = '') -> Callable:
+    """Adapt the worker's ``(message, current, total)`` to the models' ``(fraction, message)``.
+
+    A ``fraction`` of None shows a busy bar. Each report also stops the task after Cancel.
+    """
+
+    def progress(fraction: float | None, message: str) -> None:
+        if fraction is None:
+            progress_callback(prefix + message, 0, 0)
+        else:
+            progress_callback(prefix + message, int(round(1000 * float(fraction))), 1000)
+
+    return progress
+
+
+def _unexpected(title: str, exc: Exception) -> str:
+    """Return the message for an unexpected error, whose traceback is logged."""
+    return f'Unexpected error in {title}: {type(exc).__name__}: {exc}\n\nSee the log for details.'
+
+
+def _prediction_task(
+    controller: 'AlignmentGUIController',
+    spec: 'ModelSpec',
+    model,
+    source: tuple[str, str] | None,
+    shanks: list['ShankController'],
+    progress_callback: Callable,
+) -> _Outcome:
+    """Load ``spec``'s model if needed, then run it on each shank (background thread, no Qt).
+
+    Each shank's error is kept and the next shank is computed. After Cancel, the shanks finished
+    so far (and a model already loaded) are kept and the rest skipped.
+    """
+    outcome = _Outcome(model=model)
+    try:
+        if model is None:
+            outcome.model = load_model(spec, source, _fraction_progress(progress_callback))
+            outcome.loaded_from = source
+        for i, items in enumerate(shanks, 1):
+            step = _fraction_progress(progress_callback, f'{items.name} ({i}/{len(shanks)}): ')
+            step(None, 'starting…')  # also where Cancel stops the task between shanks
+            try:
+                views, extra = spec.compute(controller, items, outcome.model, step)
+            except TaskCancelledError:
+                raise
+            except PredictionError as exc:
+                outcome.errors.append(str(exc))
+                continue
+            except Exception as exc:
+                # A bug or an unforeseen failure: log it and report it with the other shanks.
+                logger.exception('%s failed on shank %s', spec.key, items.name)
+                outcome.errors.append(_unexpected(spec.options[0], exc))
+                continue
+            outcome.results.append((items, views, extra))
+    except TaskCancelledError:
+        outcome.cancelled = True
+    except PredictionError as exc:  # the model could not be loaded
+        outcome.errors.append(str(exc))
+    except Exception as exc:
+        logger.exception('Getting the %s model failed', spec.key)
+        outcome.errors.append(_unexpected(spec.options[0], exc))
+    return outcome
+
+
+def _predict(controller: 'AlignmentGUIController', spec: 'ModelSpec', option: str) -> None:
+    """Show ``option`` on every aligned shank, computing the missing views in the background.
+
+    The model is chosen here if it is not loaded (its preset source, or its dialog); loading it
+    and running it on each shank then happen in one background task, behind one progress dialog
+    whose Cancel stops it. The shanks are drawn when it ends (:func:`_prediction_done`).
+    """
+    shanks = _aligned_shanks(controller)
+    todo = [items for items in shanks if _cache(items).get(option) is None]
+    if not todo:
+        _draw_all(shanks, option)
+        return
+    state = plugin_state(controller).get(spec.key) or {}
+    model, source = state.get('model'), None
+    if model is None:
+        source = tuple(state['source']) if state.get('source') else choose_source(controller, spec)
+        if source is None:
+            return  # cancelled, or no features (the user was warned)
+    started = controller.run_in_thread(
+        _prediction_task,
+        controller,
+        spec,
+        model,
+        source,
+        todo,
+        on_finished=partial(_prediction_done, controller, spec, option, shanks),
+        on_error=partial(_task_failed, controller, option),
+        busy_message='Starting…',
+        title=option,
+        report_progress=True,
+        cancellable=True,
+    )
+    if not started:
+        _busy_warning(controller, option)
+
+
+def _prediction_done(
+    controller: 'AlignmentGUIController',
+    spec: 'ModelSpec',
+    option: str,
+    shanks: list['ShankController'],
+    outcome: _Outcome,
+) -> None:
+    """Keep and draw what the task computed, and report its warnings and errors once (main thread).
+
+    The warnings are those the task queued in the plugin state's ``pending_warnings`` (e.g. local
+    features of another feature version than the model's).
+    """
+    if outcome.loaded_from is not None:
+        store_model(controller, spec, outcome.model, outcome.loaded_from)
+    for items, views, extra in outcome.results:
+        _cache(items).update(views)
+        if spec.on_computed is not None:
+            spec.on_computed(controller, items, extra)
+    _draw_all(shanks, option)
+    warnings = plugin_state(controller).pop('pending_warnings', [])
+    messages = list(dict.fromkeys(warnings + outcome.errors))
+    if messages:
+        QtWidgets.QMessageBox.warning(controller.view, option, '\n\n'.join(messages))
+
+
+def _task_failed(controller: 'AlignmentGUIController', title: str, traceback: str) -> None:
+    """Report a task that failed outside its own error handling (the worker logged it)."""
+    QtWidgets.QMessageBox.warning(
+        controller.view, title, f'Unexpected error in {title}.\n\nSee the log for details.'
+    )
+
+
+def _busy_warning(controller: 'AlignmentGUIController', title: str) -> None:
+    """Tell the user another background task is still running."""
+    QtWidgets.QMessageBox.warning(
+        controller.view, title, 'Another task is running; try again once it has finished.'
+    )
+
+
+def _aligned_shanks(controller: 'AlignmentGUIController') -> list['ShankController']:
+    """Return the shanks a region option is shown on: the aligned ones, in shank_loop's order."""
+    return [
+        controller.shank_items[shank][config]
+        for config in controller.model.configs
+        for shank in controller.all_shanks
+        if controller.model.get_current_shank(shank, config).align_exists
+    ]
+
+
+def _cache(items: 'ShankController') -> Bunch:
+    """Return the shank's cached region-plot views, by option."""
+    if not getattr(items.model, 'predictions', None):
+        items.model.predictions = Bunch()
+    return items.model.predictions
+
+
+def _draw(items: 'ShankController', option: str) -> None:
+    """Draw the shank's cached view of ``option``, if it has one."""
+    pred = _cache(items).get(option)
+    if pred is None:
+        return
+    if 'probability' in pred:
+        items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
+    else:
+        items.view.plot_histology(
+            items.view.fig_hist_ref, pred, ax='right', boundaries=pred.get('boundaries', True)
+        )
+
+
+def _draw_all(shanks: list['ShankController'], option: str) -> None:
+    """Draw ``option`` on each shank that has it."""
+    for items in shanks:
+        _draw(items, option)
+
+
+# -----------------------------------------------------------------------------
+# Atlas mappings, computed at once
+# -----------------------------------------------------------------------------
 
 
 @shank_loop
@@ -223,15 +665,15 @@ def _plot_region_panels(
     controller: 'AlignmentGUIController',
     items: 'ShankController',
     model: str,
-    func: Callable[..., Bunch | None],
+    func: Callable[..., dict[str, Bunch]],
     **kwargs,
-) -> None:
-    """Compute (and cache) a shank's prediction for ``model`` and draw it.
+) -> str | None:
+    """Compute (and cache) a shank's atlas mapping ``model`` and draw it.
 
     Decorated with :func:`shank_loop`, so a single call iterates over every shank/config (the
-    injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The prediction is
-    computed once per shank and cached on ``items.model.predictions``; cumulative results are
-    drawn as stacked bands, others as a region histology column.
+    injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The view is computed
+    once per shank and cached on ``items.model.predictions``. The models' predictions are
+    computed in the background instead (:func:`_predict`).
 
     Parameters
     ----------
@@ -240,27 +682,39 @@ def _plot_region_panels(
     items : ShankController
         The shank to compute and draw.
     model : str
-        Region-model key, also the per-shank prediction cache key.
+        The mapping's region-plot option, also its per-shank cache key.
     func : Callable
-        The ``compute_*`` function producing the prediction Bunch for ``model``.
+        The mapping's compute function, returning ``{model: view}``.
+
+    Returns
+    -------
+    str or None
+        The error message when the prediction failed, else None: a ``PredictionError``'s message,
+        or a short message naming the error when something unexpected failed (its traceback is
+        logged). Errors are returned rather than shown so that the caller reports them once for
+        all shanks.
     """
-    if not getattr(items.model, 'predictions', None):
-        items.model.predictions = Bunch()
+    if _cache(items).get(model) is None:
+        try:
+            views = func(controller, items)
+        except PredictionError as exc:
+            return str(exc)
+        except Exception as exc:
+            # Anything else is a bug or an unforeseen failure. Keep it out of Qt (an uncaught
+            # exception in a callback aborts the app), log the traceback, and report it with the
+            # other shanks' errors.
+            logger.exception(
+                '%s failed on shank %s (%s)', model, kwargs.get('shank'), kwargs.get('config')
+            )
+            return _unexpected(model, exc)
+        _cache(items).update(views)
 
-    if items.model.predictions.get(model) is None:
-        items.model.predictions[model] = func(controller, items)
-
-    pred = items.model.predictions[model]
-    if pred is not None:
-        if 'probability' in pred:
-            items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
-        else:
-            items.view.plot_histology(items.view.fig_hist_ref, pred, ax='right')
+    _draw(items, model)
 
 
 def compute_mapping_predictions(
     controller: 'AlignmentGUIController', items: 'ShankController', mapping: str = 'Beryl'
-) -> Bunch[str, np.ndarray]:
+) -> dict[str, Bunch]:
     """
     Return brain regions based on a specified atlas mapping, as an example prediction model.
 
@@ -271,12 +725,13 @@ def compute_mapping_predictions(
     items: 'ShankController'
         The shank controller containing the model and view for the current shank.
     mapping: str
-        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos').
+        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos'), also its
+        region-plot option.
 
     Returns
     -------
-    Bunch
-        A bunch containing the predicted brain regions.
+    dict of {str: Bunch}
+        The predicted brain regions, keyed by the region-plot option (the mapping).
     """
     # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
     xyz_samples = items.model.align_handle.xyz_samples
@@ -286,172 +741,4 @@ def compute_mapping_predictions(
     region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping=mapping)
     regions = controller.model.brain_atlas.regions.get(region_ids)
 
-    return get_region_boundaries(regions, depth_samples)
-
-
-def _compute_region_id_predictions(
-    controller: 'AlignmentGUIController',
-    items: 'ShankController',
-    predict: Callable[['AlignmentGUIController', 'ShankController'], tuple | None],
-    depth_scale: float = 1.0,
-) -> Bunch[str, np.ndarray] | None:
-    """Run a region-id ``predict`` callable and convert its output to region boundaries.
-
-    Shared pipeline for the model-backed predictors: it calls ``predict`` (which returns
-    ``(region_ids, depths)`` or ``None``), maps the ids to atlas regions, and reduces them to
-    contiguous region boundaries. ``depth_scale`` converts the predictor's native depth unit to
-    meters (the unit expected by :func:`get_region_boundaries`).
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-    predict : Callable
-        Predictor returning ``(region_ids, depths)`` for the shank, or ``None`` if unavailable.
-    depth_scale : float
-        Multiplier converting the predictor's depths to meters.
-
-    Returns
-    -------
-    Bunch or None
-        The predicted brain regions along the probe, or None if no prediction is available.
-    """
-    result = predict(controller, items)
-    if result is None:
-        return None
-    region_ids, depths = result
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return get_region_boundaries(regions, depths * depth_scale)
-
-
-def compute_spatial_encoder_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController'
-) -> Bunch[str, np.ndarray] | None:
-    """
-    Prediction model using the spatial encoder.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-
-    Returns
-    -------
-    Bunch or None
-        The predicted brain regions along the probe, or None if no prediction is available.
-    """
-    # Lazy import: pulls in torch + the spatial encoder model; online-only.
-    import ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder as spatial
-
-    result = spatial.predict(controller, items)
-    if result is None:
-        return
-    region_ids, depths = result
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return get_region_boundaries(regions, depths)
-
-
-def compute_inference_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController'
-) -> Bunch[str, np.ndarray] | None:
-    """
-    Prediction model using the inference model.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-
-    Returns
-    -------
-    Bunch or None
-        The predicted brain regions along the probe, or None if no prediction is available.
-    """
-    # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
-    result = inference.predict(controller, items)
-    if result is None:
-        return
-
-    region_ids, depths = result
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return get_region_boundaries(regions, depths / M_TO_UM)
-
-
-def compute_cumulative_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController'
-) -> Bunch[str, np.ndarray] | None:
-    """
-    Cumulative prediction model using the inference model.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank controller containing the model and view for the current shank.
-
-    Returns
-    -------
-    Bunch or None
-        A bunch containing the probability of predicted brain regions along the probe, or None if
-        no prediction is available.
-    """
-    # Lazy import: ephysatlas is an optional dependency, only needed when inference runs.
-    from ibl_alignment_gui.plugins.ephys_atlas import inference
-
-    result = inference.predict_cumulative(controller, items)
-    if result is None:
-        return
-
-    cprobas, depths, colours, regions = result
-    data = Bunch(depths=depths, regions=regions, colours=colours, probability=cprobas)
-
-    return data
-
-
-def get_region_boundaries(regions: dict, depths: np.ndarray) -> Bunch[str, np.ndarray]:
-    """
-    Get the boundaries of brain regions along the histology track.
-
-    Parameters
-    ----------
-    regions: dict
-        The brain regions along the histology track.
-    depths: np.ndarray
-        The depths along the histology track, in meters.
-
-    Returns
-    -------
-    Bunch
-        A bunch containing the region boundaries, labels, and colours.
-    """
-    boundaries = np.where(np.diff(regions.id))[0]
-
-    n_regions = len(boundaries) + 1
-    region = np.empty((n_regions, 2))
-    region_label = np.empty((n_regions, 2), dtype=object)
-    region_colour = np.empty((n_regions, 3), dtype=int)
-
-    for i in range(n_regions):
-        # Compute start and end indices for this region
-        start = 0 if i == 0 else boundaries[i - 1] + 1
-        end = boundaries[i] if i < len(boundaries) else regions.id.size - 1
-
-        region[i, :] = depths[[start, end]] * M_TO_UM
-        region_label[i, :] = (np.mean(depths[[start, end]]) * M_TO_UM, regions.acronym[end])
-        region_colour[i, :] = regions.rgb[end]
-
-    data = Bunch(region=region, axis_label=region_label, colour=region_colour)
-
-    return data
+    return {mapping: get_region_boundaries(regions, depth_samples)}

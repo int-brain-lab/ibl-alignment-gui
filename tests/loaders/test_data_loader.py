@@ -8,14 +8,17 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
+from ibl_alignment_gui.loaders import data_loader
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoader,
     DataLoaderLocal,
     DataLoaderOne,
+    FeatureLoaderOne,
     SpikeGLXLoader,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
 )
+from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -621,6 +624,7 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
             data = self.loader.load_meta_data()
             self.assertIsNone(data)
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('brainbox.io.spikeglx.Streamer')
     def test_load_ap_data(self, mock_streamer):
         """Test the load_ap_data method"""
@@ -678,3 +682,98 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
         ):
             data = self.loader.load_ap_data()
             self.assertIsNone(data)
+
+
+class TestFeatureLoaderOneTables(unittest.TestCase):
+    """Reading a feature table, downloading it when it is not complete on disk."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.loader = FeatureLoaderOne({'id': 'pid'}, MagicMock(), '2026_W39')
+        self.table = self.root.joinpath(
+            'ea_active', '2026_W39', 'agg_full', 'df_all_cols_merged.pqt'
+        )
+        self.enterContext(patch.object(data_loader, 'EPHYS_ATLAS', True))
+
+    def write_table(self, *args) -> None:
+        """Stand-in for a download that writes the table."""
+        self.table.parent.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame({'pid': ['pid'], 'channel': [0], 'rms_lf': [1.0]})
+        df.set_index(['pid', 'channel']).to_parquet(self.table)
+
+    def make_folder(self, *args) -> None:
+        """Stand-in for a download that finds nothing: the folder is made, no table."""
+        self.table.parent.mkdir(parents=True, exist_ok=True)
+
+    def read(self) -> pd.DataFrame:
+        return self.loader.read_full_dataframe('ea_active', '2026_W39', self.root)
+
+    def test_table_present_not_downloaded(self):
+        """A table on disk is read without downloading"""
+        self.write_table()
+        with patch.object(self.loader, 'download_features') as download:
+            df = self.read()
+        download.assert_not_called()
+        self.assertEqual(df['rms_lf'].tolist(), [1.0])
+
+    def test_empty_folder_downloads_again(self):
+        """An empty folder left by a failed download is downloaded again"""
+        self.make_folder()
+        with patch.object(self.loader, 'download_features', side_effect=self.write_table) as dl:
+            df = self.read()
+        dl.assert_called_once()
+        self.assertEqual(df['rms_lf'].tolist(), [1.0])
+
+    def test_unavailable_table_is_empty(self):
+        """When the download finds nothing, the table is empty and a warning is logged"""
+        with (
+            patch.object(self.loader, 'download_features', side_effect=self.make_folder),
+            self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs,
+        ):
+            df = self.read()
+        self.assertTrue(df.empty)
+        self.assertIn('ea_active 2026_W39 feature table is not available', logs.output[0])
+
+    def test_table_not_on_s3_is_empty(self):
+        """A table that is not on S3 (download_tables' assertion) gives no rows, and is retried"""
+        missing = AssertionError(
+            'aggregates/atlas/features/multi_area_comm/2026_W42 not found on AWS'
+        )
+        with (
+            patch.object(self.loader, 'download_features', side_effect=missing) as download,
+            self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs,
+        ):
+            self.assertTrue(self.read().empty)
+            self.assertTrue(self.read().empty)
+        self.assertEqual(download.call_count, 2)  # nothing kept as a broken download
+        self.assertIn('ea_active 2026_W39 feature table is not available', logs.output[0])
+
+    def test_load_features_table_not_on_s3(self):
+        """A multi-area insertion whose vintage has no table on S3 gets no features, no error"""
+        loader = FeatureLoaderOne({'id': 'pid'}, MagicMock(), '2026_W42', multi_area=True)
+        loader.one.cache_dir = self.root
+        missing = AssertionError('not found on AWS')
+        with (
+            patch.object(loader, 'download_features', side_effect=missing) as download,
+            self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING'),
+        ):
+            features = loader.load_features()
+        self.assertFalse(features['exists'])
+        # Both projects were asked for: ea_active, then multi_area_comm.
+        self.assertEqual(
+            [c.args[0] for c in download.call_args_list], ['ea_active', 'multi_area_comm']
+        )
+
+    def test_insertion_rows_carry_vintage(self):
+        """The rows read for an insertion say which vintage they are"""
+        self.write_table()
+        df = self.loader.load_dataframe('ea_active', '2026_W39', self.root)
+        self.assertEqual(df.attrs['features_version'], '2026_W39')
+
+    def test_other_download_error_raises(self):
+        """Any other download failure (e.g. the network) still raises"""
+        with (
+            patch.object(self.loader, 'download_features', side_effect=ConnectionError('down')),
+            self.assertRaises(ConnectionError),
+        ):
+            self.read()

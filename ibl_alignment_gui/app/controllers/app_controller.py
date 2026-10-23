@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.app.controllers.shank_controller import ShankController
-from ibl_alignment_gui.app.load_worker import Worker
+from ibl_alignment_gui.app.load_worker import TaskProgressDialog, Worker
 from ibl_alignment_gui.app.views.app_view import AlignmentGUIView
 from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.probe_handler import (
@@ -156,7 +156,8 @@ class AlignmentGUIController:
         # Background loading thread state
         self._load_thread: QtCore.QThread | None = None
         self._load_worker: Worker | None = None
-        self._load_dialog: QtWidgets.QProgressDialog | None = None
+        self._load_dialog: TaskProgressDialog | None = None
+        self._outcome: tuple[Callable, tuple] | None = None  # the finished task's callback
         self._load_start: float = 0.0
 
         # Setup all callbacks
@@ -1105,21 +1106,27 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Load data
     # --------------------------------------------------------------------------------------------
-    def _run_in_thread(
+    def run_in_thread(
         self,
         func: Callable,
         *args,
         on_finished: Callable,
         busy_message: str,
         report_progress: bool = False,
+        cancellable: bool = False,
+        on_error: Callable | None = None,
+        on_cancelled: Callable | None = None,
+        title: str = 'Please wait',
         **kwargs,
     ) -> bool:
         """
         Run a slow callable on a background thread, showing a modal progress dialog.
 
-        The callable runs off the GUI thread so the window stays responsive; ``on_finished`` is
-        then called on the main thread with the callable's return value. Any exception is shown in
-        a message box via :meth:`_on_thread_error`. Only one background task runs at a time.
+        The callable runs off the GUI thread so the window stays responsive. Once it has stopped,
+        one callback runs on the main thread: ``on_finished`` with its return value, ``on_error``
+        with the traceback if it raised (by default a message box, :meth:`_on_thread_error`), or
+        ``on_cancelled`` if Cancel stopped it. Only one background task runs at a time; the
+        callback runs once the runner is free, so it may start another.
 
         Parameters
         ----------
@@ -1132,7 +1139,16 @@ class AlignmentGUIController:
         busy_message : str
             Initial message shown in the progress dialog.
         report_progress : bool
-            If True, ``func`` is given a ``progress_callback`` to drive the dialog.
+            If True, ``func`` is given a ``progress_callback`` to drive the dialog; after Cancel,
+            its next call raises :class:`~ibl_alignment_gui.app.load_worker.TaskCancelledError`.
+        cancellable : bool
+            If True, the dialog has a Cancel button (needs ``report_progress``).
+        on_error : Callable or None
+            Called on the main thread with the traceback if ``func`` raises.
+        on_cancelled : Callable or None
+            Called on the main thread, without arguments, if Cancel stopped ``func``.
+        title : str
+            The progress dialog's window title.
         **kwargs : Any
             Keyword arguments forwarded to ``func``.
 
@@ -1144,29 +1160,50 @@ class AlignmentGUIController:
         if self._load_thread is not None:
             return False
 
-        # Progress dialog (no cancel button; starts indeterminate until totals are known)
-        self._load_dialog = QtWidgets.QProgressDialog(busy_message, None, 0, 0, self.view)
-        self._load_dialog.setWindowTitle('Please wait')
-        self._load_dialog.setWindowModality(QtCore.Qt.WindowModal)
-        self._load_dialog.setMinimumDuration(0)
-        self._load_dialog.setValue(0)
+        # Progress dialog (starts indeterminate until totals are known)
+        self._load_dialog = TaskProgressDialog(title, busy_message, cancellable, self.view)
 
         # Worker running the slow callable on a background thread
         self._load_thread = QtCore.QThread()
         self._load_worker = Worker(func, *args, report_progress=report_progress, **kwargs)
         self._load_worker.moveToThread(self._load_thread)
+        # A direct call, from this (the main) thread: the worker's own thread is busy running the
+        # task, so a queued call to its slot would only arrive once the task has ended.
+        self._load_dialog.cancel_requested.connect(
+            self._load_worker.cancel, QtCore.Qt.DirectConnection
+        )
         self._load_thread.started.connect(self._load_worker.run)
         self._load_worker.progress.connect(self._on_thread_progress)
-        self._load_worker.finished.connect(on_finished)
-        self._load_worker.error.connect(self._on_thread_error)
+        # Keep the outcome; its callback runs once the thread has stopped (_cleanup_thread)
+        self._outcome = None
+        self._load_worker.finished.connect(lambda result: self._set_outcome(on_finished, result))
+        self._load_worker.error.connect(
+            lambda message: self._set_outcome(on_error or self._on_thread_error, message)
+        )
+        self._load_worker.cancelled.connect(
+            lambda: self._set_outcome(on_cancelled or (lambda: None))
+        )
         # Stop the thread once the worker is done, then dispose of everything
-        self._load_worker.finished.connect(self._load_thread.quit)
-        self._load_worker.error.connect(self._load_thread.quit)
+        for signal in (
+            self._load_worker.finished,
+            self._load_worker.error,
+            self._load_worker.cancelled,
+        ):
+            signal.connect(self._load_thread.quit)
         self._load_thread.finished.connect(self._cleanup_thread)
 
         self._load_dialog.show()
         self._load_thread.start()
         return True
+
+    @property
+    def task_running(self) -> bool:
+        """Whether a background task is running (only one runs at a time)."""
+        return self._load_thread is not None
+
+    def _set_outcome(self, callback: Callable, *args) -> None:
+        """Keep the callback to run, with its arguments, once the thread has stopped."""
+        self._outcome = (callback, args)
 
     def _on_thread_progress(self, message: str, current: int, total: int) -> None:
         """Update the progress dialog with a message from the background worker."""
@@ -1176,6 +1213,8 @@ class AlignmentGUIController:
         if total > 0:
             self._load_dialog.setMaximum(total)
             self._load_dialog.setValue(current)
+        else:  # a step of unknown length: a busy bar
+            self._load_dialog.setRange(0, 0)
 
     def _on_thread_error(self, message: str) -> None:
         """Report a background task failure (main thread)."""
@@ -1184,23 +1223,29 @@ class AlignmentGUIController:
         )
 
     def _cleanup_thread(self) -> None:
-        """Close the dialog and dispose of the worker and thread once it has stopped."""
-        if self._load_dialog is not None:
-            self._load_dialog.close()
-        if self._load_worker is not None:
-            self._load_worker.deleteLater()
-        if self._load_thread is not None:
-            self._load_thread.deleteLater()
-        self._load_worker = None
-        self._load_thread = None
-        self._load_dialog = None
+        """Dispose of the stopped worker and thread, run the task's callback, close its dialog.
+
+        The callback runs once the runner is free, so it can start another task (e.g. plotting a
+        model's predictions after loading it), and before the dialog closes, so the dialog stays up
+        while the callback assembles the display.
+        """
+        dialog, outcome = self._load_dialog, self._outcome
+        self._load_worker.deleteLater()
+        self._load_thread.deleteLater()
+        self._load_worker = self._load_thread = self._load_dialog = self._outcome = None
+        try:
+            if outcome is not None:
+                callback, args = outcome
+                callback(*args)
+        finally:
+            dialog.finish()
 
     def data_button_pressed(self) -> None:
         """
         Load in all the relevant data and instantiate the GUI display.
 
         Triggered when the data button is pressed. The atlas build, data load and plot build run
-        on a background thread (see :meth:`_run_in_thread` and ``ProbeHandler.load_all``) so the
+        on a background thread (see :meth:`run_in_thread` and ``ProbeHandler.load_all``) so the
         GUI stays responsive and a progress dialog can be shown. The display is assembled in
         :meth:`_on_load_finished` once loading completes.
         """
@@ -1210,7 +1255,7 @@ class AlignmentGUIController:
         # Get the list of shanks
         self.all_shanks = list(self.model.shanks.keys())
 
-        self._run_in_thread(
+        self.run_in_thread(
             self.model.load_all,
             on_finished=self._on_load_finished,
             busy_message='Loading data…',
@@ -1375,7 +1420,7 @@ class AlignmentGUIController:
 
         Saves channel locations and alignments. The per-shank user input (which shanks, QC
         assessment, upload confirmation) is gathered here on the main thread via modal dialogs;
-        the slow saving itself then runs on a background thread (see :meth:`_run_in_thread` and
+        the slow saving itself then runs on a background thread (see :meth:`run_in_thread` and
         ``ProbeHandler.upload_shanks``), with the results reported in :meth:`_on_upload_finished`.
         """
         if self._load_thread is not None:
@@ -1421,7 +1466,7 @@ class AlignmentGUIController:
             return
 
         # Save the approved shanks off the GUI thread.
-        self._run_in_thread(
+        self.run_in_thread(
             self.model.upload_shanks,
             approved,
             on_finished=self._on_upload_finished,

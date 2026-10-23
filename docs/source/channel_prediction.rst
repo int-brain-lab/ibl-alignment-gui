@@ -6,14 +6,18 @@ electrophysiology features, so that the prediction can be compared against the h
 aligning. It also makes the features themselves available as plots, so they can be inspected
 alongside the other electrophysiology data.
 
-Two independent models are provided:
+Three independent models are provided:
 
-**Inference model**
-    A region classifier that predicts a region for each channel directly from its features.
+**Region decoders (XGBoost and ProbeTransformer)**
+    Region classifiers that predict a region for each channel directly from its features: an
+    XGBoost classifier working channel by channel, and a ProbeTransformer that attends across all
+    channels of the probe, using each channel's depth.
 
-**Spatial encoder**
-    A model that predicts the features expected along the probe track and warps the recording onto
-    that prediction, giving a region for each channel and an estimate of the alignment itself.
+**Auto-alignment**
+    The Ephys Atlas channel-level model predicts the features expected along the probe's histology
+    track; the recording is warped onto that prediction, giving an initial alignment of the probe
+    along the track, a region for each channel and the model's confidence in each channel. It only
+    needs the recording's features and the histology track, so it can be used on a new recording.
 
 .. note::
    The plugin is only available when the optional ``ephysatlas`` dependencies are installed. Without
@@ -82,7 +86,23 @@ The path follows the same resolution rules as the other datasets, so it can be r
 probe, configuration or top-level ``path``.
 
 Alternatively a features file can be chosen at runtime from
-``Plugins -> Channel Prediction -> Load features file…``.
+``Plugins -> Channel Prediction -> Load features file…``. For a session with one shank this is a
+plain file dialog. With several shanks (or configurations) it lists one row per shank and
+configuration, each opening with the shank's current file, so every shank can get its own file, as
+needed when each shank was spike sorted on its own. Rows left as they are keep the shank's current
+features. Tick ``One file for all shanks (split by channel)`` instead for a probe sorted as a whole,
+whose features file holds every shank's channels. The files are checked before any is used: a file
+without features for its shank, or one that cannot be read, is reported and nothing is changed.
+
+For an IBL insertion loaded from Alyx, the models otherwise use the ephys-atlas feature table of
+the vintage they were trained on (e.g. ``2026_W26``), which may differ from the latest table shown
+in the feature plots. If that table has no features for the insertion (for example a vintage
+without multi-area tables), the model reports it instead of running on the features of another
+vintage, and suggests loading a release of the model trained on the session's vintage instead
+(when one exists, from ``Load … model`` with that release tag). A file chosen from the menu always
+takes precedence. A local file must hold the features
+of the model's vintage; missing columns are reported when the model runs. A model release whose
+``ephysatlas_model.json`` names no ``vintage`` is refused, as the features to run it on are unknown.
 
 .. note::
    A features file chosen from the menu applies to the session that is currently loaded only. It is
@@ -95,28 +115,52 @@ Loading a model
 
 Once the features are available, load a model from the ``Plugins -> Channel Prediction`` menu:
 
-**Load inference model**
-    Select the directory holding the trained classifier. The directory must contain a ``folds``
-    subdirectory (``folds/FOLD00/`` and so on).
+**Load XGBoost region prediction model (Hugging Face)…** / **Load ProbeTransformer region prediction model (Hugging Face)…**
+    The released channel-level region decoders, loaded with ``ephysatlas.load_pretrained`` and run
+    with their ``predict``: a Hugging Face repository
+    (``int-brain-lab/ea-decoder-channel-xgboost`` or ``int-brain-lab/ea-decoder-channel-transformer``
+    by default) and release tag (by default each decoder's release in ibleatools,
+    ``ephysatlas.models.DECODER_VINTAGES``), or a local release directory containing
+    its ``ephysatlas_model.json``. Each is downloaded once and cached. The ProbeTransformer requires
+    ``torch``; its menu entry is only shown when ``torch`` is installed.
 
-**Load spatial model**
-    A dialog with two rows, each with its own ``Browse…`` button:
+**Load alignment model (Hugging Face)…**
+    The released channel-level model, loaded with ``ephysatlas.load_pretrained``: a Hugging Face
+    repository (``int-brain-lab/ea-encoder-channel`` by default) and release tag, or a local
+    release directory. It is downloaded once and cached; it ships its molecular-context volumes
+    and training neighbour bank, so nothing else is needed. Requires ``torch``.
 
-    * **Model** — the directory holding the encoder checkpoint, which must contain
-      ``SE_model_*.pt``
-    * **Features** — the directory holding the feature tables the encoder was trained against,
-      which must contain ``raw_ephys_features*.pqt``
+To avoid selecting the same model every time, the GUI can be launched with it already filled in.
+See ``examples/launch_with_local_prediction.py`` in the repository, which opens a session and
+pre-populates the model paths so the dialogs are skipped.
 
-Building the spatial encoder takes a little time, as the model and its reference bank are read in;
-progress is reported in the terminal.
 
-.. note::
-   Downloading the trained models automatically, rather than pointing the GUI at a local copy, is
-   coming soon. Until the models are published, both must be loaded from a local directory.
+Auto-alignment
+--------------
 
-To avoid selecting the same directories every time, the GUI can be launched with the paths already
-filled in. See ``examples/launch_with_local_prediction.py`` in the repository, which opens a
-session and pre-populates the model paths so the dialogs are skipped.
+Selecting ``Region Plots -> Auto-alignment`` or ``Region Plots -> Auto-alignment (confidence)``
+(loading the model first if needed) aligns each shank behind a progress dialog and opens its result
+window once, with:
+
+- the histology track (top to bottom of the brain), the planned trajectory when the features table
+  has one, and the inferred alignment, on a coronal and a sagittal slice
+- the cost matrix of every recorded channel against every track sample, with the alignment path
+- stripes along the histology track: its atlas regions, then the confidence and the recorded
+  features where the probe was aligned, next to the features the model predicts along the whole
+  track
+
+The two region entries show the same alignment:
+
+- ``Auto-alignment``: the atlas regions along the histology track, placed at the probe depths the
+  alignment found
+- ``Auto-alignment (confidence)``: the alignment confidence along the probe (green high, red low;
+  grey beyond the probe and for channels that could not be aligned)
+
+Each shank is aligned once and both are kept, so switching between them, or selecting one again,
+does not re-align and does not reopen the result windows. To see the windows again, use
+``Plugins -> Channel Prediction -> Show auto-alignment results``, which is greyed out until a shank
+has been aligned. Loading a new model or features file closes the windows and starts over, and
+loading a new session closes them.
 
 
 Where the results appear
@@ -131,8 +175,9 @@ The predictions and the features are added to three of the menu bars:
    * - Menu
      - Added entries
    * - ``Region Plots``
-     - ``Inference Model`` and ``Inference Cumulative`` for the inference model, and
-       ``Spatial Encoder`` for the spatial encoder
+     - ``XGBoost region prediction`` and ``ProbeTransformer region prediction`` (the most probable region per channel), each with a
+       ``(cumulative)`` entry showing the stacked class probabilities, and ``Auto-alignment`` and
+       ``Auto-alignment (confidence)`` for the auto-alignment
    * - ``Feature Plots``
      - A single ``Ephys Atlas`` entry, tiling every feature side by side
    * - ``Probe Plots``
@@ -153,7 +198,9 @@ predicted regions can be flipped against the histology regions using the same sh
    * - :kbd:`Alt+5` / :kbd:`Shift+Alt+5`
      - Region plots (forward / backward)
 
-The entries only appear once the corresponding model has been loaded.
+The entries are offered as soon as a session is loaded, online and offline; selecting one before
+its model is loaded opens the model's load dialog. The ``ProbeTransformer`` and auto-alignment
+entries need ``torch``.
 
 Features
 ~~~~~~~~

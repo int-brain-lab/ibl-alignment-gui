@@ -391,7 +391,9 @@ class ShankView:
         fig.clear()
         self.hist_regions = []
 
-    def plot_histology(self, fig: pg.PlotItem, data: Bunch, ax: str = 'left') -> None:
+    def plot_histology(
+        self, fig: pg.PlotItem, data: Bunch, ax: str = 'left', boundaries: bool = True
+    ) -> None:
         """
         Plot histology regions on the given figure.
 
@@ -406,6 +408,9 @@ class ShankView:
         ax : str, default='left'
             Orientation of the axis on which to add labels. 'left' for the main histology
             figure (fig_hist), and 'right' for the reference figure (fig_hist_ref).
+        boundaries : bool, default=True
+            Draw a white line at each region boundary. Off for continuous values drawn as
+            many short segments (e.g. a colour-coded confidence along the probe).
         """
         self.clear_histology(fig)
 
@@ -424,12 +429,17 @@ class ShankView:
                 movable=False,
             )
             fig.addItem(item)
-            fig.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen='w'))
+            if boundaries:
+                fig.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen='w'))
+            else:
+                for line in item.lines:  # the region item's own edge lines, too
+                    line.setPen(pg.mkPen(None))
             # Keep track of each histology LinearRegionItem for hover interaction
             self.hist_regions.append(item)
 
         # Add additional boundary for final region
-        fig.addItem(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen='w'))
+        if boundaries:
+            fig.addItem(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen='w'))
 
         # Add probe limits as dotted lines
         fig.addItem(pg.InfiniteLine(pos=self.probe_tip, angle=0, pen=self.kpen_dot))

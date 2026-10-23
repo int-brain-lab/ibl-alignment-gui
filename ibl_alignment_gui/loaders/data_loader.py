@@ -1131,6 +1131,11 @@ class FeatureLoaderOne(FeatureLoader):
             The feature table rows for this insertion's ``pid``.
         """
         data = self.read_full_dataframe(project, feature, save_path)
+        if data.empty:  # the table is not available (it has no columns to filter on)
+            return data
+        # Record the table's vintage, so a model can tell which feature set these are (the key
+        # ibleatools writes on the features it computes).
+        data.attrs['features_version'] = feature
 
         return data[data['pid'] == self.pid]
 
@@ -1150,12 +1155,15 @@ class FeatureLoaderOne(FeatureLoader):
         Returns
         -------
         pd.DataFrame
-            The full feature table across all insertions, or an empty frame if the tables are
-            not cached and ephysatlas is unavailable to download them.
+            The full feature table across all insertions, or an empty frame if the table is not
+            cached and cannot be downloaded (ephysatlas is not installed, or the release has no
+            such table).
         """
-        model_path = save_path.joinpath(project, feature)
+        # Check for the table itself: a download that found nothing (or was interrupted) leaves
+        # the folder behind, which must not be mistaken for a downloaded table.
+        table = save_path.joinpath(project, feature, 'agg_full', 'df_all_cols_merged.pqt')
 
-        if not model_path.exists():
+        if not table.exists():
             if not EPHYS_ATLAS:
                 # Downloading the feature tables needs ephysatlas; without it (and no cached
                 # tables) there are simply no features for this insertion.
@@ -1164,11 +1172,22 @@ class FeatureLoaderOne(FeatureLoader):
                     'No features will be available for this insertion.'
                 )
                 return pd.DataFrame()
-            self.download_features(project, feature, save_path)
+            try:
+                self.download_features(project, feature, save_path)
+            except AssertionError as exc:
+                # ephysatlas.data.download_tables asserts that the table is on S3: a release
+                # without this table (e.g. a vintage with no multi-area table) is not a failure,
+                # just no features. Other errors (network, credentials) still raise.
+                logger.debug('Feature table download found nothing: %s', exc)
+            if not table.exists():
+                logger.warning(
+                    'The %s %s feature table is not available; no features from it.',
+                    project,
+                    feature,
+                )
+                return pd.DataFrame()
 
-        return pd.read_parquet(
-            model_path.joinpath('agg_full', 'df_all_cols_merged.pqt')
-        ).reset_index()
+        return pd.read_parquet(table).reset_index()
 
 
 class FeatureLoaderLocal(FeatureLoader):

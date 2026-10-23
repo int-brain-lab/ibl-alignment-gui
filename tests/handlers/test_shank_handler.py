@@ -227,3 +227,23 @@ class TestShankHandler(unittest.TestCase):
         # Nothing reached the database, so the progress must survive to be recovered
         self.mock_upload.delete_progress.assert_not_called()
         self.mock_align.load_progress.assert_not_called()
+
+    def test_load_ephys_features(self):
+        """The loader gets this shank's sites; its features are kept and returned"""
+        self.shank_handler.raw_data = {}
+        loader = MagicMock()
+        loader.load_features.return_value = Bunch(exists=True, df='features')
+        features = self.shank_handler.load_ephys_features(loader)
+        self.mock_geom.get_sites_for_shank.assert_called_once_with(0)
+        loader.load_features.assert_called_once_with(
+            self.mock_geom.get_sites_for_shank.return_value
+        )
+        self.assertIs(features, loader.load_features.return_value)
+        self.assertIs(self.shank_handler.raw_data['features'], features)
+
+    def test_load_ephys_features_none(self):
+        """Without a loader the shank has no features"""
+        self.shank_handler.raw_data = {}
+        features = self.shank_handler.load_ephys_features(None)
+        self.assertEqual(features, Bunch(exists=False))
+        self.assertIs(self.shank_handler.raw_data['features'], features)

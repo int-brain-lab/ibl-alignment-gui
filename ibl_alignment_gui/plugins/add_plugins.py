@@ -35,8 +35,8 @@ class Plugins:
         setup_cluster_features(controller)
         if not controller.offline:
             setup_ephys_features(controller)
-        # Channel prediction is offline-capable: local model + features inference works without
-        # ONE. Its S3/torch-only options are gated inside setup_channel_prediction.
+        # Channel prediction works online and offline. setup_channel_prediction adds its menu and
+        # model options only when ephysatlas is installed, and its torch models only with torch.
         setup_channel_prediction(controller)
         setup_control_range(controller)
         setup_3d_features(controller)

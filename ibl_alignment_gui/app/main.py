@@ -1,7 +1,7 @@
 import os
 import sys
 
-# The spatial-encoder (torch) and inference (xgboost, via ephysatlas.regionclassifier) plugins
+# The spatial-encoder / ProbeTransformer (torch) and XGBoost region-decoder (xgboost) models
 # each bundle their own OpenMP runtime. On macOS, having both loaded in one process leaves two
 # independent libomp.dylib copies mapped in-process; as soon as either does a parallel OpenMP
 # region (e.g. XGBoost's model loading), their internal thread-pool state collides and segfaults

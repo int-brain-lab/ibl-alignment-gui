@@ -596,7 +596,6 @@ class TestGeometryLoader(unittest.TestCase):
     """Test the GeometryLoader class"""
 
     def setUp(self):
-
         self.mock_meta = Bunch(x=np.array([0, 10]), y=np.array([0, 10]), shank=np.array([0, 0]))
         self.mock_channels = Bunch(
             localCoordinates=np.array([[0, 0], [10, 10]]), rawInd=np.array([0, 1])

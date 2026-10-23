@@ -684,7 +684,9 @@ class TestSetLocalFeatures(unittest.TestCase):
         ):
             cp._set_local_features(controller)
         self.warning.assert_called_once()
-        self.assertIn('a (default): /notes.txt could not be read', self.warning.call_args.args[2])
+        self.assertIn(
+            f'a (default): {Path("/notes.txt")} could not be read', self.warning.call_args.args[2]
+        )
         self.assertNotIn('features_paths', controller.plugins[PLUGIN_KEY])
 
     def test_cancel_changes_nothing(self):
@@ -731,7 +733,7 @@ class TestFeaturesFilesDialog(unittest.TestCase):
 
     def test_opens_with_current_files(self):
         """Each row opens with the shank's current file"""
-        self.assertEqual(self.field(('a', 'default')).text(), '/a.pqt')
+        self.assertEqual(self.field(('a', 'default')).text(), str(Path('/a.pqt')))
         self.assertEqual(self.field(('c', 'default')).text(), '')
 
     def test_only_changed_rows(self):

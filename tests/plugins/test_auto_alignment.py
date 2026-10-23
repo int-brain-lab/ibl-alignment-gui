@@ -4,6 +4,8 @@ The model, the alignment and the result window are replaced by stand-ins: no mod
 is drawn on screen and ``ephysatlas`` does not need to be installed.
 """
 
+import sys
+import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -11,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
+from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.plugins import channel_prediction as cp
 from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
@@ -20,6 +23,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
 )
 from iblutil.util import Bunch
+from tests.plugins._runner import InlineRunner
 
 RED, BLUE = [255, 0, 0], [0, 0, 255]
 GREY = list(spatial_encoder.NO_VALUE_RGB)
@@ -103,8 +107,12 @@ class TestPredictConfidence(unittest.TestCase):
         )
 
 
+def _no_progress(fraction, message) -> None:
+    """A progress callback that ignores the reports."""
+
+
 class TestAlignShank(unittest.TestCase):
-    """``align_shank`` and how the plugin caches its views, with the alignment faked."""
+    """``align_shank`` and how the plugin runs and caches it, with the alignment faked."""
 
     N_TRACK = 6
 
@@ -121,6 +129,7 @@ class TestAlignShank(unittest.TestCase):
         self.controller = SimpleNamespace(
             plugins={PLUGIN_KEY: Bunch()},
             view=None,
+            run_in_thread=InlineRunner(),  # background tasks run at once
             all_shanks=['probe00'],
             shank_items={'probe00': {'default': self.items}},
             model=SimpleNamespace(
@@ -138,36 +147,49 @@ class TestAlignShank(unittest.TestCase):
             valid=np.ones(4, dtype=bool),
             diagnostics={'channel_to_trace': np.array([0, 1, 2, 3])},
         )
-        self.align = MagicMock(return_value=self.result)  # stands in for run_with_progress
+        track = np.zeros((self.N_TRACK, 3), dtype=np.float32)
+        self.model = object()
+        # The alignment itself (features, inputs and align_histology), faked.
+        self.align = MagicMock(return_value=(self.result, self.probe, track))
         self.open_window = MagicMock()
-        for name, value in (
-            ('get_model', MagicMock(return_value=object())),
-            ('_probe_inputs', MagicMock(return_value=self.probe)),
-            ('run_with_progress', self.align),
-            ('_open_result_window', self.open_window),
-        ):
+        for name, value in (('_align', self.align), ('_open_result_window', self.open_window)):
             self.enterContext(patch.object(spatial_encoder, name, value))
+        # The alignment model is loaded.
+        self.controller.plugins[PLUGIN_KEY][spatial_encoder.ENCODER_SPEC.key] = dict(
+            model=self.model, source=('repo', '2026_W39')
+        )
 
     def plot(self, option) -> None:
-        cp._plot_region_panels(self.controller, option, spatial_encoder.align_shank)
+        cp.ChannelPrediction(self.controller).plot_regions(option)
 
     def drawn(self) -> list:
         return [c.args[1] for c in self.items.view.plot_histology.call_args_list]
 
     def test_align_returns_both_views(self):
-        """align_shank returns the regions and confidence views and opens the result window"""
-        views = spatial_encoder.align_shank(self.controller, self.items)
+        """align_shank returns the regions and confidence views, and what the window needs"""
+        views, extra = spatial_encoder.align_shank(
+            self.controller, self.items, self.model, _no_progress
+        )
         self.assertEqual(set(views), OPTIONS)
         self.assertEqual(views[AUTO_ALIGNMENT_KEY].axis_label[:, 1].tolist(), ['A', 'B'])
         self.assertFalse(views[AUTO_ALIGNMENT_CONFIDENCE_KEY].boundaries)
+        self.assertEqual(extra, (self.result, self.probe))
+        self.align.assert_called_once_with(self.controller, self.items, self.model, _no_progress)
+        self.open_window.assert_not_called()  # opened afterwards, on the main thread
+
+    def test_window_opened_after_compute(self):
+        """Running the model opens the shank's result window once, from on_computed"""
+        self.plot(AUTO_ALIGNMENT_KEY)
         self.open_window.assert_called_once_with(
             self.controller, self.items, self.result, self.probe
         )
 
     def test_align_cancelled(self):
-        """A cancelled alignment returns None and opens no window"""
-        self.align.side_effect = spatial_encoder.AlignmentCancelledError()
-        self.assertIsNone(spatial_encoder.align_shank(self.controller, self.items))
+        """A cancelled alignment caches and draws nothing and opens no window"""
+        self.align.side_effect = TaskCancelledError()
+        self.plot(AUTO_ALIGNMENT_KEY)
+        self.assertEqual(dict(self.items.model.predictions), {})
+        self.assertEqual(self.drawn(), [])
         self.open_window.assert_not_called()
 
     def test_aligns_once_for_both_options(self):
@@ -201,84 +223,124 @@ class TestAlignShank(unittest.TestCase):
         self.assertEqual(set(vars(self.items.model)), {'align_handle', 'predictions'})
 
 
-class TestProbeInputs(unittest.TestCase):
-    """``_probe_inputs`` with a stand-in model and the features table faked."""
+def _fake_model(vintage: str | None = '2026_W39') -> SimpleNamespace:
+    """An alignment model with two features."""
+    index = {'vintage': vintage} if vintage else {}
+    return SimpleNamespace(encoder=SimpleNamespace(index=index), features=['a', 'b'])
 
-    def setUp(self):
-        self.items = SimpleNamespace(model=SimpleNamespace(pid='pid'))
-        self.controller = SimpleNamespace(model=SimpleNamespace())
-        self.model = SimpleNamespace(
-            encoder=SimpleNamespace(index={'vintage': '2026_W39'}), features=['a', 'b']
-        )
-        # Bottom channel first, as a table may be ordered; one feature is not finite.
-        self.df = pd.DataFrame(
-            {
-                'a': [1.0, np.nan],
-                'b': [2.0, np.inf],
-                'axial_um': [20.0, 60.0],
-                'x_target': [1.0, 2.0],
-                'y_target': [3.0, 4.0],
-                'z_target': [5.0, 6.0],
-            }
-        )
-        self.features_for_vintage = self.enterContext(
-            patch.object(spatial_encoder, 'features_for_vintage', return_value=self.df)
-        )
 
-    def inputs(self) -> dict:
-        return spatial_encoder._probe_inputs(self.controller, self.items, self.model)
+def _features_table() -> pd.DataFrame:
+    """Bottom channel first, as a table may be ordered; one feature is not finite."""
+    return pd.DataFrame(
+        {
+            'a': [1.0, np.nan],
+            'b': [2.0, np.inf],
+            'axial_um': [20.0, 60.0],
+            'x_target': [1.0, 2.0],
+            'y_target': [3.0, 4.0],
+            'z_target': [5.0, 6.0],
+        }
+    )
 
-    def test_features_of_model_vintage(self):
-        """The features come from the table of the model's vintage"""
-        self.inputs()
-        self.features_for_vintage.assert_called_once_with(self.controller, self.items, '2026_W39')
+
+class TestAlignmentInputs(unittest.TestCase):
+    """``alignment_inputs``: a features table to the alignment's arrays, no GUI involved."""
 
     def test_top_first_and_non_finite_zero(self):
         """Rows are ordered top of the probe first, and non-finite features set to 0"""
-        probe = self.inputs()
+        probe = spatial_encoder.alignment_inputs(_fake_model(), _features_table())
         np.testing.assert_array_equal(probe['axial_um'], [60.0, 20.0])
         np.testing.assert_array_equal(probe['features'], [[0.0, 0.0], [1.0, 2.0]])
 
     def test_planned_trajectory(self):
         """The planned trajectory is taken from the target columns when the table has them"""
-        np.testing.assert_array_equal(self.inputs()['planned_xyz'], [[2, 4, 6], [1, 3, 5]])
-        self.features_for_vintage.return_value = self.df.drop(columns='z_target')
-        self.assertIsNone(self.inputs()['planned_xyz'])
-
-    def test_pid_from_session(self):
-        """The pid is the session's, for the model to leave the insertion out"""
-        self.assertEqual(self.inputs()['pid'], 'pid')
+        df = _features_table()
+        probe = spatial_encoder.alignment_inputs(_fake_model(), df)
+        np.testing.assert_array_equal(probe['planned_xyz'], [[2, 4, 6], [1, 3, 5]])
+        probe = spatial_encoder.alignment_inputs(_fake_model(), df.drop(columns='z_target'))
+        self.assertIsNone(probe['planned_xyz'])
 
     def test_missing_feature(self):
         """A table lacking a feature the model needs raises PredictionError naming it"""
-        self.features_for_vintage.return_value = self.df.drop(columns='b')
-        with self.assertRaisesRegex(PredictionError, r"column\(s\): \['b'\]"):
-            self.inputs()
+        with self.assertRaisesRegex(PredictionError, r"column\(s\): \['b'\](.|\n)*2026_W39"):
+            spatial_encoder.alignment_inputs(_fake_model(), _features_table().drop(columns='b'))
+
+
+class TestAlign(unittest.TestCase):
+    """``_align``: the shank's features and the alignment, with both faked."""
+
+    def setUp(self):
+        self.items = SimpleNamespace(
+            name='probe00',
+            model=SimpleNamespace(
+                pid='pid', align_handle=SimpleNamespace(xyz_samples=np.zeros((3, 3)))
+            ),
+        )
+        self.controller = SimpleNamespace(model=SimpleNamespace())
+        self.model = _fake_model()
+        self.features_for_vintage = self.enterContext(
+            patch.object(spatial_encoder, 'features_for_vintage', return_value=_features_table())
+        )
+        # The alignment, imported from ephysatlas when it runs.
+        alignment = types.ModuleType('ephysatlas.alignment')
+        self.align_histology = alignment.align_histology = MagicMock(return_value='result')
+        stubs = {'ephysatlas': types.ModuleType('ephysatlas'), 'ephysatlas.alignment': alignment}
+        self.enterContext(patch.dict(sys.modules, stubs))
+
+    def align(self):
+        return spatial_encoder._align(self.controller, self.items, self.model, _no_progress)
+
+    def test_features_of_model_vintage(self):
+        """The features come from the table of the model's vintage, reporting progress"""
+        self.align()
+        self.features_for_vintage.assert_called_once_with(
+            self.controller, self.items, '2026_W39', _no_progress
+        )
+
+    def test_aligns_with_session_pid(self):
+        """The alignment gets the inputs, the track top first and the session's pid"""
+        result, probe, _ = self.align()
+        self.assertEqual(result, 'result')
+        self.assertEqual(probe['pid'], 'pid')
+        kwargs = self.align_histology.call_args.kwargs
+        self.assertEqual((kwargs['pid'], kwargs['progress']), ('pid', _no_progress))
+        np.testing.assert_array_equal(self.align_histology.call_args.args[1], probe['features'])
 
     def test_no_features(self):
         """No features for the probe raises PredictionError"""
         self.features_for_vintage.return_value = None
         with self.assertRaisesRegex(PredictionError, 'No features found'):
-            self.inputs()
+            self.align()
 
     def test_no_vintage(self):
         """A release naming no vintage is refused before any features are loaded"""
-        self.model.encoder.index = {}
+        self.model = _fake_model(vintage=None)
         with self.assertRaisesRegex(PredictionError, 'vintage'):
-            self.inputs()
+            self.align()
         self.features_for_vintage.assert_not_called()
+
+    def test_cancel_passes_through(self):
+        """Cancel during the alignment is not turned into an error"""
+        self.align_histology.side_effect = TaskCancelledError()
+        with self.assertRaises(TaskCancelledError):
+            self.align()
+
+    def test_alignment_error_reported(self):
+        """An error from the alignment becomes a PredictionError with its message"""
+        self.align_histology.side_effect = ValueError('too few usable channels')
+        with self.assertRaisesRegex(PredictionError, 'too few usable channels'):
+            self.align()
 
 
 class TestAutoAlignmentOptions(unittest.TestCase):
     def test_both_options_registered(self):
-        """Both options are offered for the alignment model and use the same compute function"""
+        """Both options are offered for the alignment model, computed by one run of it"""
         spec = spatial_encoder.ENCODER_SPEC
         self.assertEqual(spec.options, (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY))
-        controller = SimpleNamespace(model=SimpleNamespace(brain_atlas=None))
-        func_map = cp.ChannelPrediction(controller).func_map
         for option in OPTIONS:
             self.assertIs(cp.MODEL_FOR_OPTION[option], spec)
-            self.assertIs(func_map[option], spec.compute)
+        self.assertIs(spec.compute, spatial_encoder.align_shank)
+        self.assertIs(spec.on_computed, spatial_encoder._show_result)
 
 
 if __name__ == '__main__':

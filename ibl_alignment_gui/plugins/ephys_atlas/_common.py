@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from qtpy import QtCore, QtWidgets
+from qtpy import QtWidgets
 
+from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal, FeatureLoaderOne
 from iblutil.util import Bunch
 
@@ -49,10 +50,6 @@ class PredictionError(Exception):
     """A model could not make a prediction; the message is meant for the user."""
 
 
-class AlignmentCancelledError(Exception):
-    """Raised from the progress callback when the user presses Cancel."""
-
-
 @dataclass(frozen=True)
 class ModelSpec:
     """A loadable Ephys Atlas model, as the shared load dialog and model cache need it.
@@ -78,13 +75,19 @@ class ModelSpec:
         The region-plot options the model offers, e.g. its most probable region and its
         cumulative probabilities. The first is selected after the model is loaded from the menu.
     compute : Callable
-        ``compute(controller, items) -> {option: view} or None``: runs the model on a shank and
-        returns the views of all its options (None when the user cancelled).
+        ``compute(controller, items, model, progress) -> (views, extra)``: runs the loaded
+        ``model`` on a shank, without Qt (it may run on a background thread). ``progress(fraction,
+        message)`` reports each step (``fraction`` None while a step's length is unknown, e.g. a
+        download) and raises ``TaskCancelledError`` after Cancel. Returns the views of all its
+        options, ``{option: view}``, and anything ``on_computed`` needs.
     needs_torch : bool
         Whether the model needs torch; it is only offered when torch is installed.
     model_class : str
         The ``model_class`` its release manifest (``ephysatlas_model.json``) declares, which
         identifies a local release directory as this model.
+    on_computed : Callable or None
+        ``on_computed(controller, items, extra)``: run on the main thread after ``compute``,
+        e.g. to open a result window; None when the model needs nothing.
     """
 
     key: str
@@ -94,9 +97,10 @@ class ModelSpec:
     load: Callable[[tuple[str, str], Callable[[float, str], None]], object]
     invalidate: Callable[[AlignmentGUIController], None]
     options: tuple[str, ...]
-    compute: Callable[[AlignmentGUIController, ShankController], dict | None]
+    compute: Callable[..., tuple[dict, object]]
     needs_torch: bool
     model_class: str
+    on_computed: Callable[[AlignmentGUIController, ShankController, object], None] | None = None
 
 
 class ModelSourceDialog(QtWidgets.QDialog):
@@ -223,17 +227,51 @@ def missing_features_error(missing: list[str], vintage: str) -> PredictionError:
     )
 
 
-def _load_source(controller: AlignmentGUIController, spec: ModelSpec, source: tuple[str, str]):
-    """Load ``source`` with ``spec.load`` behind a progress dialog.
+def choose_source(controller: AlignmentGUIController, spec: ModelSpec) -> tuple[str, str] | None:
+    """Ask which release of ``spec``'s model to use (main thread).
+
+    The dialog opens with the model's current source, or its default.
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
     spec : ModelSpec
+        The model to choose a release of.
+
+    Returns
+    -------
+    tuple of (str, str) or None
+        The chosen ``(repo_id_or_directory, revision)``; None if the user cancelled, or if no
+        shank has features yet (the user is warned).
+    """
+    if not has_features(controller):
+        QtWidgets.QMessageBox.warning(controller.view, PLUGIN_KEY, NO_FEATURES_MESSAGE)
+        return None
+
+    state = plugin_state(controller).get(spec.key) or {}
+    default_repo, default_revision = spec.default_source()
+    repo, revision = state.get('source') or (default_repo, default_revision)
+    local = Path(repo) if Path(str(repo)).is_dir() else None
+    dialog = ModelSourceDialog(
+        controller.view, spec, default_repo if local else repo, revision, local
+    )
+    if dialog.exec() != QtWidgets.QDialog.Accepted:
+        return None
+    return dialog.source()
+
+
+def load_model(spec: ModelSpec, source: tuple[str, str], progress: Callable) -> object:
+    """Load ``source`` with ``spec.load``, without Qt (it may run on a background thread).
+
+    Parameters
+    ----------
+    spec : ModelSpec
         The model to load.
     source : tuple of (str, str)
         ``(repo_id_or_directory, revision)`` to load.
+    progress : Callable
+        ``progress(fraction, message)``, told as loading proceeds.
 
     Returns
     -------
@@ -244,125 +282,36 @@ def _load_source(controller: AlignmentGUIController, spec: ModelSpec, source: tu
     ------
     PredictionError
         If the model cannot be loaded, naming the source and the reason.
+    TaskCancelledError
+        If Cancel was pressed, at the next progress report.
     """
     try:
-        return run_with_progress(
-            controller, spec.title, lambda progress: spec.load(source, progress), cancellable=False
-        )
+        return spec.load(source, progress)
+    except TaskCancelledError:
+        raise
     except Exception as exc:
         raise PredictionError(f'Could not load {source[0]}@{source[1]}:\n{exc}') from exc
 
 
-def load_model_dialog(controller: AlignmentGUIController, spec: ModelSpec) -> bool:
-    """Ask which release of ``spec``'s model to use and load it (only when the source changed).
+def store_model(
+    controller: AlignmentGUIController, spec: ModelSpec, model, source: tuple[str, str]
+) -> None:
+    """Keep a loaded model in the plugin state and clear its old predictions (main thread).
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
     spec : ModelSpec
-        The model to load.
-
-    Returns
-    -------
-    bool
-        True when a model is loaded, False when the user cancelled or loading failed.
+        The model.
+    model : object
+        The loaded model.
+    source : tuple of (str, str)
+        The ``(repo_id_or_directory, revision)`` it was loaded from.
     """
-    plugin = plugin_state(controller)
-    state = plugin.get(spec.key) or dict(model=None, source=None)
-    plugin[spec.key] = state
-    if not has_features(controller):
-        QtWidgets.QMessageBox.warning(controller.view, PLUGIN_KEY, NO_FEATURES_MESSAGE)
-        return False
-
-    default_repo, default_revision = spec.default_source()
-    repo, revision = state['source'] or (default_repo, default_revision)
-    local = Path(repo) if Path(str(repo)).is_dir() else None
-    dialog = ModelSourceDialog(
-        controller.view, spec, default_repo if local else repo, revision, local
-    )
-    if dialog.exec() != QtWidgets.QDialog.Accepted:
-        return state['model'] is not None
-
-    source = dialog.source()
-    if state['model'] is not None and tuple(state['source']) == source:
-        return True
-    try:
-        model = _load_source(controller, spec, source)
-    except PredictionError as exc:
-        QtWidgets.QMessageBox.critical(controller.view, spec.title, str(exc))
-        return False
-    state.update(model=model, source=source)
+    plugin_state(controller)[spec.key] = dict(model=model, source=tuple(source))
     spec.invalidate(controller)
     logger.info('%s set to %s@%s', spec.key, *source)
-    return True
-
-
-def get_model(controller: AlignmentGUIController, spec: ModelSpec):
-    """Return ``spec``'s loaded model, loading it first when needed.
-
-    A ``source`` preset on the plugin state (``(repo_id_or_dir, revision)``, e.g. by a launcher
-    script) loads without the dialog; otherwise the load dialog opens.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    spec : ModelSpec
-        The model to return.
-
-    Returns
-    -------
-    object or None
-        The loaded model, or None if the user cancelled or loading from the dialog failed.
-
-    Raises
-    ------
-    PredictionError
-        If a preset source cannot be loaded.
-    """
-    state = plugin_state(controller).get(spec.key)
-    if state is not None and state.get('model') is None and state.get('source'):
-        state['model'] = _load_source(controller, spec, tuple(state['source']))
-    if state is None or state.get('model') is None:
-        if not load_model_dialog(controller, spec):
-            return None
-        state = plugin_state(controller)[spec.key]
-    return state['model']
-
-
-def run_with_progress(
-    controller: AlignmentGUIController, title: str, work: Callable, *, cancellable: bool = True
-):
-    """Run ``work(progress)`` behind a modal progress dialog showing its fraction and message.
-
-    ``progress(fraction, message)`` updates the bar and its text and keeps the GUI responsive;
-    Cancel raises :class:`AlignmentCancelledError` inside ``work`` at its next progress report.
-    """
-    dialog = QtWidgets.QProgressDialog(
-        title, 'Cancel' if cancellable else None, 0, 1000, controller.view
-    )
-    dialog.setWindowTitle(title)
-    dialog.setWindowModality(QtCore.Qt.WindowModal)
-    dialog.setMinimumDuration(0)
-    dialog.setMinimumWidth(420)
-    dialog.setAutoClose(False)
-    dialog.setValue(0)
-    QtWidgets.QApplication.processEvents()
-
-    def progress(fraction: float, message: str) -> None:
-        if cancellable and dialog.wasCanceled():
-            raise AlignmentCancelledError()
-        dialog.setLabelText(f'{title}\n\n{message}')
-        dialog.setValue(int(round(1000 * float(fraction))))
-        QtWidgets.QApplication.processEvents()
-
-    QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-    try:
-        return work(progress)
-    finally:
-        QtWidgets.QApplication.restoreOverrideCursor()
-        dialog.close()
 
 
 def plugin_state(controller: AlignmentGUIController) -> Bunch:
@@ -558,7 +507,10 @@ def _get_features_df(
 
 
 def features_for_vintage(
-    controller: AlignmentGUIController, items: ShankController, vintage: str
+    controller: AlignmentGUIController,
+    items: ShankController,
+    vintage: str,
+    progress: Callable[[float | None, str], None] | None = None,
 ) -> pd.DataFrame | None:
     """Return the shank's features from the feature table a model was trained on.
 
@@ -579,6 +531,9 @@ def features_for_vintage(
         The shank being predicted on.
     vintage : str
         Label of the feature table the model was trained on (e.g. ``2026_W26``).
+    progress : Callable or None
+        ``progress(fraction, message)``, told when the vintage table is loaded (which may download
+        it). No Qt is used here, so this can run on a background thread.
 
     Returns
     -------
@@ -607,15 +562,14 @@ def features_for_vintage(
             vintage,
             loader.feature_version,
         )
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        if progress is not None:
+            progress(None, f'Loading the {vintage} features for {items.name}…')
         try:
             cache[vintage] = vintage_loader.load_features()
         except Exception as exc:
             raise PredictionError(
                 f'The {vintage} features could not be loaded for this insertion:\n{exc}'
             ) from exc
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
     feats = cache[vintage]
     if not feats.get('exists', False):
         # Features of another vintage would give a confident but wrong prediction. Instead, point

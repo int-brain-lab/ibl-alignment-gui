@@ -25,7 +25,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
     clear_predictions,
     features_for_vintage,
-    get_model,
     get_region_boundaries,
     missing_features_error,
     model_vintage,
@@ -234,14 +233,16 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
     return out, depths
 
 
-def _predict_df(
-    controller: AlignmentGUIController, items: ShankController, name: str
-) -> tuple[pd.DataFrame, np.ndarray, object] | None:
-    """Run decoder ``name`` on the shank's features and return its prediction table.
+def _decode(
+    controller: AlignmentGUIController,
+    items: ShankController,
+    model,
+    progress: Callable[[float | None, str], None],
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Run a loaded decoder on the shank's features, without Qt.
 
-    The model run behind :func:`decode_shank`: loads the model (asking the
-    user when none is loaded yet) and the shank's features from the table of the model's vintage,
-    then runs :func:`run_decoder`.
+    The features come from the table of the model's vintage (:func:`features_for_vintage`), then
+    :func:`run_decoder` runs the model on them.
 
     Parameters
     ----------
@@ -249,14 +250,17 @@ def _predict_df(
         The main application controller.
     items : ShankController
         The shank being predicted on.
-    name : str
-        The decoder, a key of :data:`DECODERS`.
+    model : RegionClassifier or ProbeTransformerClassifier
+        The loaded decoder.
+    progress : Callable
+        ``progress(fraction, message)``, told of each step.
 
     Returns
     -------
-    tuple of (pandas.DataFrame, np.ndarray, model) or None
-        The model's ``predict`` output, the depths (µm) of the predicted channels and the loaded
-        model; or None when the user cancelled loading the model.
+    pandas.DataFrame
+        The model's ``predict`` output.
+    np.ndarray
+        The depths (µm) of the predicted channels.
 
     Raises
     ------
@@ -264,24 +268,25 @@ def _predict_df(
         If the model's release names no feature vintage, or the shank has no features, or they
         lack a column the model needs.
     """
-    # Resolve the model first so its load dialog (and its "load a features file first" guard)
-    # runs before we bail on missing features, matching the spatial encoder path.
-    model = get_model(controller, DECODER_SPECS[name])
-    if model is None:
-        return None
-
-    df = features_for_vintage(controller, items, model_vintage(model.index))
+    df = features_for_vintage(controller, items, model_vintage(model.index), progress)
     if df is None:
         raise PredictionError(NO_FEATURES_MESSAGE)
-    out, depths = run_decoder(model, df)
+    progress(None, 'Predicting the regions…')
 
-    return out, depths, model
+    return run_decoder(model, df)
 
 
 def decode_shank(
-    controller: AlignmentGUIController, items: ShankController, name: str
-) -> dict[str, Bunch] | None:
-    """Run decoder ``name`` on the shank once and return both of its region-plot views.
+    controller: AlignmentGUIController,
+    items: ShankController,
+    model,
+    progress: Callable[[float | None, str], None],
+    name: str,
+) -> tuple[dict[str, Bunch], None]:
+    """Run decoder ``name`` once on the shank and return both of its region-plot views.
+
+    The decoder's ``compute`` (see :class:`ModelSpec`): no Qt is used, so it can run on a
+    background thread.
 
     Parameters
     ----------
@@ -289,31 +294,33 @@ def decode_shank(
         The main application controller.
     items : ShankController
         The shank being predicted on.
+    model : RegionClassifier or ProbeTransformerClassifier
+        The loaded decoder.
+    progress : Callable
+        ``progress(fraction, message)``, told of each step.
     name : str
         The decoder, a key of :data:`DECODERS`, also its region-plot option.
 
     Returns
     -------
-    dict of {str: Bunch} or None
+    dict of {str: Bunch}
         The most probable region per channel (:func:`predict`) under ``name`` and the cumulative
-        class probabilities (:func:`predict_cumulative`) under ``name`` + ``' (cumulative)'``;
-        or None if the user cancelled loading the model.
+        class probabilities (:func:`predict_cumulative`) under ``name`` + ``' (cumulative)'``.
+    None
+        Nothing for ``on_computed``.
 
     Raises
     ------
     PredictionError
         If the shank has no features, or they lack a column the model needs.
     """
-    result = _predict_df(controller, items, name)
-    if result is None:
-        return None
-
-    out, depths, model = result
-
-    return {
+    out, depths = _decode(controller, items, model, progress)
+    views = {
         name: predict(out, depths),
         name + CUMULATIVE_SUFFIX: predict_cumulative(out, depths, model),
     }
+
+    return views, None
 
 
 def predict(out: pd.DataFrame, depths: np.ndarray) -> Bunch:

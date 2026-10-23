@@ -116,6 +116,35 @@ class TestFeaturesForVintage(unittest.TestCase):
             'Plugins -> Channel Prediction -> Load ... model, release tag 2026_W26', message
         )
 
+    def test_progress_only_when_loading(self):
+        """Loading the vintage table is reported; the cached table and GUI features are not"""
+        loader = FeatureLoaderOne.__new__(FeatureLoaderOne)
+        loader.feature_version = '2026_W26'
+        loader.pid = 'pid'
+        loader.one = None
+        loader.multi_area = False
+        raw_data = {'features': Bunch(exists=True, df='GUI features')}
+        items = SimpleNamespace(
+            name='probe00', model=SimpleNamespace(loaders={'features': loader}, raw_data=raw_data)
+        )
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
+        reports = []
+
+        def progress(fraction, message):
+            reports.append((fraction, message))
+
+        table = Bunch(exists=True, df='W39 features')
+        with patch.object(FeatureLoaderOne, 'load_features', return_value=table):
+            for _ in range(2):  # loaded, then cached
+                self.assertEqual(
+                    features_for_vintage(controller, items, '2026_W39', progress), 'W39 features'
+                )
+            # The GUI's own vintage needs no loading.
+            self.assertEqual(
+                features_for_vintage(controller, items, '2026_W26', progress), 'GUI features'
+            )
+        self.assertEqual(reports, [(None, 'Loading the 2026_W39 features for probe00…')])
+
 
 class TestGetFeaturesDf(unittest.TestCase):
     def test_features_file_loaded_through_shank(self):

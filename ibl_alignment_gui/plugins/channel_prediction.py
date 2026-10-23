@@ -1,22 +1,28 @@
 import importlib.util
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qtpy import QtWidgets
 
+from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder as spatial
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    NO_FEATURES_MESSAGE,
     PredictionError,
+    choose_source,
     close_alignment_windows,
-    get_model,
     get_region_boundaries,
+    has_features,
     is_model_loaded,
-    load_model_dialog,
+    load_model,
+    plugin_state,
     show_alignment_windows,
+    store_model,
 )
 from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
 from ibl_alignment_gui.utils.helpers import shank_loop
@@ -133,10 +139,75 @@ def _invalidate_loaded_models(controller: 'AlignmentGUIController') -> None:
 
 
 def _load_model(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
-    """Load ``spec``'s model via its dialog and show its first region-plot option."""
-    if load_model_dialog(controller, spec):
-        _refresh_model_options(controller)  # make sure its options are offered
-        controller.view.trigger_menu_option('region', spec.options[0])
+    """Load a release of ``spec``'s model chosen in its dialog, then show its first option.
+
+    The dialog runs here (main thread); the model loads in the background, behind a progress
+    dialog with Cancel. A source that is already loaded is not loaded again. Cancelling the dialog
+    keeps the current model (and still shows it, if there is one).
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    spec : ModelSpec
+        The model to load.
+    """
+    if not has_features(controller):
+        QtWidgets.QMessageBox.warning(controller.view, PLUGIN_NAME, NO_FEATURES_MESSAGE)
+        return
+    state = plugin_state(controller).get(spec.key) or {}
+    loaded = state.get('model') is not None
+    source = choose_source(controller, spec)
+    if source is None:  # dialog cancelled: keep (and show) the current model, if any
+        if loaded:
+            _show_first_option(controller, spec)
+        return
+    if loaded and tuple(state['source']) == source:  # already loaded: not loaded again
+        _show_first_option(controller, spec)
+        return
+    started = controller.run_in_thread(
+        _load_task,
+        spec,
+        source,
+        on_finished=partial(_load_done, controller, spec),
+        on_error=partial(_task_failed, controller, spec.title),
+        busy_message='Starting…',
+        title=spec.title,
+        report_progress=True,
+        cancellable=True,
+    )
+    if not started:
+        _busy_warning(controller, spec.title)
+
+
+def _load_task(spec: 'ModelSpec', source: tuple[str, str], progress_callback) -> '_Outcome':
+    """Load ``source`` (background thread, no Qt)."""
+    outcome = _Outcome()
+    try:
+        outcome.model = load_model(spec, source, _fraction_progress(progress_callback))
+        outcome.loaded_from = source
+    except TaskCancelledError:
+        outcome.cancelled = True
+    except PredictionError as exc:
+        outcome.errors.append(str(exc))
+    return outcome
+
+
+def _load_done(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome: '_Outcome'):
+    """Keep the loaded model and show its first option, or report the failure (main thread)."""
+    if outcome.errors:
+        QtWidgets.QMessageBox.critical(controller.view, spec.title, outcome.errors[0])
+        return
+    if outcome.loaded_from is None:
+        return  # cancelled: the current model, if any, is kept
+    store_model(controller, spec, outcome.model, outcome.loaded_from)
+    _show_first_option(controller, spec)
+
+
+def _show_first_option(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
+    """Select the model's first region-plot option, which shows its predictions."""
+    _refresh_model_options(controller)  # make sure its options are offered
+    controller.view.trigger_menu_option('region', spec.options[0])
 
 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
@@ -185,8 +256,9 @@ def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
 class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
-    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` dispatches the
-    selected region option to its compute function and draws it on each shank.
+    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` shows the
+    selected region option on each shank: an atlas mapping (``func_map``) computed at once, or a
+    model's predictions (``MODEL_FOR_OPTION``) computed in the background.
     """
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
@@ -202,56 +274,228 @@ class ChannelPrediction:
         self.func_map = {
             'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
             'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
-            # One model run gives the views of all of the model's options.
-            **{option: spec.compute for option, spec in MODEL_FOR_OPTION.items()},
         }
 
     def plot_regions(self, model: str, data_only: bool = True) -> None:
-        """Compute and plot the selected region model across all shanks.
+        """Show the selected region option on every aligned shank.
 
-        Looks up ``model`` in the dispatch map and runs the matching compute function on each
-        shank (an atlas mapping, or the model's ``compute``), getting the option's model once
-        first. Problems are reported in one warning for all shanks.
+        An atlas mapping is computed and drawn at once. A model's predictions are drawn from the
+        cache, or computed first in the background (:func:`_predict`). Problems are reported in
+        one warning for all shanks.
 
         Parameters
         ----------
         model : str
-            Region-model key (e.g. 'Beryl', 'Cosmos', 'Auto-alignment',
-            'XGBoost region prediction', 'XGBoost region prediction (cumulative)'). Unknown keys
-            are ignored.
+            Region-plot option (e.g. 'Beryl', 'Cosmos', 'Auto-alignment',
+            'XGBoost region prediction', 'XGBoost region prediction (cumulative)'). Unknown
+            options are ignored.
         data_only : bool
             Reserved for signature compatibility with the region-plot callback; not used here.
         """
         self.controller.region_init = model
+        spec = MODEL_FOR_OPTION.get(model)
+        if spec is not None:
+            _predict(self.controller, spec, model)
+            return
         func = self.func_map.get(model)
         if func is None:
             return
-
-        # Get the option's model once, before the shanks: its load dialog (or a failing preset
-        # source) then happens once, and cancelling it stops the whole plot.
-        spec = MODEL_FOR_OPTION.get(model)
-        if spec is not None:
-            try:
-                if get_model(self.controller, spec) is None:
-                    return  # the user cancelled
-            except PredictionError as exc:
-                QtWidgets.QMessageBox.warning(self.controller.view, model, str(exc))
-                return
-            except Exception as exc:
-                logger.exception('Getting the %s model failed', model)
-                QtWidgets.QMessageBox.warning(
-                    self.controller.view,
-                    model,
-                    f'Unexpected error in {model}: {type(exc).__name__}: {exc}\n\n'
-                    'See the log for details.',
-                )
-                return
-
         errors = _plot_region_panels(self.controller, model, func)
         # One dialog for all shanks; the shanks that succeeded are still drawn.
         messages = list(dict.fromkeys(error for error in errors if error))
         if messages:
             QtWidgets.QMessageBox.warning(self.controller.view, model, '\n\n'.join(messages))
+
+
+# -----------------------------------------------------------------------------
+# Model predictions, computed in the background
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class _Outcome:
+    """What a background task did, handed back to the main thread when it ends."""
+
+    model: object = None
+    loaded_from: tuple[str, str] | None = None  # set when the task loaded the model
+    results: list = field(default_factory=list)  # (items, views, extra) per finished shank
+    errors: list[str] = field(default_factory=list)
+    cancelled: bool = False
+
+
+def _fraction_progress(progress_callback: Callable, prefix: str = '') -> Callable:
+    """Adapt the worker's ``(message, current, total)`` to the models' ``(fraction, message)``.
+
+    A ``fraction`` of None shows a busy bar. Each report also stops the task after Cancel.
+    """
+
+    def progress(fraction: float | None, message: str) -> None:
+        if fraction is None:
+            progress_callback(prefix + message, 0, 0)
+        else:
+            progress_callback(prefix + message, int(round(1000 * float(fraction))), 1000)
+
+    return progress
+
+
+def _unexpected(title: str, exc: Exception) -> str:
+    """Return the message for an unexpected error, whose traceback is logged."""
+    return f'Unexpected error in {title}: {type(exc).__name__}: {exc}\n\nSee the log for details.'
+
+
+def _prediction_task(
+    controller: 'AlignmentGUIController',
+    spec: 'ModelSpec',
+    model,
+    source: tuple[str, str] | None,
+    shanks: list['ShankController'],
+    progress_callback: Callable,
+) -> _Outcome:
+    """Load ``spec``'s model if needed, then run it on each shank (background thread, no Qt).
+
+    Each shank's error is kept and the next shank is computed. After Cancel, the shanks finished
+    so far (and a model already loaded) are kept and the rest skipped.
+    """
+    outcome = _Outcome(model=model)
+    try:
+        if model is None:
+            outcome.model = load_model(spec, source, _fraction_progress(progress_callback))
+            outcome.loaded_from = source
+        for i, items in enumerate(shanks, 1):
+            step = _fraction_progress(progress_callback, f'{items.name} ({i}/{len(shanks)}): ')
+            step(None, 'starting…')  # also where Cancel stops the task between shanks
+            try:
+                views, extra = spec.compute(controller, items, outcome.model, step)
+            except TaskCancelledError:
+                raise
+            except PredictionError as exc:
+                outcome.errors.append(str(exc))
+                continue
+            except Exception as exc:
+                # A bug or an unforeseen failure: log it and report it with the other shanks.
+                logger.exception('%s failed on shank %s', spec.key, items.name)
+                outcome.errors.append(_unexpected(spec.options[0], exc))
+                continue
+            outcome.results.append((items, views, extra))
+    except TaskCancelledError:
+        outcome.cancelled = True
+    except PredictionError as exc:  # the model could not be loaded
+        outcome.errors.append(str(exc))
+    except Exception as exc:
+        logger.exception('Getting the %s model failed', spec.key)
+        outcome.errors.append(_unexpected(spec.options[0], exc))
+    return outcome
+
+
+def _predict(controller: 'AlignmentGUIController', spec: 'ModelSpec', option: str) -> None:
+    """Show ``option`` on every aligned shank, computing the missing views in the background.
+
+    The model is chosen here if it is not loaded (its preset source, or its dialog); loading it
+    and running it on each shank then happen in one background task, behind one progress dialog
+    whose Cancel stops it. The shanks are drawn when it ends (:func:`_prediction_done`).
+    """
+    shanks = _aligned_shanks(controller)
+    todo = [items for items in shanks if _cache(items).get(option) is None]
+    if not todo:
+        _draw_all(shanks, option)
+        return
+    state = plugin_state(controller).get(spec.key) or {}
+    model, source = state.get('model'), None
+    if model is None:
+        source = tuple(state['source']) if state.get('source') else choose_source(controller, spec)
+        if source is None:
+            return  # cancelled, or no features (the user was warned)
+    started = controller.run_in_thread(
+        _prediction_task,
+        controller,
+        spec,
+        model,
+        source,
+        todo,
+        on_finished=partial(_prediction_done, controller, spec, option, shanks),
+        on_error=partial(_task_failed, controller, option),
+        busy_message='Starting…',
+        title=option,
+        report_progress=True,
+        cancellable=True,
+    )
+    if not started:
+        _busy_warning(controller, option)
+
+
+def _prediction_done(
+    controller: 'AlignmentGUIController',
+    spec: 'ModelSpec',
+    option: str,
+    shanks: list['ShankController'],
+    outcome: _Outcome,
+) -> None:
+    """Keep and draw what the task computed, and report its errors once (main thread)."""
+    if outcome.loaded_from is not None:
+        store_model(controller, spec, outcome.model, outcome.loaded_from)
+    for items, views, extra in outcome.results:
+        _cache(items).update(views)
+        if spec.on_computed is not None:
+            spec.on_computed(controller, items, extra)
+    _draw_all(shanks, option)
+    messages = list(dict.fromkeys(outcome.errors))
+    if messages:
+        QtWidgets.QMessageBox.warning(controller.view, option, '\n\n'.join(messages))
+
+
+def _task_failed(controller: 'AlignmentGUIController', title: str, traceback: str) -> None:
+    """Report a task that failed outside its own error handling (the worker logged it)."""
+    QtWidgets.QMessageBox.warning(
+        controller.view, title, f'Unexpected error in {title}.\n\nSee the log for details.'
+    )
+
+
+def _busy_warning(controller: 'AlignmentGUIController', title: str) -> None:
+    """Tell the user another background task is still running."""
+    QtWidgets.QMessageBox.warning(
+        controller.view, title, 'Another task is running; try again once it has finished.'
+    )
+
+
+def _aligned_shanks(controller: 'AlignmentGUIController') -> list['ShankController']:
+    """Return the shanks a region option is shown on: the aligned ones, in shank_loop's order."""
+    return [
+        controller.shank_items[shank][config]
+        for config in controller.model.configs
+        for shank in controller.all_shanks
+        if controller.model.get_current_shank(shank, config).align_exists
+    ]
+
+
+def _cache(items: 'ShankController') -> Bunch:
+    """Return the shank's cached region-plot views, by option."""
+    if not getattr(items.model, 'predictions', None):
+        items.model.predictions = Bunch()
+    return items.model.predictions
+
+
+def _draw(items: 'ShankController', option: str) -> None:
+    """Draw the shank's cached view of ``option``, if it has one."""
+    pred = _cache(items).get(option)
+    if pred is None:
+        return
+    if 'probability' in pred:
+        items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
+    else:
+        items.view.plot_histology(
+            items.view.fig_hist_ref, pred, ax='right', boundaries=pred.get('boundaries', True)
+        )
+
+
+def _draw_all(shanks: list['ShankController'], option: str) -> None:
+    """Draw ``option`` on each shank that has it."""
+    for items in shanks:
+        _draw(items, option)
+
+
+# -----------------------------------------------------------------------------
+# Atlas mappings, computed at once
+# -----------------------------------------------------------------------------
 
 
 @shank_loop
@@ -291,10 +535,7 @@ def _plot_region_panels(
         logged). Errors are returned rather than shown so that the caller reports them once for
         all shanks.
     """
-    if not getattr(items.model, 'predictions', None):
-        items.model.predictions = Bunch()
-
-    if items.model.predictions.get(model) is None:
+    if _cache(items).get(model) is None:
         try:
             views = func(controller, items)
         except PredictionError as exc:
@@ -306,21 +547,11 @@ def _plot_region_panels(
             logger.exception(
                 '%s failed on shank %s (%s)', model, kwargs.get('shank'), kwargs.get('config')
             )
-            return (
-                f'Unexpected error in {model}: {type(exc).__name__}: {exc}\n\n'
-                'See the log for details.'
-            )
+            return _unexpected(model, exc)
         if views is not None:
-            items.model.predictions.update(views)
+            _cache(items).update(views)
 
-    pred = items.model.predictions.get(model)
-    if pred is not None:
-        if 'probability' in pred:
-            items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
-        else:
-            items.view.plot_histology(
-                items.view.fig_hist_ref, pred, ax='right', boundaries=pred.get('boundaries', True)
-            )
+    _draw(items, model)
 
 
 def compute_mapping_predictions(

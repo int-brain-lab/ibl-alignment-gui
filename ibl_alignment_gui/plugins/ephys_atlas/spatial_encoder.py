@@ -27,28 +27,29 @@ from typing import TYPE_CHECKING
 import numpy as np
 from qtpy import QtWidgets
 
+from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
     M_TO_UM,
     NO_FEATURES_MESSAGE,
-    AlignmentCancelledError,
     ModelSpec,
     PredictionError,
     alignment_windows,
     clear_predictions,
     features_for_vintage,
-    get_model,
     get_region_boundaries,
     missing_features_error,
     model_vintage,
-    run_with_progress,
     update_results_action,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import pandas as pd
     from ephysatlas.alignment import ChannelModel
 
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
@@ -201,26 +202,31 @@ def _current_pid(controller, items) -> str:
     return ''
 
 
-def _probe_inputs(controller, items, model: ChannelModel) -> dict:
-    """Return the shank's recorded features, in row order (top first), and planned trajectory.
+def alignment_inputs(model: ChannelModel, df: pd.DataFrame) -> dict:
+    """Turn a features table into the alignment's inputs, without the GUI or a shank.
 
-    The features come from the table of the model's vintage, as for the region decoders
-    (:func:`features_for_vintage`). Non-finite features are set to 0. ``planned_xyz`` is the
-    planned trajectory from the feature table when it has one.
+    Parameters
+    ----------
+    model : ChannelModel
+        The loaded alignment model, for its features and vintage.
+    df : pandas.DataFrame
+        The probe's features, with an ``axial_um`` column.
+
+    Returns
+    -------
+    dict
+        ``features`` (the model's features, rows top of the probe first, non-finite values set to
+        0), ``planned_xyz`` (the planned trajectory, or None if the table has none) and
+        ``axial_um``.
 
     Raises
     ------
     PredictionError
-        If the model's release names no feature vintage, or there are no features for the probe,
-        or they lack a feature the model needs.
+        If the table lacks a feature the model needs.
     """
-    vintage = model_vintage(getattr(model.encoder, 'index', None))
-    df = features_for_vintage(controller, items, vintage)
-    if df is None:
-        raise PredictionError(NO_FEATURES_MESSAGE)
     missing = [c for c in model.features if c not in df.columns]
     if missing:
-        raise missing_features_error(missing, vintage)
+        raise missing_features_error(missing, model_vintage(getattr(model.encoder, 'index', None)))
     df = df.sort_values(
         ['axial_um', 'channel'] if 'channel' in df else ['axial_um'], ascending=False
     ).reset_index(drop=True)
@@ -232,11 +238,7 @@ def _probe_inputs(controller, items, model: ChannelModel) -> dict:
         else None
     )
     return dict(
-        # The model leaves this insertion out of the neighbours it predicts from.
-        pid=_current_pid(controller, items),
-        features=features,
-        planned_xyz=planned,
-        axial_um=df['axial_um'].to_numpy(dtype=float),
+        features=features, planned_xyz=planned, axial_um=df['axial_um'].to_numpy(dtype=float)
     )
 
 
@@ -257,51 +259,90 @@ def _warped_track_depths(n_track: int, channel_to_trace_work, channel_depth_um) 
     return scale * np.arange(n_track, dtype=float) + offset
 
 
-def align_shank(
-    controller: AlignmentGUIController, items: ShankController
-) -> dict[str, Bunch] | None:
-    """Align the shank and return both auto-alignment views, opening its result window.
+def _align(
+    controller: AlignmentGUIController,
+    items: ShankController,
+    model: ChannelModel,
+    progress: Callable[[float | None, str], None],
+) -> tuple[object, dict, np.ndarray]:
+    """Align the shank with a loaded model, without Qt.
 
-    Nothing is kept here: the Channel Prediction plugin caches the views it returns, so the shank
-    is aligned again only after they are cleared (:func:`invalidate_predictions`).
+    The features come from the table of the model's vintage, as for the region decoders
+    (:func:`features_for_vintage`).
 
     Returns
     -------
-    dict of {str: Bunch} or None
-        The regions view (:func:`predict_regions`) under ``'Auto-alignment'`` and the confidence
-        view (:func:`predict_confidence`) under ``'Auto-alignment (confidence)'``; or None when
-        the user cancelled.
+    AlignmentResult
+        The alignment, from ``ephysatlas.alignment.align_histology``.
+    dict
+        Its inputs (:func:`alignment_inputs`) and the insertion's ``pid``.
+    np.ndarray
+        The GUI's histology track, bottom to top.
 
     Raises
     ------
     PredictionError
-        If the model cannot be loaded, the probe has no usable features or the alignment fails.
+        If the model's release names no feature vintage, the probe has no usable features or the
+        alignment fails.
+    TaskCancelledError
+        If Cancel was pressed, at the alignment's next progress report.
     """
-    model = get_model(controller, ENCODER_SPEC)
-    if model is None:
-        return None
-    probe = _probe_inputs(controller, items, model)
+    vintage = model_vintage(getattr(model.encoder, 'index', None))
+    df = features_for_vintage(controller, items, vintage, progress)
+    if df is None:
+        raise PredictionError(NO_FEATURES_MESSAGE)
+    probe = alignment_inputs(model, df)
+    # The model leaves this insertion out of the neighbours it predicts from.
+    probe['pid'] = _current_pid(controller, items)
     # GUI track: bottom -> top along the histology picks, 10 µm apart, top to bottom of the brain.
     track_gui = np.asarray(items.model.align_handle.xyz_samples, dtype=np.float32)
-
-    def align(progress):
-        from ephysatlas.alignment import align_histology  # noqa: PLC0415 - heavy, lazy
-
-        return align_histology(
-            model, probe['features'], track_gui[::-1].copy(), pid=probe['pid'], progress=progress
-        )
+    from ephysatlas.alignment import align_histology  # noqa: PLC0415 - heavy, lazy
 
     try:
-        result = run_with_progress(controller, 'Auto-alignment', align)
-    except AlignmentCancelledError:
-        return None
-    except Exception as exc:
+        result = align_histology(
+            model, probe['features'], track_gui[::-1].copy(), pid=probe['pid'], progress=progress
+        )
+    except TaskCancelledError:
+        raise
+    except Exception as exc:  # e.g. too few usable channels: reported to the user
         raise PredictionError(str(exc)) from exc
+
+    return result, probe, track_gui
+
+
+def align_shank(
+    controller: AlignmentGUIController,
+    items: ShankController,
+    model: ChannelModel,
+    progress: Callable[[float | None, str], None],
+) -> tuple[dict[str, Bunch], tuple]:
+    """Align the shank and return both auto-alignment views, and what its result window needs.
+
+    The alignment model's ``compute`` (see :class:`ModelSpec`): no Qt is used, so it can run on a
+    background thread; the result window is opened afterwards by :func:`_show_result`. Nothing is
+    kept here: the Channel Prediction plugin caches the views, so the shank is aligned again only
+    after they are cleared (:func:`invalidate_predictions`).
+
+    Returns
+    -------
+    dict of {str: Bunch}
+        The regions view (:func:`predict_regions`) under ``'Auto-alignment'`` and the confidence
+        view (:func:`predict_confidence`) under ``'Auto-alignment (confidence)'``.
+    tuple
+        The alignment result and its inputs, for the result window.
+
+    Raises
+    ------
+    PredictionError
+        If the probe has no usable features or the alignment fails.
+    TaskCancelledError
+        If Cancel was pressed.
+    """
+    result, probe, track_gui = _align(controller, items, model, progress)
     track_depth_um = _warped_track_depths(
         len(track_gui), result.diagnostics['channel_to_trace'], probe['axial_um']
     )
-    _open_result_window(controller, items, result, probe)
-    return {
+    views = {
         AUTO_ALIGNMENT_KEY: predict_regions(
             controller.model.brain_atlas, track_gui, track_depth_um
         ),
@@ -309,6 +350,14 @@ def align_shank(
             result.p_good, result.valid, probe['axial_um'], track_depth_um
         ),
     }
+
+    return views, (result, probe)
+
+
+def _show_result(controller: AlignmentGUIController, items: ShankController, extra) -> None:
+    """Open the shank's result window, on the main thread (the alignment model's on_computed)."""
+    result, probe = extra
+    _open_result_window(controller, items, result, probe)
 
 
 # -----------------------------------------------------------------------------
@@ -426,4 +475,5 @@ ENCODER_SPEC = ModelSpec(
     compute=align_shank,
     needs_torch=True,
     model_class='NeighborInpaintingModel',
+    on_computed=_show_result,
 )

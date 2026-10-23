@@ -4,15 +4,16 @@ import dataclasses
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-from qtpy import QtWidgets
+from qtpy import QtTest, QtWidgets
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
-from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
+from ibl_alignment_gui.plugins.ephys_atlas import inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
@@ -20,6 +21,8 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
 )
 from iblutil.util import Bunch
+from tests.app.test_load_worker import _Runner
+from tests.plugins._runner import InlineRunner
 
 SHANKS = ('a', 'b')
 
@@ -41,7 +44,9 @@ def _fake_controller() -> SimpleNamespace:
     """A controller with two aligned shanks, whose views record what they draw."""
     shank_items = {
         shank: {
-            'default': SimpleNamespace(model=SimpleNamespace(predictions=None), view=MagicMock())
+            'default': SimpleNamespace(
+                name=shank, model=SimpleNamespace(predictions=None), view=MagicMock()
+            )
         }
         for shank in SHANKS
     }
@@ -178,72 +183,238 @@ DECODER = 'XGBoost region prediction'
 
 
 class TestPlotRegionsModelLookup(unittest.TestCase):
-    """plot_regions gets the option's model once, before computing any shank."""
+    """plot_regions gets the option's model once, then computes every shank in one task."""
 
     def setUp(self):
         self.controller = _fake_controller()
         self.controller.view = None
         self.controller.model.brain_atlas = None
         self.controller.plugins = {PLUGIN_KEY: Bunch()}
+        self.controller.run_in_thread = self.runner = InlineRunner()
         self.loader = cp.ChannelPrediction(self.controller)
         # The decoder's computation, per shank, as a stand-in.
-        self.compute = MagicMock(return_value={DECODER: Bunch(region='regions view')})
-        self.loader.func_map[DECODER] = self.compute
+        self.compute = MagicMock(return_value=({DECODER: Bunch(region='regions view')}, None))
+        self.spec = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=self.compute)
+        self.enterContext(patch.dict(cp.MODEL_FOR_OPTION, {DECODER: self.spec}))
         self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
+        self.load = self.enterContext(patch.object(cp, 'load_model', return_value=object()))
 
-    def test_model_for_option(self):
-        """Decoder options give their decoder, auto-alignment options the alignment model"""
-        for name, spec in inference.DECODER_SPECS.items():
-            for option in (name, name + inference.CUMULATIVE_SUFFIX):
-                self.assertIs(cp.MODEL_FOR_OPTION[option], spec)
-        for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
-            self.assertIs(cp.MODEL_FOR_OPTION[option], spatial_encoder.ENCODER_SPEC)
-        for option in ('Beryl', 'Cosmos'):
-            self.assertNotIn(option, cp.MODEL_FOR_OPTION)
+    def set_model(self, model=None, source=None) -> None:
+        self.controller.plugins[PLUGIN_KEY][self.spec.key] = dict(model=model, source=source)
 
     def test_cancel_opens_dialog_once(self):
         """With no model loaded, a cancelled load dialog opens once and nothing is computed"""
-        with patch.object(_common, 'load_model_dialog', return_value=False) as dialog:
+        with patch.object(cp, 'choose_source', return_value=None) as dialog:
             self.loader.plot_regions(DECODER)
         dialog.assert_called_once()
+        self.assertEqual(self.runner.tasks, [])
         self.compute.assert_not_called()
 
     def test_model_failure_one_warning(self):
         """A model that cannot be loaded gives one warning and nothing is computed"""
+        self.set_model(source=('org/missing', '2026_W39'))
         error = PredictionError('Could not load org/missing@2026_W39:\nnot found')
-        with patch.object(cp, 'get_model', side_effect=error) as get_model:
-            self.loader.plot_regions(DECODER)
-        get_model.assert_called_once()
+        self.load.side_effect = error
+        self.loader.plot_regions(DECODER)
+        self.load.assert_called_once()
         self.warning.assert_called_once()
         self.assertEqual(self.warning.call_args.args[1:], (DECODER, str(error)))
         self.compute.assert_not_called()
 
     def test_unexpected_failure_one_warning(self):
         """Any other error getting the model gives one warning and is logged"""
-        with (
-            patch.object(cp, 'get_model', side_effect=RuntimeError('boom')),
-            self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'),
-        ):
+        self.set_model(source=('org/model', '2026_W39'))
+        self.load.side_effect = RuntimeError('boom')
+        with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'):
             self.loader.plot_regions(DECODER)
         self.warning.assert_called_once()
         self.assertIn('Unexpected error in', self.warning.call_args.args[2])
         self.compute.assert_not_called()
 
     def test_loaded_model_computes_each_shank(self):
-        """With the model available, it is looked up once and every shank is computed"""
-        with patch.object(cp, 'get_model', return_value=object()) as get_model:
-            self.loader.plot_regions(DECODER)
-        get_model.assert_called_once()
+        """With the model loaded, one task computes every shank and they are all drawn"""
+        self.set_model(model=object(), source=('org/model', '2026_W39'))
+        self.loader.plot_regions(DECODER)
+        self.load.assert_not_called()
+        self.assertEqual(len(self.runner.tasks), 1)
         self.assertEqual(self.compute.call_count, len(SHANKS))
+        for shank in SHANKS:
+            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
         self.warning.assert_not_called()
 
     def test_mapping_needs_no_model(self):
-        """Beryl is computed without looking up a model"""
+        """Beryl is computed at once, without a model or a background task"""
         self.loader.func_map['Beryl'] = MagicMock(return_value={'Beryl': Bunch()})
-        with patch.object(cp, 'get_model') as get_model:
+        with patch.object(cp, 'choose_source') as dialog:
             self.loader.plot_regions('Beryl')
-        get_model.assert_not_called()
+        dialog.assert_not_called()
+        self.assertEqual(self.runner.tasks, [])
         self.assertEqual(self.loader.func_map['Beryl'].call_count, len(SHANKS))
+
+    def test_all_cached_no_task(self):
+        """When every shank has the option cached, it is drawn without a task"""
+        for shank in SHANKS:
+            self.controller.shank_items[shank]['default'].model.predictions = Bunch(
+                {DECODER: Bunch(region='cached')}
+            )
+        self.loader.plot_regions(DECODER)
+        self.assertEqual(self.runner.tasks, [])
+        self.compute.assert_not_called()
+        for shank in SHANKS:
+            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+
+    def test_only_uncached_shanks_computed(self):
+        """Only the shanks without the option cached are computed; all are drawn"""
+        self.set_model(model=object())
+        cached = self.controller.shank_items['a']['default']
+        cached.model.predictions = Bunch({DECODER: Bunch(region='cached')})
+        self.loader.plot_regions(DECODER)
+        computed = [c.args[1] for c in self.compute.call_args_list]
+        self.assertEqual(computed, [self.controller.shank_items['b']['default']])
+        for shank in SHANKS:
+            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+
+    def test_another_task_running(self):
+        """While another task runs, the plot is refused with a warning"""
+        self.set_model(model=object())
+        self.runner.busy = True
+        self.loader.plot_regions(DECODER)
+        self.warning.assert_called_once()
+        self.compute.assert_not_called()
+
+
+class TestPredictionTask(unittest.TestCase):
+    """The background task: load the model if needed, then compute each shank."""
+
+    def setUp(self):
+        self.controller = _fake_controller()
+        self.shanks = [self.controller.shank_items[s]['default'] for s in SHANKS]
+        self.computed = []
+
+        def compute(controller, items, model, progress):
+            progress(0.5, 'halfway')
+            self.computed.append(items.name)
+            return {DECODER: Bunch(shank=items.name)}, f'extra {items.name}'
+
+        self.spec = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=compute)
+        self.load = self.enterContext(patch.object(cp, 'load_model', return_value='model'))
+        self.reports = []
+        self.cancel_at = None
+
+    def progress_callback(self, message, current, total):
+        self.reports.append((message, current, total))
+        if self.cancel_at is not None and len(self.reports) >= self.cancel_at:
+            raise cp.TaskCancelledError()
+
+    def run_task(self, model=None, source=('repo', 'tag')):
+        return cp._prediction_task(
+            self.controller, self.spec, model, source, self.shanks, self.progress_callback
+        )
+
+    def test_loads_then_computes_each_shank(self):
+        """The model is loaded, then each shank computed with it, in order"""
+        outcome = self.run_task()
+        self.assertEqual(self.load.call_args.args[:2], (self.spec, ('repo', 'tag')))
+        self.assertEqual((outcome.model, outcome.loaded_from), ('model', ('repo', 'tag')))
+        self.assertEqual(self.computed, list(SHANKS))
+        self.assertEqual([r[2] for r in outcome.results], ['extra a', 'extra b'])
+        self.assertFalse(outcome.cancelled)
+
+    def test_loaded_model_not_loaded_again(self):
+        """With the model given, nothing is loaded"""
+        outcome = self.run_task(model='loaded', source=None)
+        self.load.assert_not_called()
+        self.assertIsNone(outcome.loaded_from)
+        self.assertEqual(self.computed, list(SHANKS))
+
+    def test_progress_names_shank(self):
+        """Each shank's progress is prefixed with its name and position"""
+        self.run_task(model='loaded')
+        self.assertIn(('a (1/2): halfway', 500, 1000), self.reports)
+        self.assertIn(('b (2/2): starting…', 0, 0), self.reports)
+
+    def test_error_on_one_shank(self):
+        """A shank's error is kept and the next shank still computed"""
+        compute = self.spec.compute
+
+        def failing(controller, items, model, progress):
+            if items.name == 'a':
+                raise PredictionError('no features on a')
+            return compute(controller, items, model, progress)
+
+        self.spec = dataclasses.replace(self.spec, compute=failing)
+        outcome = self.run_task(model='loaded')
+        self.assertEqual(outcome.errors, ['no features on a'])
+        self.assertEqual([r[0].name for r in outcome.results], ['b'])
+
+    def test_unexpected_error_on_one_shank(self):
+        """An unexpected error on a shank is logged, reported, and the next shank computed"""
+        compute = self.spec.compute
+
+        def failing(controller, items, model, progress):
+            if items.name == 'a':
+                raise RuntimeError('boom')
+            return compute(controller, items, model, progress)
+
+        self.spec = dataclasses.replace(self.spec, compute=failing)
+        with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'):
+            outcome = self.run_task(model='loaded')
+        self.assertEqual(len(outcome.errors), 1)
+        self.assertIn('Unexpected error in', outcome.errors[0])
+        self.assertEqual([r[0].name for r in outcome.results], ['b'])
+
+    def test_cancel_between_shanks(self):
+        """After Cancel, the finished shanks are kept and the rest skipped"""
+        # Reports: a starting, a halfway, b starting (Cancel).
+        self.cancel_at = 3
+        outcome = self.run_task(model='loaded')
+        self.assertTrue(outcome.cancelled)
+        self.assertEqual([r[0].name for r in outcome.results], ['a'])
+        self.assertEqual(self.computed, ['a'])
+
+    def test_model_kept_after_cancel(self):
+        """A model loaded before Cancel is still handed back, to be stored"""
+        self.cancel_at = 1  # the first shank's first report
+        outcome = self.run_task()
+        self.assertTrue(outcome.cancelled)
+        self.assertEqual(outcome.loaded_from, ('repo', 'tag'))
+        self.assertEqual(outcome.results, [])
+
+
+class TestPredictionInThread(unittest.TestCase):
+    """plot_regions with the controller's real background runner and a real thread."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_drawn_when_task_ends(self):
+        """The views are computed off the main thread and drawn once the task has ended"""
+        controller = _fake_controller()
+        controller.model.brain_atlas = None
+        controller.view = None
+        runner = _Runner()
+        controller.run_in_thread = runner.run_in_thread
+        threads = []
+
+        def compute(c, items, model, progress):
+            threads.append(threading.get_ident())
+            return {DECODER: Bunch(region='view')}, None
+
+        spec = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=compute)
+        controller.plugins = {PLUGIN_KEY: Bunch({spec.key: dict(model=object(), source=None)})}
+        with patch.dict(cp.MODEL_FOR_OPTION, {DECODER: spec}):
+            cp.ChannelPrediction(controller).plot_regions(DECODER)
+            for _ in range(500):
+                if not runner.task_running:
+                    break
+                QtTest.QTest.qWait(10)
+        self.assertFalse(runner.task_running)
+        self.assertEqual(len(threads), len(SHANKS))
+        self.assertNotIn(threading.get_ident(), threads)
+        for shank in SHANKS:
+            controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
 
 
 class TestModelOptions(unittest.TestCase):
@@ -296,6 +467,16 @@ class TestModelOptions(unittest.TestCase):
 
 class TestModelRegistry(unittest.TestCase):
     """The models offered, the Plugins menu built from them, and clearing loaded models."""
+
+    def test_model_for_option(self):
+        """Decoder options give their decoder, auto-alignment options the alignment model"""
+        for name, spec in inference.DECODER_SPECS.items():
+            for option in (name, name + inference.CUMULATIVE_SUFFIX):
+                self.assertIs(cp.MODEL_FOR_OPTION[option], spec)
+        for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
+            self.assertIs(cp.MODEL_FOR_OPTION[option], spatial_encoder.ENCODER_SPEC)
+        for option in ('Beryl', 'Cosmos'):
+            self.assertNotIn(option, cp.MODEL_FOR_OPTION)
 
     @classmethod
     def setUpClass(cls):

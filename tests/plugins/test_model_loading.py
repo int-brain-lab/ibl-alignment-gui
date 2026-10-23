@@ -1,9 +1,10 @@
 """Tests for loading the Channel Prediction models: the load dialog and the cached model.
 
-The shared ``load_model_dialog`` and ``get_model`` run with the spec of each region decoder
-(``inference``) and of the auto-alignment encoder (``spatial_encoder``). Model loading, the dialogs
-and the prediction caches are replaced by stand-ins: no model, network or window is used, and
-``ephysatlas`` does not need to be installed.
+Loading from the Plugins menu, selecting a model's option and the shared loading steps run with
+the spec of each region decoder (``inference``) and of the auto-alignment encoder
+(``spatial_encoder``). Model loading, the dialogs, the background tasks and the prediction caches
+are replaced by stand-ins: no model, network, thread or window is used, and ``ephysatlas`` does
+not need to be installed.
 """
 
 import dataclasses
@@ -18,6 +19,8 @@ from unittest.mock import MagicMock, patch
 
 from qtpy import QtWidgets
 
+from ibl_alignment_gui.app.load_worker import TaskCancelledError
+from ibl_alignment_gui.plugins import channel_prediction as cp
 from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
@@ -28,18 +31,34 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
 )
 from iblutil.util import Bunch
+from tests.plugins._runner import InlineRunner
 
 DECODER = 'XGBoost region prediction'
 NEW_SOURCE = ('org/new-model', '2026_W40')
 
 
 def _fake_controller(features: bool = True) -> SimpleNamespace:
-    """A controller with the plugin state and one shank that does or does not have features."""
+    """A controller with the plugin state and one aligned shank, with or without features.
+
+    Background tasks run at once (:class:`InlineRunner`); the view records the options selected.
+    """
     handler = SimpleNamespace(raw_data={'features': Bunch(exists=features)})
+    items = SimpleNamespace(
+        name='probe00', model=SimpleNamespace(predictions=None), view=MagicMock()
+    )
+    view = MagicMock()
+    view.has_menu_option.return_value = True  # the model options are already offered
     return SimpleNamespace(
         plugins={PLUGIN_KEY: Bunch()},
-        view=None,
-        model=SimpleNamespace(shanks={'probe00': {'default': handler}}),
+        view=view,
+        run_in_thread=InlineRunner(),
+        all_shanks=['probe00'],
+        shank_items={'probe00': {'default': items}},
+        model=SimpleNamespace(
+            shanks={'probe00': {'default': handler}},
+            configs=['default'],
+            get_current_shank=lambda shank, config: SimpleNamespace(align_exists=True),
+        ),
     )
 
 
@@ -81,7 +100,11 @@ class _ModelLoadingTests:
         self.critical = self.enterContext(patch.object(QtWidgets.QMessageBox, 'critical'))
         # The spec as used by the tests: clearing the cached predictions is recorded, not done.
         self.invalidate = MagicMock()
-        self.test_spec = dataclasses.replace(self.spec, invalidate=self.invalidate)
+        # Running the model on a shank is recorded and gives one view, so loading is tested alone.
+        self.compute = MagicMock(return_value=({self.spec.options[0]: Bunch()}, None))
+        self.test_spec = dataclasses.replace(
+            self.spec, invalidate=self.invalidate, compute=self.compute, on_computed=None
+        )
         self.patch_loader()
 
     # -- stand-ins --------------------------------------------------------------------------
@@ -119,11 +142,18 @@ class _ModelLoadingTests:
             QtWidgets.QDialog.Rejected if source is None else QtWidgets.QDialog.Accepted
         )
 
-    def load_model_dialog(self) -> bool:
-        return _common.load_model_dialog(self.controller, self.test_spec)
+    def menu_load(self) -> None:
+        """Load the model from its Plugins menu item."""
+        cp._load_model(self.controller, self.test_spec)
 
-    def get_model(self):
-        return _common.get_model(self.controller, self.test_spec)
+    def plot(self) -> None:
+        """Select the model's first region-plot option."""
+        cp._predict(self.controller, self.test_spec, self.test_spec.options[0])
+
+    def shown(self) -> bool:
+        """Whether, after loading from the menu, the model's first option was selected."""
+        calls = self.controller.view.trigger_menu_option.call_args_list
+        return [c.args for c in calls] == [('region', self.test_spec.options[0])]
 
     def set_state(self, model=None, source=None) -> None:
         self.controller.plugins[PLUGIN_KEY][self.key] = dict(model=model, source=source)
@@ -131,19 +161,24 @@ class _ModelLoadingTests:
     def state(self) -> dict:
         return self.controller.plugins[PLUGIN_KEY][self.key]
 
-    # -- load_model_dialog --------------------------------------------------------------------
+    def stored_model(self):
+        """The model kept in the plugin state, or None."""
+        return (self.controller.plugins[PLUGIN_KEY].get(self.key) or {}).get('model')
+
+    # -- loading from the Plugins menu ---------------------------------------------------------
 
     def test_no_features_warns(self):
         """Without features the user is warned and no dialog opens"""
         self.controller = _fake_controller(features=False)
-        self.assertFalse(self.load_model_dialog())
+        self.menu_load()
         self.warning.assert_called_once()
         self.assertEqual(self.dialogs, [])
         self.assertEqual(self.loads, [])
+        self.assertFalse(self.shown())
 
     def test_prefills_defaults(self):
         """The first time, the dialog offers the default repository and release tag"""
-        self.load_model_dialog()
+        self.menu_load()
         self.assertEqual(
             self.dialogs, [(self.title, self.default_repo, self.default_revision, None)]
         )
@@ -151,114 +186,196 @@ class _ModelLoadingTests:
     def test_prefills_previous_hub_source(self):
         """The dialog offers the Hub source loaded before"""
         self.set_state(model=object(), source=('org/old-model', '2026_W30'))
-        self.load_model_dialog()
+        self.menu_load()
         self.assertEqual(self.dialogs, [(self.title, 'org/old-model', '2026_W30', None)])
 
     def test_prefills_previous_local_source(self):
         """A local release loaded before goes in the local field, with the default repository"""
         with tempfile.TemporaryDirectory() as local:
             self.set_state(model=object(), source=(local, '2026_W30'))
-            self.load_model_dialog()
+            self.menu_load()
             self.assertEqual(
                 self.dialogs, [(self.title, self.default_repo, '2026_W30', Path(local))]
             )
 
     def test_cancel_without_model(self):
-        """Cancelling with no model loaded loads nothing"""
+        """Cancelling with no model loaded loads nothing and shows nothing"""
         self.choose(None)
-        self.assertFalse(self.load_model_dialog())
+        self.menu_load()
         self.assertEqual(self.loads, [])
-        self.assertIsNone(self.state()['model'])
+        self.assertIsNone(self.stored_model())
+        self.assertFalse(self.shown())
 
     def test_cancel_keeps_loaded_model(self):
-        """Cancelling keeps the model already loaded"""
+        """Cancelling keeps the model already loaded, and shows it"""
         loaded = object()
         self.set_state(model=loaded, source=('org/old-model', '2026_W30'))
         self.choose(None)
-        self.assertTrue(self.load_model_dialog())
+        self.menu_load()
         self.assertIs(self.state()['model'], loaded)
         self.assertEqual(self.loads, [])
+        self.assertTrue(self.shown())
 
     def test_loads_new_source(self):
-        """A new source is loaded, stored and clears the cached predictions"""
+        """A new source is loaded in the background, stored, clears the predictions and shown"""
         self.choose(NEW_SOURCE)
-        self.assertTrue(self.load_model_dialog())
+        self.menu_load()
         self.assertEqual(self.loads, [NEW_SOURCE])
         self.assertIs(self.state()['model'], self.model)
         self.assertEqual(tuple(self.state()['source']), NEW_SOURCE)
         self.invalidate.assert_called_once()
+        self.assertTrue(self.shown())
 
     def test_same_source_not_reloaded(self):
         """Choosing the source already loaded does not load it again"""
         loaded = object()
         self.set_state(model=loaded, source=NEW_SOURCE)
         self.choose(NEW_SOURCE)
-        self.assertTrue(self.load_model_dialog())
+        self.menu_load()
         self.assertEqual(self.loads, [])
+        self.assertEqual(self.controller.run_in_thread.tasks, [])
         self.assertIs(self.state()['model'], loaded)
         self.invalidate.assert_not_called()
+        self.assertTrue(self.shown())
 
     def test_load_failure(self):
         """A failed load is reported with the source and error, and nothing is stored"""
         self.load_error = RuntimeError('network down')
         self.choose(NEW_SOURCE)
-        self.assertFalse(self.load_model_dialog())
+        self.menu_load()
         self.critical.assert_called_once()
         message = self.critical.call_args.args[2]
         self.assertIn('org/new-model@2026_W40', message)
         self.assertIn('network down', message)
-        self.assertIsNone(self.state()['model'])
+        self.assertIsNone(self.stored_model())
         self.invalidate.assert_not_called()
+        self.assertFalse(self.shown())
 
-    # -- get_model ----------------------------------------------------------------------------
+    def test_cancel_during_load_keeps_model(self):
+        """Cancelling the load stores nothing and keeps the current model"""
+        current = object()
+        self.set_state(model=current, source=('org/old-model', '2026_W30'))
+        self.choose(NEW_SOURCE)
+        self.controller.run_in_thread.cancel_at = 1  # Cancel at the load's first report
+        self.menu_load()
+        self.assertIs(self.state()['model'], current)
+        self.assertEqual(tuple(self.state()['source']), ('org/old-model', '2026_W30'))
+        self.invalidate.assert_not_called()
+        self.critical.assert_not_called()
+        self.assertFalse(self.shown())
+
+    def test_load_shows_progress(self):
+        """Loading runs as a cancellable task titled with the spec's title, reporting progress"""
+        self.choose(NEW_SOURCE)
+        self.menu_load()
+        tasks = self.controller.run_in_thread.tasks
+        self.assertEqual(
+            [(t['title'], t['cancellable']) for t in tasks], [(self.spec.title, True)]
+        )
+        self.assertIn('downloaded on first use', self.controller.run_in_thread.progress[0])
+
+    def test_another_task_running(self):
+        """While another task runs, loading is refused with a warning"""
+        self.choose(NEW_SOURCE)
+        self.controller.run_in_thread.busy = True
+        self.menu_load()
+        self.warning.assert_called_once()
+        self.assertEqual(self.loads, [])
+
+    # -- choose_source, load_model, store_model ----------------------------------------------
+
+    def test_choose_source(self):
+        """The chosen source is returned; Cancel returns None; nothing is loaded"""
+        self.choose(NEW_SOURCE)
+        self.assertEqual(_common.choose_source(self.controller, self.test_spec), NEW_SOURCE)
+        self.choose(None)
+        self.assertIsNone(_common.choose_source(self.controller, self.test_spec))
+        self.assertEqual(self.loads, [])
+
+    def test_choose_source_no_features(self):
+        """Without features the user is warned, no dialog opens and None is returned"""
+        self.controller = _fake_controller(features=False)
+        self.assertIsNone(_common.choose_source(self.controller, self.test_spec))
+        self.warning.assert_called_once()
+        self.assertEqual(self.dialogs, [])
+
+    def test_load_model(self):
+        """load_model loads the source with the spec, reporting progress, and stores nothing"""
+        reports = []
+        model = _common.load_model(self.test_spec, NEW_SOURCE, lambda f, m: reports.append(f))
+        self.assertIs(model, self.model)
+        self.assertEqual(self.loads, [NEW_SOURCE])
+        self.assertEqual(reports[-1], 1.0)
+        self.assertNotIn(self.key, self.controller.plugins[PLUGIN_KEY])
+
+    def test_load_model_failure(self):
+        """A failed load raises PredictionError naming the source and the reason"""
+        self.load_error = RuntimeError('network down')
+        with self.assertRaisesRegex(PredictionError, 'org/new-model@2026_W40(.|\n)*network down'):
+            _common.load_model(self.test_spec, NEW_SOURCE, lambda f, m: None)
+
+    def test_load_model_cancel_passes_through(self):
+        """Cancel while loading is not turned into a load failure"""
+        self.load_error = TaskCancelledError()
+        with self.assertRaises(TaskCancelledError):
+            _common.load_model(self.test_spec, NEW_SOURCE, lambda f, m: None)
+
+    def test_store_model(self):
+        """store_model keeps the model and its source and clears its old predictions"""
+        model = object()
+        _common.store_model(self.controller, self.test_spec, model, list(NEW_SOURCE))
+        self.assertEqual(self.state(), dict(model=model, source=NEW_SOURCE))
+        self.invalidate.assert_called_once_with(self.controller)
+
+    # -- selecting one of the model's region-plot options --------------------------------------
 
     def test_cached_model(self):
-        """A loaded model is returned without a dialog or a load"""
+        """A loaded model is used without a dialog or a load"""
         loaded = object()
         self.set_state(model=loaded, source=NEW_SOURCE)
-        self.assertIs(self.get_model(), loaded)
+        self.plot()
         self.assertEqual(self.dialogs, [])
         self.assertEqual(self.loads, [])
+        self.assertIs(self.compute.call_args.args[2], loaded)
 
     def test_preset_source_loads_without_dialog(self):
         """A preset source (as the launcher example sets) is loaded without the dialog"""
         self.set_state(source=NEW_SOURCE)
-        self.assertIs(self.get_model(), self.model)
+        self.plot()
         self.assertEqual(self.loads, [NEW_SOURCE])
         self.assertEqual(self.dialogs, [])
         self.assertIs(self.state()['model'], self.model)
+        self.assertIs(self.compute.call_args.args[2], self.model)
 
     def test_no_model_opens_dialog(self):
-        """With no model, the dialog opens and the chosen model is returned"""
+        """With no model, the dialog opens and the chosen model is loaded and used"""
         self.choose(NEW_SOURCE)
-        self.assertIs(self.get_model(), self.model)
+        self.plot()
         self.assertEqual(len(self.dialogs), 1)
         self.assertEqual(self.loads, [NEW_SOURCE])
+        self.assertIs(self.stored_model(), self.model)
+        self.assertIs(self.compute.call_args.args[2], self.model)
 
     def test_no_model_cancelled(self):
-        """With no model, cancelling the dialog returns None"""
+        """With no model, cancelling the dialog loads and computes nothing"""
         self.choose(None)
-        self.assertIsNone(self.get_model())
+        self.plot()
         self.assertEqual(self.loads, [])
+        self.compute.assert_not_called()
 
     def test_preset_source_failure(self):
-        """A preset source that fails to load raises PredictionError, without a dialog"""
+        """A preset source that fails to load gives one warning, without a dialog"""
         self.load_error = RuntimeError('network down')
         self.set_state(source=NEW_SOURCE)
-        with self.assertRaisesRegex(PredictionError, 'org/new-model@2026_W40(.|\n)*network down'):
-            self.get_model()
+        self.plot()
+        self.warning.assert_called_once()
+        self.assertRegex(
+            self.warning.call_args.args[2], 'org/new-model@2026_W40(.|\n)*network down'
+        )
         self.critical.assert_not_called()
+        self.assertEqual(self.dialogs, [])
         self.assertIsNone(self.state()['model'])
-
-    def test_load_shows_progress(self):
-        """Loading runs behind a progress dialog titled with the spec's title"""
-        self.choose(NEW_SOURCE)
-        with patch.object(
-            _common, 'run_with_progress', wraps=_common.run_with_progress
-        ) as run_with_progress:
-            self.load_model_dialog()
-        run_with_progress.assert_called_once()
-        self.assertEqual(run_with_progress.call_args.args[1], self.spec.title)
+        self.compute.assert_not_called()
 
     # -- ModelSpec ----------------------------------------------------------------------------
 

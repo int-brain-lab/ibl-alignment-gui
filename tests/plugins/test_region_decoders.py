@@ -16,8 +16,9 @@ import pandas as pd
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
 from ibl_alignment_gui.plugins.ephys_atlas import inference
-from ibl_alignment_gui.plugins.ephys_atlas._common import PredictionError
+from ibl_alignment_gui.plugins.ephys_atlas._common import PLUGIN_KEY, PredictionError
 from iblutil.util import Bunch
+from tests.plugins._runner import InlineRunner
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -40,6 +41,42 @@ def _fake_shank(df: pd.DataFrame) -> SimpleNamespace:
     """A shank whose features come from ``df`` (no ONE loader, so they are used as is)."""
     model = SimpleNamespace(raw_data={'features': Bunch(df=df, exists=True)}, loaders={})
     return SimpleNamespace(model=model)
+
+
+def _no_progress(fraction, message) -> None:
+    """A progress callback that ignores the reports."""
+
+
+class TestDecode(unittest.TestCase):
+    """_decode with the features and run_decoder faked: the steps it reports."""
+
+    def setUp(self):
+        self.model = SimpleNamespace(index={'vintage': 'V1'})
+        self.features = self.enterContext(
+            patch.object(inference, 'features_for_vintage', return_value='features')
+        )
+        self.run_decoder = self.enterContext(
+            patch.object(inference, 'run_decoder', return_value=('out', 'depths'))
+        )
+        self.reports = []
+
+    def decode(self):
+        progress = lambda fraction, message: self.reports.append(message)  # noqa: E731
+        return inference._decode('controller', 'items', self.model, progress)
+
+    def test_features_then_predict(self):
+        """The features of the model's vintage are passed to the decoder; prediction is reported"""
+        self.assertEqual(self.decode(), ('out', 'depths'))
+        self.assertEqual(self.features.call_args.args[:3], ('controller', 'items', 'V1'))
+        self.run_decoder.assert_called_once_with(self.model, 'features')
+        self.assertEqual(self.reports, ['Predicting the regions…'])
+
+    def test_no_features(self):
+        """No features for the shank raises PredictionError before predicting"""
+        self.features.return_value = None
+        with self.assertRaisesRegex(PredictionError, 'No features found'):
+            self.decode()
+        self.run_decoder.assert_not_called()
 
 
 class TestRunDecoder(unittest.TestCase):
@@ -119,7 +156,9 @@ class TestRegionDecoders(unittest.TestCase):
         """Every channel gets a region of the model's classes, with its depth."""
         for name, model in self.models.items():
             with self.subTest(name=name):
-                out, depths, _ = inference._predict_df(self.controller, _fake_shank(self.df), name)
+                out, depths = inference._decode(
+                    self.controller, _fake_shank(self.df), model, _no_progress
+                )
                 self.assertEqual(len(out), len(self.df))
                 np.testing.assert_array_equal(depths, self.df['axial_um'])
                 self.assertTrue(np.isin(out['predicted_atlas_id'], model.config['classes']).all())
@@ -128,11 +167,12 @@ class TestRegionDecoders(unittest.TestCase):
         """A flat features table is predicted as one probe, as the (pid, channel)-indexed one."""
         # pid / channel as columns and a plain row index, like a flat features file.
         df_flat = self.df.reset_index()
-        out_flat, depths_flat, _ = inference._predict_df(
-            self.controller, _fake_shank(df_flat), TRANSFORMER
+        model = self.models[TRANSFORMER]
+        out_flat, depths_flat = inference._decode(
+            self.controller, _fake_shank(df_flat), model, _no_progress
         )
-        out_indexed, depths_indexed, _ = inference._predict_df(
-            self.controller, _fake_shank(self.df), TRANSFORMER
+        out_indexed, depths_indexed = inference._decode(
+            self.controller, _fake_shank(self.df), model, _no_progress
         )
         np.testing.assert_array_equal(depths_flat, depths_indexed)
         np.testing.assert_array_equal(
@@ -143,7 +183,9 @@ class TestRegionDecoders(unittest.TestCase):
         """Both views from one run; cumulative probabilities end at 1, one colour per class."""
         for name, model in self.models.items():
             with self.subTest(name=name):
-                views = inference.decode_shank(self.controller, _fake_shank(self.df), name)
+                views, _ = inference.decode_shank(
+                    self.controller, _fake_shank(self.df), model, _no_progress, name
+                )
                 self.assertEqual(set(views), {name, name + inference.CUMULATIVE_SUFFIX})
                 view = views[name + inference.CUMULATIVE_SUFFIX]
                 n_classes = len(model.config['classes'])
@@ -155,11 +197,13 @@ class TestRegionDecoders(unittest.TestCase):
 
     def test_missing_feature_raises(self):
         """A features table without a required column raises PredictionError."""
-        for name in self.models:
+        for name, model in self.models.items():
             with self.subTest(name=name):
                 df = self.df.drop(columns=['rms_ap'])
                 with self.assertRaises(PredictionError):
-                    inference.decode_shank(self.controller, _fake_shank(df), name)
+                    inference.decode_shank(
+                        self.controller, _fake_shank(df), model, _no_progress, name
+                    )
 
 
 RED, BLUE, GREEN = [255, 0, 0], [0, 0, 255], [0, 255, 0]
@@ -194,12 +238,8 @@ class TestDecoderViews(unittest.TestCase):
         )
         self.depths = np.array([0.0, 10.0, 20.0])
         self.model = SimpleNamespace(config={'classes': [1, 2, 3]})
-        self.predict_df = self.enterContext(
-            patch.object(
-                inference,
-                '_predict_df',
-                MagicMock(return_value=(self.out, self.depths, self.model)),
-            )
+        self.decode = self.enterContext(
+            patch.object(inference, '_decode', MagicMock(return_value=(self.out, self.depths)))
         )
 
     def test_predict(self):
@@ -220,19 +260,20 @@ class TestDecoderViews(unittest.TestCase):
 
     def test_decode_shank_both_views_one_run(self):
         """decode_shank runs the model once and returns both views under their options"""
-        views = inference.decode_shank(None, None, DECODER)
+        views, extra = inference.decode_shank(None, None, self.model, _no_progress, DECODER)
         self.assertEqual(set(views), {DECODER, DECODER + inference.CUMULATIVE_SUFFIX})
-        self.predict_df.assert_called_once()
-
-    def test_decode_shank_cancelled(self):
-        """A cancelled model load gives no views"""
-        self.predict_df.return_value = None
-        self.assertIsNone(inference.decode_shank(None, None, DECODER))
+        self.assertIsNone(extra)
+        self.decode.assert_called_once_with(None, None, self.model, _no_progress)
 
     def test_both_options_one_run_per_shank(self):
         """Through the plugin, the second option of a decoder is drawn without running it again"""
-        items = SimpleNamespace(model=SimpleNamespace(predictions=None), view=MagicMock())
+        items = SimpleNamespace(
+            name='a', model=SimpleNamespace(predictions=None), view=MagicMock()
+        )
         controller = SimpleNamespace(
+            plugins={PLUGIN_KEY: Bunch({DECODER: dict(model=self.model, source=None)})},
+            view=None,
+            run_in_thread=InlineRunner(),  # background tasks run at once
             all_shanks=['a'],
             shank_items={'a': {'default': items}},
             model=SimpleNamespace(
@@ -241,12 +282,10 @@ class TestDecoderViews(unittest.TestCase):
                 get_current_shank=lambda s, c: SimpleNamespace(align_exists=True),
             ),
         )
-        func_map = cp.ChannelPrediction(controller).func_map
-        cumulative = DECODER + inference.CUMULATIVE_SUFFIX
-        self.assertIs(func_map[DECODER], func_map[cumulative])
-        cp._plot_region_panels(controller, DECODER, func_map[DECODER])
-        cp._plot_region_panels(controller, cumulative, func_map[cumulative])
-        self.predict_df.assert_called_once()
+        loader = cp.ChannelPrediction(controller)
+        loader.plot_regions(DECODER)
+        loader.plot_regions(DECODER + inference.CUMULATIVE_SUFFIX)
+        self.decode.assert_called_once()
         items.view.plot_histology.assert_called_once()
         items.view.plot_histology_cumulative.assert_called_once()
 

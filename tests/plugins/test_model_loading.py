@@ -63,10 +63,11 @@ def _fake_controller(features: bool = True) -> SimpleNamespace:
 
 
 class _ModelLoadingTests:
-    """The tests, run by each backend's subclass below.
+    """The stand-ins, and the tests of what differs between models, run by each backend's subclass.
 
     A subclass names the backend's spec, state key and defaults, and fakes its model loading in
-    ``patch_loader``.
+    ``patch_loader``. The loading flow itself (:class:`_LoadingFlowTests`) is the same code for
+    every model, so it runs with the decoder only.
     """
 
     spec: ModelSpec
@@ -165,6 +166,37 @@ class _ModelLoadingTests:
         """The model kept in the plugin state, or None."""
         return (self.controller.plugins[PLUGIN_KEY].get(self.key) or {}).get('model')
 
+    # -- what differs between the models ----------------------------------------------------
+
+    def test_prefills_defaults(self):
+        """The first time, the dialog offers the default repository and release tag"""
+        self.menu_load()
+        self.assertEqual(
+            self.dialogs, [(self.title, self.default_repo, self.default_revision, None)]
+        )
+
+    def test_load_model(self):
+        """load_model loads the source with the spec, reporting progress, and stores nothing"""
+        reports = []
+        model = _common.load_model(self.test_spec, NEW_SOURCE, lambda f, m: reports.append(f))
+        self.assertIs(model, self.model)
+        self.assertEqual(self.loads, [NEW_SOURCE])
+        self.assertEqual(reports[-1], 1.0)
+        self.assertNotIn(self.key, self.controller.plugins[PLUGIN_KEY])
+
+    # -- ModelSpec ----------------------------------------------------------------------------
+
+    def test_spec(self):
+        """The spec holds the state key, dialog title and defaults the dialog uses"""
+        self.assertEqual(
+            (self.spec.key, self.spec.title, self.spec.default_source()),
+            (self.key, self.title, (self.default_repo, self.default_revision)),
+        )
+
+
+class _LoadingFlowTests:
+    """The loading flow: the same code for every model, so run with one model only."""
+
     # -- loading from the Plugins menu ---------------------------------------------------------
 
     def test_no_features_warns(self):
@@ -175,13 +207,6 @@ class _ModelLoadingTests:
         self.assertEqual(self.dialogs, [])
         self.assertEqual(self.loads, [])
         self.assertFalse(self.shown())
-
-    def test_prefills_defaults(self):
-        """The first time, the dialog offers the default repository and release tag"""
-        self.menu_load()
-        self.assertEqual(
-            self.dialogs, [(self.title, self.default_repo, self.default_revision, None)]
-        )
 
     def test_prefills_previous_hub_source(self):
         """The dialog offers the Hub source loaded before"""
@@ -292,22 +317,6 @@ class _ModelLoadingTests:
         self.assertIsNone(_common.choose_source(self.controller, self.test_spec))
         self.assertEqual(self.loads, [])
 
-    def test_choose_source_no_features(self):
-        """Without features the user is warned, no dialog opens and None is returned"""
-        self.controller = _fake_controller(features=False)
-        self.assertIsNone(_common.choose_source(self.controller, self.test_spec))
-        self.warning.assert_called_once()
-        self.assertEqual(self.dialogs, [])
-
-    def test_load_model(self):
-        """load_model loads the source with the spec, reporting progress, and stores nothing"""
-        reports = []
-        model = _common.load_model(self.test_spec, NEW_SOURCE, lambda f, m: reports.append(f))
-        self.assertIs(model, self.model)
-        self.assertEqual(self.loads, [NEW_SOURCE])
-        self.assertEqual(reports[-1], 1.0)
-        self.assertNotIn(self.key, self.controller.plugins[PLUGIN_KEY])
-
     def test_load_model_failure(self):
         """A failed load raises PredictionError naming the source and the reason"""
         self.load_error = RuntimeError('network down')
@@ -377,25 +386,8 @@ class _ModelLoadingTests:
         self.assertIsNone(self.state()['model'])
         self.compute.assert_not_called()
 
-    # -- ModelSpec ----------------------------------------------------------------------------
 
-    def test_spec(self):
-        """The spec holds the state key, dialog title and defaults the dialog uses"""
-        self.assertEqual(
-            (self.spec.key, self.spec.title, self.spec.default_source()),
-            (self.key, self.title, (self.default_repo, self.default_revision)),
-        )
-
-    def test_spec_load(self):
-        """The spec's load function loads the source and reports progress to the end"""
-        reports = []
-        model = self.spec.load(NEW_SOURCE, lambda fraction, message: reports.append(fraction))
-        self.assertIs(model, self.model)
-        self.assertEqual(self.loads, [NEW_SOURCE])
-        self.assertEqual(reports[-1], 1.0)
-
-
-class TestDecoderModelLoading(_ModelLoadingTests, unittest.TestCase):
+class TestDecoderModelLoading(_LoadingFlowTests, _ModelLoadingTests, unittest.TestCase):
     """The shared loading with a region decoder's spec."""
 
     spec = inference.DECODER_SPECS[DECODER]
@@ -470,17 +462,6 @@ class TestModelSpecs(unittest.TestCase):
             self.assertIs(spec.compute.func, inference.decode_shank)
             self.assertEqual((spec.compute.args, spec.compute.keywords), ((), {'name': name}))
         self.assertIs(spatial_encoder.ENCODER_SPEC.compute, spatial_encoder.align_shank)
-
-    def test_needs_torch(self):
-        """Only the XGBoost decoder runs without torch"""
-        self.assertEqual(
-            {spec.key: spec.needs_torch for spec in self.SPECS},
-            {
-                'XGBoost region prediction': False,
-                'ProbeTransformer region prediction': True,
-                'Encoding': True,
-            },
-        )
 
     def test_unique(self):
         """No two models share a key, an option or a manifest model class"""

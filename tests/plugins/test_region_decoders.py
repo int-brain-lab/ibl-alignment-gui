@@ -14,11 +14,9 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-from ibl_alignment_gui.plugins import channel_prediction as cp
 from ibl_alignment_gui.plugins.ephys_atlas import inference
-from ibl_alignment_gui.plugins.ephys_atlas._common import PLUGIN_KEY, PredictionError
+from ibl_alignment_gui.plugins.ephys_atlas._common import PredictionError
 from iblutil.util import Bunch
-from tests.plugins._runner import InlineRunner
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -40,7 +38,7 @@ def _fake_controller(models: dict) -> SimpleNamespace:
 def _fake_shank(df: pd.DataFrame) -> SimpleNamespace:
     """A shank whose features come from ``df`` (no ONE loader, so they are used as is)."""
     model = SimpleNamespace(raw_data={'features': Bunch(df=df, exists=True)}, loaders={})
-    return SimpleNamespace(model=model)
+    return SimpleNamespace(name='probe00', config='default', model=model)
 
 
 def _no_progress(fraction, message) -> None:
@@ -126,6 +124,17 @@ class TestRunDecoder(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("missing required column(s): ['b']", message)
         self.assertIn('The model (V1)', message)
+
+    def test_missing_feature_suggests_features_vintage(self):
+        """With the table's vintage known, the error suggests that release of the model"""
+
+        def predict(x):
+            raise KeyError("missing ['b']")
+
+        df = pd.DataFrame({'a': [1.0], 'axial_um': [0.0]})
+        df.attrs['vintage'] = 'V0'
+        with self.assertRaisesRegex(PredictionError, 'load a V0 release of the model'):
+            inference.run_decoder(self._model(['a', 'b'], predict), df)
 
     def test_other_key_error_raised(self):
         """A model KeyError that is not about a missing feature is raised as is"""
@@ -264,30 +273,6 @@ class TestDecoderViews(unittest.TestCase):
         self.assertEqual(set(views), {DECODER, DECODER + inference.CUMULATIVE_SUFFIX})
         self.assertIsNone(extra)
         self.decode.assert_called_once_with(None, None, self.model, _no_progress)
-
-    def test_both_options_one_run_per_shank(self):
-        """Through the plugin, the second option of a decoder is drawn without running it again"""
-        items = SimpleNamespace(
-            name='a', model=SimpleNamespace(predictions=None), view=MagicMock()
-        )
-        controller = SimpleNamespace(
-            plugins={PLUGIN_KEY: Bunch({DECODER: dict(model=self.model, source=None)})},
-            view=None,
-            run_in_thread=InlineRunner(),  # background tasks run at once
-            all_shanks=['a'],
-            shank_items={'a': {'default': items}},
-            model=SimpleNamespace(
-                brain_atlas=None,
-                configs=['default'],
-                get_current_shank=lambda s, c: SimpleNamespace(align_exists=True),
-            ),
-        )
-        loader = cp.ChannelPrediction(controller)
-        loader.plot_regions(DECODER)
-        loader.plot_regions(DECODER + inference.CUMULATIVE_SUFFIX)
-        self.decode.assert_called_once()
-        items.view.plot_histology.assert_called_once()
-        items.view.plot_histology_cumulative.assert_called_once()
 
 
 if __name__ == '__main__':

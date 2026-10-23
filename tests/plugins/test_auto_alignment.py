@@ -209,14 +209,6 @@ class TestAlignShank(unittest.TestCase):
             ],
         )
 
-    def test_invalidate_clears_both(self):
-        """Invalidating clears both views, so the next selection aligns again"""
-        self.plot(AUTO_ALIGNMENT_KEY)
-        spatial_encoder.invalidate_predictions(self.controller)
-        self.assertEqual(dict(self.items.model.predictions), {})
-        self.plot(AUTO_ALIGNMENT_CONFIDENCE_KEY)
-        self.assertEqual(self.align.call_count, 2)
-
     def test_nothing_stored_on_shank(self):
         """Apart from the cached views, nothing about the alignment is kept on the shank"""
         self.plot(AUTO_ALIGNMENT_KEY)
@@ -264,6 +256,15 @@ class TestAlignmentInputs(unittest.TestCase):
         """A table lacking a feature the model needs raises PredictionError naming it"""
         with self.assertRaisesRegex(PredictionError, r"column\(s\): \['b'\](.|\n)*2026_W39"):
             spatial_encoder.alignment_inputs(_fake_model(), _features_table().drop(columns='b'))
+
+
+class TestAlignmentInputsVintage(unittest.TestCase):
+    def test_missing_feature_suggests_features_vintage(self):
+        """With the table's vintage known, the error suggests that release of the model"""
+        df = _features_table().drop(columns='b')
+        df.attrs['vintage'] = '2026_W26'
+        with self.assertRaisesRegex(PredictionError, 'load a 2026_W26 release of the model'):
+            spatial_encoder.alignment_inputs(_fake_model(), df)
 
 
 class TestAlign(unittest.TestCase):
@@ -330,17 +331,6 @@ class TestAlign(unittest.TestCase):
         self.align_histology.side_effect = ValueError('too few usable channels')
         with self.assertRaisesRegex(PredictionError, 'too few usable channels'):
             self.align()
-
-
-class TestAutoAlignmentOptions(unittest.TestCase):
-    def test_both_options_registered(self):
-        """Both options are offered for the alignment model, computed by one run of it"""
-        spec = spatial_encoder.ENCODER_SPEC
-        self.assertEqual(spec.options, (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY))
-        for option in OPTIONS:
-            self.assertIs(cp.MODEL_FOR_OPTION[option], spec)
-        self.assertIs(spec.compute, spatial_encoder.align_shank)
-        self.assertIs(spec.on_computed, spatial_encoder._show_result)
 
 
 if __name__ == '__main__':

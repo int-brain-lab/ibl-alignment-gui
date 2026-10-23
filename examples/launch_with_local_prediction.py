@@ -9,13 +9,14 @@ It simply:
 
 1. Builds the controller in offline mode (optionally loading a YAML session config via ``--yaml``).
 2. Pre-sets the *Channel Prediction* plugin's model sources (the local releases given with
-   ``--model-dir``, otherwise the Hugging Face Hub releases of the region decoders) and
-   ``features_path`` so the dialogs are skipped and inference runs straight away.
+   ``--model-dir``, otherwise each model's default release on the Hugging Face Hub) and
+   ``features_paths`` so the dialogs are skipped and the models run straight away.
 3. Shows the window and enters the Qt event loop.
 
 After the GUI opens (the session auto-loads when ``--yaml`` is given), click
-``Region Plots -> XGBoost region prediction`` (or ``ProbeTransformer region prediction``, or
-their ``(cumulative)`` entries) to overlay the predicted regions on the reference histology.
+``Region Plots -> XGBoost region prediction`` (or ``ProbeTransformer region prediction``,
+``Auto-alignment``, or their other entries) to overlay the predicted regions on the reference
+histology.
 
 Run with::
 
@@ -28,8 +29,8 @@ Run with::
 ``--model-dir`` is a local release directory (it holds ``ephysatlas_model.json``) and can be given
 once per model: the release's manifest ``model_class`` tells which model it is -- the XGBoost or
 ProbeTransformer region decoder, or the automatic-alignment model (``ea-encoder-channel``). A
-region decoder without a ``--model-dir`` is downloaded from the Hugging Face Hub; the
-automatic-alignment model then loads from the Hub through its own dialog.
+model without a ``--model-dir`` is downloaded from the Hugging Face Hub, at its default release
+(for the automatic-alignment model, the one ibleatools names).
 
 """
 
@@ -45,16 +46,12 @@ from pathlib import Path
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
-from ibl_alignment_gui.plugins.channel_prediction import MODELS, PLUGIN_NAME
-from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
-from ibl_alignment_gui.plugins.ephys_atlas.spatial_encoder import ENCODER_SPEC
+from ibl_alignment_gui.plugins.channel_prediction import MODELS, PLUGIN_NAME, available_models
+from ibl_alignment_gui.plugins.ephys_atlas._common import ALL_SHANKS
 
 # Model locations are machine-specific, so they are passed on the command line rather than
 # defaulted here. Features normally live in the session YAML, so --features is only an override
 # for YAMLs that do not specify a `features` dataset.
-
-# The plugin-state key the automatic-alignment model is cached under.
-ENCODER_STATE_KEY = ENCODER_SPEC.key
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -149,20 +146,16 @@ def main() -> None:
     # dialogs are skipped on the first click. Features normally come from the session YAML.
     plugin_state = controller.plugins[PLUGIN_NAME]
 
-    # Each region decoder: its local release when given, else its Hugging Face repository.
-    for name, spec in DECODER_SPECS.items():
+    # Every model offered (those needing torch only with torch): its local release when given,
+    # else its default release on the Hugging Face Hub. The model loads on its first option.
+    for spec in available_models():
         repo, revision = spec.default_source()
-        plugin_state[name] = {'source': (sources.get(name, repo), revision), 'model': None}
+        plugin_state[spec.key] = {'source': (sources.get(spec.key, repo), revision), 'model': None}
+        logger.info('Model:         %s -> %s@%s', spec.key, sources.get(spec.key, repo), revision)
     if args.features is not None:
-        plugin_state['features_path'] = args.features
-    # Pre-wire the automatic-alignment model at a local release too, so it runs offline.
-    if ENCODER_STATE_KEY in sources:
-        revision = ENCODER_SPEC.default_source()[1]
-        plugin_state[ENCODER_STATE_KEY] = {
-            'source': (sources[ENCODER_STATE_KEY], revision), 'model': None}
+        plugin_state['features_paths'] = {ALL_SHANKS: args.features}  # one file for all shanks
     logger.info(
-        'Pre-populated %r plugin. Pick a region decoder in Region Plots to run inference.',
-        PLUGIN_NAME)
+        'Pre-populated %r plugin. Pick a model option in Region Plots to run it.', PLUGIN_NAME)
 
     controller.view.show()
     sys.exit(app.exec_())

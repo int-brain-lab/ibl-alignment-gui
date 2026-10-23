@@ -25,6 +25,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
     clear_predictions,
     features_for_vintage,
+    features_vintage,
     get_region_boundaries,
     missing_features_error,
     model_vintage,
@@ -225,7 +226,9 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
         missing = [c for c in model.inputs['features'] if c not in df.columns]
         if not missing:  # not a missing feature: an error in the model, for the safety net
             raise
-        raise missing_features_error(missing, model.index.get('vintage')) from exc
+        raise missing_features_error(
+            missing, model.index.get('vintage'), features_vintage(df)
+        ) from exc
     # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
     # that were predicted.
     depths = df.loc[out.index, 'axial_um'].to_numpy()

@@ -12,6 +12,7 @@ from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal
 from ibl_alignment_gui.plugins.ephys_atlas import spatial_encoder as spatial
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
+    ALL_SHANKS,
     NO_FEATURES_MESSAGE,
     PredictionError,
     choose_source,
@@ -104,31 +105,187 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['data_button_pressed'] = partial(_on_data_loaded, controller)
 
 
-def _set_local_features(controller: 'AlignmentGUIController') -> None:
-    """Prompt for a per-channel features parquet and use it for inference."""
-    parent = controller.view
-    chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
-        parent, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+class FeaturesFilesDialog(QtWidgets.QDialog):
+    """Choose a features file for each shank and configuration, or one file for all shanks.
+
+    Each row opens with the shank's current file; a row left as it is (or emptied) keeps the
+    shank's current features.
+
+    Parameters
+    ----------
+    parent : QtWidgets.QWidget or None
+        The parent window.
+    rows : list of ((str, str), Path or None)
+        Each shank's ``(shank, config)`` and its current features file.
+    """
+
+    def __init__(self, parent, rows: list) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Load features files')
+        self.setMinimumWidth(640)
+        self._initial = {key: '' if path is None else str(path) for key, path in rows}
+
+        self._all = QtWidgets.QCheckBox('One file for all shanks (split by channel)')
+        self._all_field = QtWidgets.QLineEdit()
+        all_row = self._file_row(self._all_field)
+        self._all_widget = QtWidgets.QWidget()
+        self._all_widget.setLayout(all_row)
+        self._all_widget.setVisible(False)
+
+        grid = QtWidgets.QGridLayout()
+        self._fields = {}
+        for row, (key, _) in enumerate(rows):
+            shank, config = key
+            field = QtWidgets.QLineEdit(self._initial[key])
+            self._fields[key] = field
+            grid.addWidget(QtWidgets.QLabel(shank), row, 0)
+            grid.addWidget(QtWidgets.QLabel(config), row, 1)
+            grid.addLayout(self._file_row(field), row, 2)
+        self._rows_widget = QtWidgets.QWidget()
+        self._rows_widget.setLayout(grid)
+        self._all.toggled.connect(self._all_widget.setVisible)
+        self._all.toggled.connect(lambda on: self._rows_widget.setVisible(not on))
+
+        note = QtWidgets.QLabel("Rows left as they are keep the shank's current features.")
+        note.setWordWrap(True)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QtWidgets.QVBoxLayout(self)
+        for widget in (self._all, self._all_widget, self._rows_widget, note, buttons):
+            layout.addWidget(widget)
+
+    def _file_row(self, field: QtWidgets.QLineEdit) -> QtWidgets.QHBoxLayout:
+        """Return a file field with a Browse button."""
+        browse = QtWidgets.QPushButton('Browse…')
+        browse.clicked.connect(lambda: self._browse(field))
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(field)
+        row.addWidget(browse)
+        return row
+
+    def _browse(self, field: QtWidgets.QLineEdit) -> None:
+        chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+        )
+        if chosen:
+            field.setText(chosen)
+
+    def chosen(self) -> dict:
+        """Return the files to apply: one for all shanks, or the changed rows per shank."""
+        if self._all.isChecked():
+            text = self._all_field.text().strip()
+            return {ALL_SHANKS: Path(text)} if text else {}
+        return {
+            key: Path(field.text().strip())
+            for key, field in self._fields.items()
+            if field.text().strip() and field.text().strip() != self._initial[key]
+        }
+
+
+def _shank_handlers(controller: 'AlignmentGUIController') -> list:
+    """Return every shank's ``((shank, config), ShankHandler)``."""
+    return [
+        ((shank, config), handler)
+        for shank, configs in controller.model.shanks.items()
+        for config, handler in configs.items()
+    ]
+
+
+def _current_features_file(controller: 'AlignmentGUIController', key, handler) -> Path | None:
+    """Return the features file a shank uses now: the one chosen before, or its session's file."""
+    paths = plugin_state(controller).get('features_paths') or {}
+    if key in paths or ALL_SHANKS in paths:
+        return paths.get(key, paths.get(ALL_SHANKS))
+    loader = handler.loaders.get('features')
+    return loader.features_path if isinstance(loader, FeatureLoaderLocal) else None
+
+
+def _check_features_files(controller: 'AlignmentGUIController', chosen: dict) -> list[str]:
+    """Return a line for each chosen file that has no features for its shank (none if all do).
+
+    A file for all shanks only needs features in it, as it is split by channel. A file that cannot
+    be read (e.g. not a parquet file) is reported the same way.
+    """
+    handlers = dict(_shank_handlers(controller))
+    problems = []
+    for key, path in chosen.items():
+        if key == ALL_SHANKS:
+            label, sites = 'All shanks', None
+        else:
+            handler = handlers[key]
+            label = f'{key[0]} ({key[1]})'
+            sites = (
+                handler.loaders['geom'].get_sites_for_shank(handler.shank_idx)
+                if handler.data_loaded
+                else None
+            )
+        try:
+            exists = FeatureLoaderLocal(path).load_features(sites).get('exists', False)
+        except Exception as exc:
+            problems.append(f'{label}: {path} could not be read ({type(exc).__name__}: {exc})')
+            continue
+        if not exists:
+            problems.append(f'{label}: no features for this shank in {path}')
+    return problems
+
+
+def _apply_features_files(controller: 'AlignmentGUIController', chosen: dict) -> None:
+    """Remember the chosen files, load them into the loaded shanks and clear old predictions.
+
+    A file for all shanks replaces any shank's own file; a shank's own file overrides the file
+    for all shanks. Shanks whose data is not loaded yet load their file when they are predicted
+    on (``ephys_atlas._common._get_features_df``).
+    """
+    paths = (
+        {} if ALL_SHANKS in chosen else dict(plugin_state(controller).get('features_paths') or {})
     )
+    paths.update(chosen)
+    plugin_state(controller)['features_paths'] = paths
+    for key, handler in _shank_handlers(controller):
+        path = chosen.get(key, chosen.get(ALL_SHANKS))
+        if path is not None and handler.data_loaded:
+            handler.load_ephys_features(FeatureLoaderLocal(path))
+    _invalidate_loaded_models(controller)
+
+
+def _set_local_features(controller: 'AlignmentGUIController') -> None:
+    """Choose features files for the shanks ("Load features file…") and use them for the models.
+
+    With one shank and one configuration, a plain file dialog; otherwise a file per shank and
+    configuration (:class:`FeaturesFilesDialog`). The files are checked before any is applied.
+    """
+    rows = _shank_handlers(controller)
+    if len(rows) <= 1:
+        chosen_file, _ = QtWidgets.QFileDialog.getOpenFileName(
+            controller.view, 'Select per-channel features file', filter='Parquet (*.pqt *.parquet)'
+        )
+        chosen = {ALL_SHANKS: Path(chosen_file)} if chosen_file else {}
+    else:
+        dialog = FeaturesFilesDialog(
+            controller.view,
+            [(key, _current_features_file(controller, key, handler)) for key, handler in rows],
+        )
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
+            return
+        chosen = dialog.chosen()
     if not chosen:
         return
 
-    path = Path(chosen)
-    loader = FeatureLoaderLocal(path)
-    if not loader.load_features().get('exists', False):
-        QtWidgets.QMessageBox.warning(parent, PLUGIN_NAME, f'No features found in:\n{path}')
+    problems = _check_features_files(controller, chosen)
+    if problems:
+        QtWidgets.QMessageBox.warning(
+            controller.view,
+            PLUGIN_NAME,
+            'No features found for:\n'
+            + '\n'.join(problems)
+            + '\n\nNo features files were changed.',
+        )
         return
-
-    controller.plugins[PLUGIN_NAME]['features_path'] = path
-    # Load the file into every shank whose data is loaded, so the models (and re-runs) use it; a
-    # combined file is split per shank. The other shanks load it from this path when they are
-    # predicted on (ephys_atlas._common._get_features_df).
-    for shank_dict in controller.model.shanks.values():
-        for shank_handler in shank_dict.values():
-            if shank_handler.data_loaded:
-                shank_handler.load_ephys_features(loader)
-    _invalidate_loaded_models(controller)
-    logger.info('Local features file set to %s', path)
+    _apply_features_files(controller, chosen)
+    logger.info('Features files set: %s', {str(k): str(v) for k, v in chosen.items()})
 
 
 def _invalidate_loaded_models(controller: 'AlignmentGUIController') -> None:
@@ -223,7 +380,7 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
     controller : AlignmentGUIController
         The main application controller.
     """
-    controller.plugins[PLUGIN_NAME]['features_path'] = None
+    controller.plugins[PLUGIN_NAME]['features_paths'] = None
     close_alignment_windows(controller)
     _refresh_model_options(controller)
 
@@ -503,16 +660,15 @@ def _plot_region_panels(
     controller: 'AlignmentGUIController',
     items: 'ShankController',
     model: str,
-    func: Callable[..., dict[str, Bunch] | None],
+    func: Callable[..., dict[str, Bunch]],
     **kwargs,
 ) -> str | None:
-    """Compute (and cache) a shank's prediction for ``model`` and draw it.
+    """Compute (and cache) a shank's atlas mapping ``model`` and draw it.
 
     Decorated with :func:`shank_loop`, so a single call iterates over every shank/config (the
-    injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The prediction is
-    computed once per shank and cached on ``items.model.predictions``; cumulative results are
-    drawn as stacked bands, others as a region histology column. Every view ``func`` returns is
-    cached, so a model's other region-plot options are later drawn without computing again.
+    injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The view is computed
+    once per shank and cached on ``items.model.predictions``. The models' predictions are
+    computed in the background instead (:func:`_predict`).
 
     Parameters
     ----------
@@ -521,11 +677,9 @@ def _plot_region_panels(
     items : ShankController
         The shank to compute and draw.
     model : str
-        Region-model key, also the per-shank prediction cache key.
+        The mapping's region-plot option, also its per-shank cache key.
     func : Callable
-        The ``compute_*`` function for ``model``: it returns the views of every region-plot
-        option one run of its model gives, ``{option: view}`` (including ``model``), or None
-        when the user cancelled.
+        The mapping's compute function, returning ``{model: view}``.
 
     Returns
     -------
@@ -548,8 +702,7 @@ def _plot_region_panels(
                 '%s failed on shank %s (%s)', model, kwargs.get('shank'), kwargs.get('config')
             )
             return _unexpected(model, exc)
-        if views is not None:
-            _cache(items).update(views)
+        _cache(items).update(views)
 
     _draw(items, model)
 

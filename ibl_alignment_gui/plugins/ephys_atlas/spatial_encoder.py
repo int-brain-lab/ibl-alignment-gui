@@ -38,6 +38,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     alignment_windows,
     clear_predictions,
     features_for_vintage,
+    features_vintage,
     get_region_boundaries,
     missing_features_error,
     model_vintage,
@@ -226,7 +227,9 @@ def alignment_inputs(model: ChannelModel, df: pd.DataFrame) -> dict:
     """
     missing = [c for c in model.features if c not in df.columns]
     if missing:
-        raise missing_features_error(missing, model_vintage(getattr(model.encoder, 'index', None)))
+        raise missing_features_error(
+            missing, model_vintage(getattr(model.encoder, 'index', None)), features_vintage(df)
+        )
     df = df.sort_values(
         ['axial_um', 'channel'] if 'channel' in df else ['axial_um'], ascending=False
     ).reset_index(drop=True)

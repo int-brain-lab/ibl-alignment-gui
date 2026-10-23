@@ -173,6 +173,10 @@ class ModelSourceDialog(QtWidgets.QDialog):
         return (local or self._repo.text().strip() or self._default_repo), revision
 
 
+# The ``features_paths`` key of a features file for every shank (split by channel), as opposed to
+# a ``(shank, config)`` key for one shank's file.
+ALL_SHANKS = 'all shanks'
+
 NO_FEATURES_MESSAGE = (
     'No features found for this probe. '
     'Set via Plugins -> Channel Prediction -> Load features file...'
@@ -206,8 +210,32 @@ def model_vintage(index: dict | None) -> str:
     return vintage
 
 
-def missing_features_error(missing: list[str], vintage: str) -> PredictionError:
+def features_vintage(df: pd.DataFrame) -> str | None:
+    """Return the vintage a features table was computed with, when it says so.
+
+    The vintage is the table's ``vintage`` attribute (``df.attrs['vintage']``), which pandas keeps
+    in a parquet file: the GUI sets it on the ephys-atlas tables it reads, and a features file
+    written with it set carries it too.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A features table.
+
+    Returns
+    -------
+    str or None
+        The vintage, e.g. ``2026_W26``, or None if the table does not say.
+    """
+    return df.attrs.get('vintage') or None
+
+
+def missing_features_error(
+    missing: list[str], vintage: str, data_vintage: str | None = None
+) -> PredictionError:
     """Return the error for a features table lacking columns a model needs.
+
+    It also points to the other way out: a release of the model matching the features' vintage.
 
     Parameters
     ----------
@@ -215,16 +243,31 @@ def missing_features_error(missing: list[str], vintage: str) -> PredictionError:
         The columns the model needs that the table lacks.
     vintage : str
         The feature vintage the model was trained on.
+    data_vintage : str or None
+        The vintage the features were computed with (:func:`features_vintage`), if known.
 
     Returns
     -------
     PredictionError
-        The error, naming the missing columns and the vintage.
+        The error, naming the missing columns, the vintage and the release to load instead.
     """
-    return PredictionError(
+    message = (
         f'Features file is missing required column(s): {missing}\n\n'
         f'The model ({vintage}) needs features computed with the {vintage} feature set.'
     )
+    if data_vintage and data_vintage != vintage:
+        message += (
+            f'\n\nAlternatively, load a {data_vintage} release of the model (Plugins -> '
+            f'Channel Prediction -> Load ... model, release tag {data_vintage}) to match your '
+            'features.'
+        )
+    else:
+        message += (
+            '\n\nAlternatively, load a release of the model whose vintage matches your features '
+            '(Plugins -> Channel Prediction -> Load ... model, with that vintage as the release '
+            'tag).'
+        )
+    return PredictionError(message)
 
 
 def choose_source(controller: AlignmentGUIController, spec: ModelSpec) -> tuple[str, str] | None:
@@ -411,27 +454,52 @@ def is_model_loaded(controller: AlignmentGUIController, state_key: str) -> bool:
     return bool(state) and state.get('model') is not None
 
 
-def has_local_features(controller: AlignmentGUIController) -> bool:
-    """Return whether the user chose a features file with ``Load features file…``.
+def local_features_path(controller: AlignmentGUIController, items: ShankController) -> Path | None:
+    """Return the features file chosen for this shank and configuration, if any.
+
+    Files chosen with ``Load features file…`` are kept per ``(shank, config)`` in the plugin
+    state's ``features_paths``; the :data:`ALL_SHANKS` key holds one file for every shank, split
+    by channel.
 
     Parameters
     ----------
     controller : AlignmentGUIController
         The main application controller.
+    items : ShankController
+        The shank.
+
+    Returns
+    -------
+    Path or None
+        The shank's own file, else the file for all shanks, else None.
+    """
+    paths = plugin_state(controller).get('features_paths') or {}
+    return paths.get((items.name, items.config), paths.get(ALL_SHANKS))
+
+
+def has_local_features(controller: AlignmentGUIController, items: ShankController) -> bool:
+    """Return whether a features file was chosen for this shank with ``Load features file…``.
+
+    Parameters
+    ----------
+    controller : AlignmentGUIController
+        The main application controller.
+    items : ShankController
+        The shank.
 
     Returns
     -------
     bool
-        True when a local features file overrides the session's features, else False.
+        True when a local features file overrides this shank's features, else False.
     """
-    return plugin_state(controller).get('features_path') is not None
+    return local_features_path(controller, items) is not None
 
 
 def has_features(controller: AlignmentGUIController) -> bool:
     """Return whether per-channel features are available to run a prediction on.
 
-    True when a local features file is configured on the plugin (the offline source) or any loaded
-    shank already holds a non-empty features table (the online source).
+    True when a features file was chosen for any shank (the offline source) or any loaded shank
+    already holds a non-empty features table (the online source).
 
     Parameters
     ----------
@@ -443,7 +511,7 @@ def has_features(controller: AlignmentGUIController) -> bool:
     bool
         True when features are available for at least one loaded shank, else False.
     """
-    if has_local_features(controller):
+    if plugin_state(controller).get('features_paths'):
         return True
     for shank_dict in controller.model.shanks.values():
         for shank_handler in shank_dict.values():
@@ -478,9 +546,9 @@ def _get_features_df(
     """Return the per-channel features DataFrame for a shank, or None if unavailable.
 
     Uses the already-loaded features (online ONE path) when present. Otherwise, in offline/yaml
-    mode where no features loader exists, loads them from the local parquet configured on the
-    plugin (``features_path``) through the shank (:meth:`ShankHandler.load_ephys_features`), which
-    keeps them for the next prediction.
+    mode where no features loader exists, loads the features file chosen for this shank
+    (:func:`local_features_path`) through the shank (:meth:`ShankHandler.load_ephys_features`),
+    which keeps them for the next prediction.
 
     Parameters
     ----------
@@ -496,7 +564,7 @@ def _get_features_df(
     """
     feats = items.model.raw_data.get('features')
     if feats is None or not feats.get('exists', False):
-        features_path = plugin_state(controller).get('features_path')
+        features_path = local_features_path(controller, items)
         if features_path is None:
             return None
         # The shank loads the file, split down to its own channels.
@@ -547,7 +615,7 @@ def features_for_vintage(
     """
     loader = items.model.loaders.get('features')
     if (
-        has_local_features(controller)
+        has_local_features(controller, items)
         or not isinstance(loader, FeatureLoaderOne)
         or loader.feature_version == vintage
     ):

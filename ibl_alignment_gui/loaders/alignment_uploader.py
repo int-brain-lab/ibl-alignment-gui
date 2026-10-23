@@ -184,14 +184,13 @@ class AlignmentUploaderOne(AlignmentUploader):
             Message containing information about upload result.
         """
         # Upload channels
-        # is_channels = self.upload_channels(data)
-        # # Upload alignments
-        # updated_alignments = self.upload_alignments(data)
-        # # Update alignment qc
-        # is_resolved = self.upload_qc(data, updated_alignments)
-        #
-        # return self.get_upload_info(is_channels, is_resolved)
-        return 'la'
+        is_channels = self.upload_channels(data)
+        # Upload alignments
+        updated_alignments = self.upload_alignments(data)
+        # Update alignment qc
+        is_resolved = self.upload_qc(data, updated_alignments)
+
+        return self.get_upload_info(is_channels, is_resolved)
 
     def get_upload_info(self, channels: bool, resolved: bool) -> str:
         """

@@ -733,3 +733,47 @@ class TestFeatureLoaderOneTables(unittest.TestCase):
             df = self.read()
         self.assertTrue(df.empty)
         self.assertIn('ea_active 2026_W39 feature table is not available', logs.output[0])
+
+    def test_table_not_on_s3_is_empty(self):
+        """A table that is not on S3 (download_tables' assertion) gives no rows, and is retried"""
+        missing = AssertionError(
+            'aggregates/atlas/features/multi_area_comm/2026_W42 not found on AWS'
+        )
+        with (
+            patch.object(self.loader, 'download_features', side_effect=missing) as download,
+            self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs,
+        ):
+            self.assertTrue(self.read().empty)
+            self.assertTrue(self.read().empty)
+        self.assertEqual(download.call_count, 2)  # nothing kept as a broken download
+        self.assertIn('ea_active 2026_W39 feature table is not available', logs.output[0])
+
+    def test_load_features_table_not_on_s3(self):
+        """A multi-area insertion whose vintage has no table on S3 gets no features, no error"""
+        loader = FeatureLoaderOne({'id': 'pid'}, MagicMock(), '2026_W42', multi_area=True)
+        loader.one.cache_dir = self.root
+        missing = AssertionError('not found on AWS')
+        with (
+            patch.object(loader, 'download_features', side_effect=missing) as download,
+            self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING'),
+        ):
+            features = loader.load_features()
+        self.assertFalse(features['exists'])
+        # Both projects were asked for: ea_active, then multi_area_comm.
+        self.assertEqual(
+            [c.args[0] for c in download.call_args_list], ['ea_active', 'multi_area_comm']
+        )
+
+    def test_insertion_rows_carry_vintage(self):
+        """The rows read for an insertion say which vintage they are"""
+        self.write_table()
+        df = self.loader.load_dataframe('ea_active', '2026_W39', self.root)
+        self.assertEqual(df.attrs['vintage'], '2026_W39')
+
+    def test_other_download_error_raises(self):
+        """Any other download failure (e.g. the network) still raises"""
+        with (
+            patch.object(self.loader, 'download_features', side_effect=ConnectionError('down')),
+            self.assertRaises(ConnectionError),
+        ):
+            self.read()

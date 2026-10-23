@@ -1131,6 +1131,10 @@ class FeatureLoaderOne(FeatureLoader):
             The feature table rows for this insertion's ``pid``.
         """
         data = self.read_full_dataframe(project, feature, save_path)
+        if data.empty:  # the table is not available (it has no columns to filter on)
+            return data
+        # Record the table's vintage, so a model can tell which feature set these are.
+        data.attrs['vintage'] = feature
 
         return data[data['pid'] == self.pid]
 
@@ -1167,7 +1171,13 @@ class FeatureLoaderOne(FeatureLoader):
                     'No features will be available for this insertion.'
                 )
                 return pd.DataFrame()
-            self.download_features(project, feature, save_path)
+            try:
+                self.download_features(project, feature, save_path)
+            except AssertionError as exc:
+                # ephysatlas.data.download_tables asserts that the table is on S3: a release
+                # without this table (e.g. a vintage with no multi-area table) is not a failure,
+                # just no features. Other errors (network, credentials) still raise.
+                logger.debug('Feature table download found nothing: %s', exc)
             if not table.exists():
                 logger.warning(
                     'The %s %s feature table is not available; no features from it.',

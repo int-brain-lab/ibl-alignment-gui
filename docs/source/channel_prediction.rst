@@ -86,7 +86,13 @@ The path follows the same resolution rules as the other datasets, so it can be r
 probe, configuration or top-level ``path``.
 
 Alternatively a features file can be chosen at runtime from
-``Plugins -> Channel Prediction -> Load features file…``.
+``Plugins -> Channel Prediction -> Load features file…``. For a session with one shank this is a
+plain file dialog. With several shanks (or configurations) it lists one row per shank and
+configuration, each opening with the shank's current file, so every shank can get its own file, as
+needed when each shank was spike sorted on its own. Rows left as they are keep the shank's current
+features. Tick ``One file for all shanks (split by channel)`` instead for a probe sorted as a whole,
+whose features file holds every shank's channels. The files are checked before any is used: a file
+without features for its shank, or one that cannot be read, is reported and nothing is changed.
 
 For an IBL insertion loaded from Alyx, the models otherwise use the ephys-atlas feature table of
 the vintage they were trained on (e.g. ``2026_W26``), which may differ from the latest table shown

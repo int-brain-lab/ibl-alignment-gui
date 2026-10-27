@@ -138,8 +138,8 @@ pre-populates the model paths so the dialogs are skipped.
 Auto-alignment
 --------------
 
-Selecting ``Region Plots -> Auto-alignment`` or ``Region Plots -> Auto-alignment (confidence)``
-(loading the model first if needed) aligns each shank behind a progress dialog and opens its result
+Selecting ``Prediction Plots -> Auto-alignment`` or
+``Prediction Plots -> Auto-alignment (confidence)`` (loading the model first if needed) aligns each shank behind a progress dialog and opens its result
 window once, with:
 
 - the histology track (top to bottom of the brain), the planned trajectory when the features table
@@ -149,7 +149,7 @@ window once, with:
   features where the probe was aligned, next to the features the model predicts along the whole
   track
 
-The two region entries show the same alignment:
+The two prediction entries show the same alignment:
 
 - ``Auto-alignment``: the atlas regions along the histology track, placed at the probe depths the
   alignment found
@@ -166,18 +166,21 @@ loading a new session closes them.
 Where the results appear
 ------------------------
 
-The predictions and the features are added to three of the menu bars:
+The predictions are listed in the ``Prediction Plots`` menu bar, and the features are added to two
+others:
 
 .. list-table::
    :header-rows: 1
    :widths: 25 75
 
    * - Menu
-     - Added entries
-   * - ``Region Plots``
-     - ``XGBoost region prediction`` and ``ProbeTransformer region prediction`` (the most probable region per channel), each with a
-       ``(cumulative)`` entry showing the stacked class probabilities, and ``Auto-alignment`` and
-       ``Auto-alignment (confidence)`` for the auto-alignment
+     - Entries
+   * - ``Prediction Plots``
+     - ``None`` (no prediction), ``XGBoost region prediction`` and ``ProbeTransformer region
+       prediction`` (the most probable region per channel), each with a ``(cumulative)`` entry
+       showing the stacked class probabilities, ``Auto-alignment`` and
+       ``Auto-alignment (confidence)`` for the auto-alignment, and
+       ``All predictions (side by side)``
    * - ``Feature Plots``
      - A single ``Ephys Atlas`` entry, tiling every feature side by side
    * - ``Probe Plots``
@@ -186,8 +189,17 @@ The predictions and the features are added to three of the menu bars:
 Predicted regions
 ~~~~~~~~~~~~~~~~~
 
-The region entries are added alongside the ``Allen``, ``Beryl`` and ``Cosmos`` mappings, so the
-predicted regions can be flipped against the histology regions using the same shortcut:
+The predictions are placed by depth along the probe, like the recorded features, so they are shown
+in the Ephys figure rather than the Histology figure. Selecting a prediction adds a panel after the
+probe plot (or after the feature plot, in the feature view), with the prediction's name above it.
+The panel carries the reference lines, so a predicted boundary can be lined up with the histology
+by dragging a line, and hovering over a predicted region adds its acronym to the panel's title.
+Selecting ``None`` removes the panel.
+
+``All predictions (side by side)`` replaces the image, line and probe plots with one panel per
+prediction, so the models can be compared. Only the models already loaded are shown, computed for
+the shanks that need them in one go; the panels of a model that is not loaded say so. Selecting a
+single prediction, or any image, line, probe or feature plot, returns to the usual view.
 
 .. list-table::
    :widths: 40 60
@@ -195,8 +207,10 @@ predicted regions can be flipped against the histology regions using the same sh
 
    * - Shortcut
      - Action
-   * - :kbd:`Alt+5` / :kbd:`Shift+Alt+5`
-     - Region plots (forward / backward)
+   * - :kbd:`Alt+6` / :kbd:`Shift+Alt+6`
+     - Prediction plots (forward / backward)
+   * - :kbd:`Shift+P`
+     - All predictions, side by side
 
 The entries are offered as soon as a session is loaded, online and offline; selecting one before
 its model is loaded opens the model's load dialog. The ``ProbeTransformer`` and auto-alignment

@@ -54,6 +54,8 @@ Each plot type cycles forward with :kbd:`Alt` and backward with :kbd:`Shift+Alt`
      - Slice plots (forward / backward)
    * - :kbd:`Alt+5` / :kbd:`Shift+Alt+5`
      - Region plots (forward / backward)
+   * - :kbd:`Alt+6` / :kbd:`Shift+Alt+6`
+     - Prediction plots (forward / backward)
 
 Display
 -------
@@ -72,6 +74,8 @@ Display
      - Hide / show the brain region labels
    * - :kbd:`Shift+C`
      - Hide / show the trajectory and the channels on the slice image
+   * - :kbd:`Shift+P`
+     - Show all the channel predictions side by side
    * - :kbd:`T`
      - Toggle between the tabbed and the grid layout
 

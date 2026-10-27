@@ -14,9 +14,9 @@ It simply:
 3. Shows the window and enters the Qt event loop.
 
 After the GUI opens (the session auto-loads when ``--yaml`` is given), click
-``Region Plots -> XGBoost region prediction`` (or ``ProbeTransformer region prediction``,
-``Auto-alignment``, or their other entries) to overlay the predicted regions on the reference
-histology.
+``Prediction Plots -> XGBoost region prediction`` (or ``ProbeTransformer region prediction``,
+``Auto-alignment``, or their other entries) to show the predicted regions alongside the ephys
+plots, or ``Prediction Plots -> All predictions (side by side)`` to compare them.
 
 Run with::
 
@@ -155,7 +155,7 @@ def main() -> None:
     if args.features is not None:
         plugin_state['features_paths'] = {ALL_SHANKS: args.features}  # one file for all shanks
     logger.info(
-        'Pre-populated %r plugin. Pick a model option in Region Plots to run it.', PLUGIN_NAME)
+        'Pre-populated %r plugin. Pick a model option in Prediction Plots to run it.', PLUGIN_NAME)
 
     controller.view.show()
     sys.exit(app.exec_())

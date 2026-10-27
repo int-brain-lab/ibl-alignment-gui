@@ -36,12 +36,40 @@ jobs:
           python-version: 3.13
       - name: sync dependencies
         run: uv sync --locked --no-default-groups --group doc
+      # Pages are drafted with TODO placeholders (see contributing/writing_docs.md). They may
+      # be merged into other branches, but must all be filled in before reaching main.
+      - name: check for TODO placeholders
+        if: github.event_name == 'push' || github.base_ref == 'main'
+        run: |
+          # writing_docs.md describes the convention, so it is the one page allowed to mention it
+          if grep -rn "TODO" docs/source --include=*.md --include=*.rst --exclude=writing_docs.md; then
+            echo "::error::TODO placeholders are left in the documentation (listed above)"
+            exit 1
+          fi
+      # -W makes warnings (e.g. a broken cross-reference) fail the build; --keep-going reports
+      # all of them rather than stopping at the first.
       - name: build documentation
-        run: uv run --no-sync sphinx-build docs/source docs/build
+        run: uv run --no-sync sphinx-build -W --keep-going docs/source docs/build
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'
         with:
           path: docs/build/
+
+  # Checks external links. Allowed to fail for now, as external sites can be down or rate-limit
+  # GitHub runners; look at its output when it fails rather than letting it block a merge.
+  linkcheck:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: 3.13
+      - name: sync dependencies
+        run: uv sync --locked --no-default-groups --group doc
+      - name: check links
+        run: uv run --no-sync sphinx-build -b linkcheck docs/source docs/build/linkcheck
 
   deploy:
     if: github.event_name != 'pull_request'

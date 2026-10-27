@@ -6,4 +6,13 @@ of recording electrodes in the brain.
 
 This project is maintained by the software development team at the International Brain Lab.
 
-[Documentation](https://int-brain-lab.github.io/ibl-alignment-gui/)
+## Documentation
+
+The [documentation](https://int-brain-lab.github.io/ibl-alignment-gui/) is organised in four
+sections:
+
+- **Tutorials**: step-by-step lessons on the sample data, starting with your first alignment
+- **How-to guides**: recipes for tasks with your own data, such as converting recordings or
+  writing a session file
+- **Explanation**: how alignment works, coordinate systems and the region prediction models
+- **Reference**: datasets, session file keys, menus, keyboard shortcuts and the Python API

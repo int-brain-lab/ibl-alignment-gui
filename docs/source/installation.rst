@@ -140,4 +140,5 @@ To verify that the installation was successful, run:
 
 This should print the version number of the installed package without any errors.
 
-If the installation was successful, you can proceed to the :doc:`getting_started` guide.
+If the installation was successful, you can proceed to the first tutorial,
+:ref:`tutorial-first-alignment`.

@@ -1,0 +1,6 @@
+/* Leave a gap below screenshots, both on their own and inside a numbered step.
+   The theme's `.rst-content .align-center { margin: auto }` would otherwise zero it. */
+.rst-content img.align-center,
+.rst-content li > img {
+  margin-bottom: 24px;
+}

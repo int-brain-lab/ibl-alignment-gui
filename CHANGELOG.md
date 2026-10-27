@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Documentation reorganised into tutorials, how-to guides, explanation and reference, following
+  [Diátaxis](https://diataxis.fr/), and written in Markdown (MyST). New pages include tutorials on
+  the sample data, guides for data preparation, session YAMLs, channel prediction and writing
+  plugins, and reference pages for the menus, command line, probe geometry and output files.
+  The documentation build now fails on warnings.
 - Auto-alignment in the Channel Prediction plugin: the recorded channel features are warped along
   the shank's histology track onto the Ephys Atlas channel-level model's predictions
   (`ephysatlas.alignment` in ibleatools). The released model is loaded with

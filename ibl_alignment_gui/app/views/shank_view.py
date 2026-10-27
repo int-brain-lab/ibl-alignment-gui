@@ -154,6 +154,18 @@ class ShankView:
         self.create_slice_items()
         self.create_fit_items()
 
+    @property
+    def feature_figs(self) -> list[pg.PlotItem]:
+        """
+        Return the ephys figures, each of which holds a copy of every feature reference line.
+
+        Returns
+        -------
+        list of pg.PlotItem
+            The ephys figures, in the order of each entry of ``lines_features``.
+        """
+        return [self.fig_img, self.fig_line, self.fig_probe, self.fig_feature]
+
     def init_reference_line_arrays(self) -> None:
         """Initialise arrays used to keep track of reference lines and points."""
         self.lines_features: list[list] = []
@@ -389,7 +401,8 @@ class ShankView:
     def clear_histology(self, fig: pg.PlotItem):
         """Clear items from the histology plot."""
         fig.clear()
-        self.hist_regions = []
+        if fig is self.fig_hist:
+            self.hist_regions = []
 
     def plot_histology(
         self, fig: pg.PlotItem, data: Bunch, ax: str = 'left', boundaries: bool = True
@@ -435,7 +448,8 @@ class ShankView:
                 for line in item.lines:  # the region item's own edge lines, too
                     line.setPen(pg.mkPen(None))
             # Keep track of each histology LinearRegionItem for hover interaction
-            self.hist_regions.append(item)
+            if fig is self.fig_hist:
+                self.hist_regions.append(item)
 
         # Add additional boundary for final region
         if boundaries:
@@ -1176,7 +1190,7 @@ class ShankView:
         if idx[0].size == 0:
             return None, None
         line_idx = idx[0][0]
-        fig_idx = np.setdiff1d(np.arange(0, 4), idx[1][0])  # indices of two other plots
+        fig_idx = np.setdiff1d(np.arange(len(self.feature_figs)), idx[1][0])  # the other plots
         return line_idx, fig_idx
 
     def match_track_line(self, track_line: pg.InfiniteLine) -> int | None:
@@ -1234,9 +1248,9 @@ class ShankView:
         self.fig_hist.addItem(line_track)
         self.lines_tracks.append(line_track)
 
-        # Reference lines on image, line and probe figures (feature)
+        # Reference lines on each ephys figure (feature)
         line_features = []
-        for fig in [self.fig_img, self.fig_line, self.fig_probe, self.fig_feature]:
+        for fig in self.feature_figs:
             line_feature = pg.InfiniteLine(pos=pos, angle=0, pen=pen, movable=True)
             line_feature.setZValue(100)
             fig.addItem(line_feature)
@@ -1294,10 +1308,8 @@ class ShankView:
         line_idx: int
             The index of the reference line to remove
         """
-        self.fig_img.removeItem(self.lines_features[line_idx][0])
-        self.fig_line.removeItem(self.lines_features[line_idx][1])
-        self.fig_probe.removeItem(self.lines_features[line_idx][2])
-        self.fig_feature.removeItem(self.lines_features[line_idx][3])
+        for fig, line in zip(self.feature_figs, self.lines_features[line_idx], strict=True):
+            fig.removeItem(line)
         self.fig_hist.removeItem(self.lines_tracks[line_idx])
 
     def delete_reference_line_and_point(self, line_idx: int) -> None:
@@ -1330,9 +1342,8 @@ class ShankView:
         fig_idx: list
             The index of the figures where the feature line position needs to be updated.
         """
-        self.lines_features[line_idx][fig_idx[0]].setPos(feature_line.value())
-        self.lines_features[line_idx][fig_idx[1]].setPos(feature_line.value())
-        self.lines_features[line_idx][fig_idx[2]].setPos(feature_line.value())
+        for i in fig_idx:
+            self.lines_features[line_idx][i].setPos(feature_line.value())
         self.points[line_idx].setData(
             x=[self.lines_features[line_idx][0].pos().y()],
             y=[self.lines_tracks[line_idx].pos().y()],
@@ -1373,17 +1384,13 @@ class ShankView:
     def remove_reference_lines_from_display(self) -> None:
         """Remove all reference lines from the respective plots."""
         for line_feature, line_track in zip(self.lines_features, self.lines_tracks, strict=False):
-            self.fig_img.removeItem(line_feature[0])
-            self.fig_line.removeItem(line_feature[1])
-            self.fig_probe.removeItem(line_feature[2])
-            self.fig_feature.removeItem(line_feature[3])
+            for fig, line in zip(self.feature_figs, line_feature, strict=True):
+                fig.removeItem(line)
             self.fig_hist.removeItem(line_track)
 
     def add_reference_lines_to_display(self) -> None:
         """Add all reference lines to the respective plots."""
         for line_feature, line_track in zip(self.lines_features, self.lines_tracks, strict=False):
-            self.fig_img.addItem(line_feature[0])
-            self.fig_line.addItem(line_feature[1])
-            self.fig_probe.addItem(line_feature[2])
-            self.fig_feature.addItem(line_feature[3])
+            for fig, line in zip(self.feature_figs, line_feature, strict=True):
+                fig.addItem(line)
             self.fig_hist.addItem(line_track)

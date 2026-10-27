@@ -181,5 +181,42 @@ class TestLayouts(unittest.TestCase):
                         self.assertEqual(self.in_layout(widget, view.fig_pred), prediction)
 
 
+class TestAllPredictionsLayout(unittest.TestCase):
+    """The all predictions view has one figure per prediction, each with the reference lines."""
+
+    KEYS = ('A', 'A (cumulative)', 'B')
+
+    @classmethod
+    def setUpClass(cls):
+        _setup_qt(cls)
+
+    def test_one_figure_per_prediction(self):
+        view = ShankView('a', 0, 'default', prediction_keys=self.KEYS)
+        self.assertEqual(list(view.fig_preds), list(self.KEYS))
+        view.create_reference_line_and_point(100)
+        for fig in view.fig_preds.values():
+            self.assertIn(fig, view.feature_figs)
+            line = view.lines_features[0][view.feature_figs.index(fig)]
+            self.assertIn(line, fig.items)
+
+    def test_single(self):
+        view = ShankView('a', 0, 'default', prediction_keys=self.KEYS)
+        widget = custom_widgets.SingleConfigPredictionWidget(view)
+        layout = next(iter(widget.ephys_area.ci.items))
+        for fig in view.fig_preds.values():
+            self.assertIn(fig, layout.items)
+        self.assertNotIn(view.fig_img, layout.items)
+        # Clicks are mapped through the prediction figures, in microns
+        self.assertEqual(view.y_scale, 1)
+
+    def test_dual(self):
+        views = [ShankView('a', 0, c, prediction_keys=self.KEYS) for c in ('default', 'other')]
+        widget = custom_widgets.DualConfigPredictionWidget(*views)
+        layout = next(iter(widget.ephys_area.ci.items))
+        for view in views:
+            for fig in view.fig_preds.values():
+                self.assertIn(fig, layout.items)
+
+
 if __name__ == '__main__':
     unittest.main()

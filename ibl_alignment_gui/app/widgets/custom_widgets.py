@@ -2053,6 +2053,205 @@ class DualConfigFeatureWidget(ConfigWidget):
         return ephys_layout, hist_layout
 
 
+class SingleConfigPredictionWidget(ConfigWidget):
+    """
+    Widget for displaying all channel predictions and histology for a single shank and config.
+
+    The ephys plot shows one figure per channel prediction, side by side.
+
+    Parameters
+    ----------
+    items: ShankView
+        A ShankView object containing all the figure items for this configuration and shank.
+    parent : QWidgets.QMainWindow, optional
+        The parent window
+
+    Attributes
+    ----------
+    items: ShankView
+        A ShankView object containing all the figure items for this configuration and shank.
+    header : QtWidgets.QLabel
+        A label widget for the header, provided by the subclass.
+    config : str
+        The probe configuration name, provided by the subclass.
+    idx : int
+        The index of the shank, provided by the subclass.
+    name : str
+        The name of the shank, provided by the subclass.
+    """
+
+    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+        self.items = items
+        self.config: str = items.config
+        self.idx: int = items.index
+        self.name: str = items.name
+        self.header: QtWidgets.QLabel = items.header
+
+        super().__init__(parent)
+
+    @staticmethod
+    def create_prediction_columns(layout: pg.GraphicsLayout, columns: list) -> None:
+        """
+        Add prediction figures, with their titles above, as layout columns.
+
+        The first figure shows the depth axis, and the others follow its y-axis.
+
+        Parameters
+        ----------
+        layout: pg.GraphicsLayout
+            The ephys figure layout to add the columns to.
+        columns: list of (pg.PlotItem, pg.PlotItem or None)
+            Each column's prediction figure and the title figure above it, or None for no title.
+        """
+        first = columns[0][0]
+        set_axis(first, 'left', label='Distance from probe tip (um)')
+        for col, (fig, label) in enumerate(columns):
+            if fig is not first:
+                fig.setYLink(first)
+            if label is not None:
+                layout.addItem(label, 0, col)
+            layout.addItem(fig, 1, col)
+        layout.layout.setRowStretchFactor(0, 1)
+        layout.layout.setRowStretchFactor(1, 10)
+
+    def create_ephys_figure_layout(self, items) -> pg.GraphicsLayout:
+        """
+        Build an ephys figure layout of all channel predictions for a single configuration.
+
+        Parameters
+        ----------
+        items: ShankView
+            A ShankView object containing all the figure items for this configuration and shank.
+
+        Returns
+        -------
+        fig_ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        """
+        fig_ephys_layout = pg.GraphicsLayout()
+        fig_ephys_layout.setSpacing(0)
+        columns = [(fig, items.pred_labels[fig]) for fig in items.fig_preds.values()]
+        self.create_prediction_columns(fig_ephys_layout, columns)
+        items.use_prediction_coords()
+
+        return fig_ephys_layout
+
+    def get_layout(self) -> tuple[pg.GraphicsLayout, pg.GraphicsLayout]:
+        """
+        Create the electrophysiology and histogram layouts.
+
+        Returns
+        -------
+        ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        hist_layout: pg.GraphicsLayout
+            The created histology figure layout.
+        """
+        ephys_layout = self.create_ephys_figure_layout(self.items)
+        hist_layout = self.create_hist_figure_layout(self.items)
+
+        return ephys_layout, hist_layout
+
+
+class DualConfigPredictionWidget(ConfigWidget):
+    """
+    Widget for displaying all channel predictions and histology for a shank and two configs.
+
+    The histology figure is built from the figure items of the default configuration.
+    The ephys figure shows each channel prediction for the default and non-default
+    configurations side by side, the two configurations of each prediction next to each other.
+
+    Parameters
+    ----------
+    items_default: ShankView
+        A ShankView object containing all the figure items for the default configuration
+        and shank.
+    items_non_default: ShankView
+        A ShankView object containing all the figure items for the non-default configuration
+        and shank
+    parent : QWidgets.QMainWindow, optional
+        The parent window
+
+    Attributes
+    ----------
+    items_default: ShankView
+        A ShankView object containing all the figure items for the default configuration
+        and shank.
+    items_non_default: ShankView
+        A ShankView object containing all the figure items for the non-default configuration
+        and shank
+    header : QtWidgets.QLabel
+        A label widget for the header, provided by the subclass.
+    config : str
+        The probe configuration name, provided by the subclass.
+    idx : int
+        The index of the shank, provided by the subclass.
+    name : str
+        The name of the shank, provided by the subclass.
+    """
+
+    def __init__(
+        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+    ):
+        self.items_default = items_default
+        self.items_non_default = items_non_default
+        self.config: str = items_default.config
+        self.idx: int = items_default.index
+        self.name: str = items_default.name
+        self.header: QtWidgets.QLabel = items_default.header
+
+        super().__init__(parent)
+
+    def create_ephys_figure_layout(self, items_default, items_non_default) -> pg.GraphicsLayout:
+        """
+        Build an ephys figure layout of all channel predictions for two configurations.
+
+        Parameters
+        ----------
+        items_default: ShankView
+            A ShankView object containing all the figure items for the default configuration
+            and shank.
+        items_non_default: ShankView
+            A ShankView object containing all the figure items for the non-default configuration
+            and shank
+
+        Returns
+        -------
+        fig_ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        """
+        fig_ephys_layout = pg.GraphicsLayout()
+        fig_ephys_layout.setSpacing(0)
+        # The default configuration's title spans both configurations of each prediction
+        columns = []
+        for key, fig in items_default.fig_preds.items():
+            columns.append((fig, None))
+            columns.append((items_non_default.fig_preds[key], None))
+        SingleConfigPredictionWidget.create_prediction_columns(fig_ephys_layout, columns)
+        for i, fig in enumerate(items_default.fig_preds.values()):
+            fig_ephys_layout.addItem(items_default.pred_labels[fig], 0, 2 * i, 1, 2)
+        items_default.use_prediction_coords()
+        items_non_default.use_prediction_coords()
+
+        return fig_ephys_layout
+
+    def get_layout(self) -> tuple[pg.GraphicsLayout, pg.GraphicsLayout]:
+        """
+        Create the electrophysiology and histogram layouts.
+
+        Returns
+        -------
+        ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        hist_layout: pg.GraphicsLayout
+            The created histology figure layout.
+        """
+        ephys_layout = self.create_ephys_figure_layout(self.items_default, self.items_non_default)
+        hist_layout = self.create_hist_figure_layout(self.items_default)
+
+        return ephys_layout, hist_layout
+
+
 class FloatLineEdit(QtWidgets.QLineEdit):
     """
     A line edit for entering float values.

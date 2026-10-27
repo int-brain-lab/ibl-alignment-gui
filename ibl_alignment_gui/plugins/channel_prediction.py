@@ -38,6 +38,10 @@ if TYPE_CHECKING:
     from ibl_alignment_gui.plugins.ephys_atlas._common import ModelSpec
 
 PLUGIN_NAME = 'Channel Prediction'
+# Title of the dialogs of the all predictions view.
+ALL_TITLE = 'All predictions'
+# Shown in the all predictions view on the figures of a model that is not loaded.
+NOT_LOADED_MESSAGE = 'Not loaded: Plugins -> Channel Prediction'
 
 # Every model the plugin offers, as the backends describe them (see ModelSpec).
 MODELS = (*DECODER_SPECS.values(), spatial.ENCODER_SPEC)
@@ -363,7 +367,13 @@ def _load_done(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome:
 
 
 def _show_first_option(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
-    """Select the model's first prediction option, which shows its predictions."""
+    """Select the model's first prediction option, which shows its predictions.
+
+    In the all predictions view, the view is redrawn instead, with the model's predictions.
+    """
+    if getattr(controller, 'show_predictions', False):
+        _predict_all(controller)
+        return
     controller.view.trigger_menu_option('prediction', spec.options[0])
 
 
@@ -416,6 +426,15 @@ class ChannelPrediction:
         spec = MODEL_FOR_OPTION.get(option)
         if spec is not None:
             _predict(self.controller, spec, option)
+
+    def plot_all_predictions(self) -> None:
+        """Show every option of the loaded models side by side on every aligned shank.
+
+        The options of models that are not loaded say so; their models are not loaded here. The
+        missing views are computed first, for all models in one background task
+        (:func:`_predict_all`).
+        """
+        _predict_all(self.controller)
 
 
 # -----------------------------------------------------------------------------
@@ -546,17 +565,103 @@ def _prediction_done(
     The warnings are those the task queued in the plugin state's ``pending_warnings`` (e.g. local
     features of another feature version than the model's).
     """
+    _keep(controller, spec, outcome)
+    _draw_all(shanks, option)
+    _report(controller, option, outcome.errors)
+
+
+def _keep(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome: _Outcome) -> None:
+    """Keep the model a task loaded and the views it computed (main thread)."""
     if outcome.loaded_from is not None:
         store_model(controller, spec, outcome.model, outcome.loaded_from)
     for items, views, extra in outcome.results:
         _cache(items).update(views)
         if spec.on_computed is not None:
             spec.on_computed(controller, items, extra)
-    _draw_all(shanks, option)
+
+
+def _report(controller: 'AlignmentGUIController', title: str, errors: list[str]) -> None:
+    """Show the warnings queued by the task and its errors in one dialog, if there are any.
+
+    The warnings are those the task queued in the plugin state's ``pending_warnings`` (e.g. local
+    features of another feature version than the model's).
+    """
     warnings = plugin_state(controller).pop('pending_warnings', [])
-    messages = list(dict.fromkeys(warnings + outcome.errors))
+    messages = list(dict.fromkeys(warnings + errors))
     if messages:
-        QtWidgets.QMessageBox.warning(controller.view, option, '\n\n'.join(messages))
+        QtWidgets.QMessageBox.warning(controller.view, title, '\n\n'.join(messages))
+
+
+def _all_predictions_task(
+    controller: 'AlignmentGUIController', jobs: list, progress_callback: Callable
+) -> list[tuple['ModelSpec', _Outcome]]:
+    """Run each loaded model on its shanks, one after the other (background thread, no Qt).
+
+    ``jobs`` holds each model's ``(spec, model, shanks)``. A model's errors are kept and the next
+    model is run; after Cancel, the models finished so far are kept and the rest skipped.
+    """
+    results = []
+    for spec, model, shanks in jobs:
+
+        def progress(message, current, total, name=spec.key):
+            progress_callback(f'{name}, {message}', current, total)
+
+        outcome = _prediction_task(controller, spec, model, None, shanks, progress)
+        results.append((spec, outcome))
+        if outcome.cancelled:
+            break
+    return results
+
+
+def _predict_all(controller: 'AlignmentGUIController') -> None:
+    """Show every option of the loaded models on every aligned shank, side by side.
+
+    The views missing for the loaded models are computed in one background task, behind one
+    progress dialog whose Cancel stops it, and the shanks are drawn when it ends
+    (:func:`_all_predictions_done`). Models that are not loaded are not loaded here.
+    """
+    shanks = _aligned_shanks(controller)
+    jobs = []
+    for spec in available_models():
+        if not is_model_loaded(controller, spec.key):
+            continue
+        todo = [
+            items
+            for items in shanks
+            if any(_cache(items).get(option) is None for option in spec.options)
+        ]
+        if todo:
+            jobs.append((spec, plugin_state(controller)[spec.key]['model'], todo))
+    if not jobs:
+        _draw_all_predictions(controller, shanks)
+        return
+    started = controller.run_in_thread(
+        _all_predictions_task,
+        controller,
+        jobs,
+        on_finished=partial(_all_predictions_done, controller, shanks),
+        on_error=partial(_task_failed, controller, ALL_TITLE),
+        busy_message='Starting…',
+        title=ALL_TITLE,
+        report_progress=True,
+        cancellable=True,
+    )
+    if not started:
+        _busy_warning(controller, ALL_TITLE)
+
+
+def _all_predictions_done(
+    controller: 'AlignmentGUIController',
+    shanks: list['ShankController'],
+    results: list[tuple['ModelSpec', _Outcome]],
+) -> None:
+    """Keep and draw what each model computed, and report all problems once (main thread)."""
+    errors = []
+    for spec, outcome in results:
+        _keep(controller, spec, outcome)
+        errors.extend(outcome.errors)
+    _draw_all_predictions(controller, shanks)
+    _report(controller, ALL_TITLE, errors)
 
 
 def _task_failed(controller: 'AlignmentGUIController', title: str, traceback: str) -> None:
@@ -590,16 +695,33 @@ def _cache(items: 'ShankController') -> Bunch:
     return items.model.predictions
 
 
-def _draw(items: 'ShankController', option: str) -> None:
-    """Draw the shank's cached view of ``option`` on its prediction panel, or clear the panel."""
+def _draw(items: 'ShankController', option: str, fig=None) -> None:
+    """Draw the shank's cached view of ``option`` on a prediction figure, or clear the figure.
+
+    The figure is the shank's prediction panel unless given.
+    """
+    fig = items.view.fig_pred if fig is None else fig
     pred = _cache(items).get(option)
     if pred is None:  # e.g. the prediction failed on this shank
-        items.view.clear_prediction(items.view.fig_pred, option)
+        items.view.clear_prediction(fig, option)
     else:
-        items.view.plot_prediction(items.view.fig_pred, pred, option)
+        items.view.plot_prediction(fig, pred, option)
 
 
 def _draw_all(shanks: list['ShankController'], option: str) -> None:
     """Draw ``option`` on each shank that has it."""
     for items in shanks:
         _draw(items, option)
+
+
+def _draw_all_predictions(
+    controller: 'AlignmentGUIController', shanks: list['ShankController']
+) -> None:
+    """Draw every option on its own figure of each shank, saying which models are not loaded."""
+    for items in shanks:
+        for option, fig in items.view.fig_preds.items():
+            spec = MODEL_FOR_OPTION.get(option)
+            if spec is None or not is_model_loaded(controller, spec.key):
+                items.view.clear_prediction(fig, option, NOT_LOADED_MESSAGE)
+            else:
+                _draw(items, option, fig)

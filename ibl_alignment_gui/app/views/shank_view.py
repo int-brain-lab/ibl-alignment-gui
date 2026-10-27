@@ -28,6 +28,8 @@ class ShankView:
         The index of the shank
     config:
         The config of the shank
+    prediction_keys: list of str, optional
+        The channel prediction options, each shown on its own figure in the all predictions view
     """
 
     COLOURS = ['#cc0000', '#6aa84f', '#1155cc', '#a64d79']
@@ -50,12 +52,16 @@ class ShankView:
                 }
                 """,
     }
-    # Characters per line of the title above a prediction figure
-    PRED_TITLE_WIDTH = 16
+    # Characters per line, and font size, of the title above a prediction figure
+    PRED_TITLE_WIDTH = 24
+    PRED_TITLE_SIZE = '8pt'
 
-    def __init__(self, name: str, index: int, config: str):
+    def __init__(
+        self, name: str, index: int, config: str, prediction_keys: list[str] | tuple = ()
+    ):
         self.name: str = name
         self.index: int = index
+        self.prediction_keys: list[str] = list(prediction_keys)
         self.config: str = config
 
         # Set colour for reference lines and points
@@ -123,6 +129,7 @@ class ShankView:
         # Plot items for the prediction plots, keyed by their figure
         self.fig_pred: pg.PlotItem | None = None
         self.fig_pred_label: pg.PlotItem | None = None
+        self.fig_preds: dict[str, pg.PlotItem] = {}
         self.pred_labels: dict[pg.PlotItem, pg.PlotItem] = {}
         self.pred_items: dict[pg.PlotItem, list] = {}
         self.pred_titles: dict[pg.PlotItem, str] = {}
@@ -193,7 +200,12 @@ class ShankView:
         list of pg.PlotItem
             The prediction figures.
         """
-        return [self.fig_pred]
+        return [self.fig_pred, *self.fig_preds.values()]
+
+    def use_prediction_coords(self) -> None:
+        """Map mouse clicks on the ephys area through the first figure of all predictions view."""
+        self.ephys_plot = next(iter(self.fig_preds.values())).getViewBox().childGroup
+        self.y_scale = 1
 
     def init_reference_line_arrays(self) -> None:
         """Initialise arrays used to keep track of reference lines and points."""
@@ -348,8 +360,9 @@ class ShankView:
         self.fig_feature_label = self._create_plot_cb_item(max_height=70)
         set_axis(self.fig_feature_label, 'left', pen='w', label=' ')
 
-        # Channel prediction plot
+        # Channel prediction plot, and one per prediction for the all predictions view
         self.fig_pred, self.fig_pred_label = self._create_prediction_plot()
+        self.fig_preds = {key: self._create_prediction_plot()[0] for key in self.prediction_keys}
 
     def _create_prediction_plot(self) -> tuple[pg.PlotItem, pg.PlotItem]:
         """
@@ -1287,9 +1300,10 @@ class ShankView:
         """
         label = self.pred_labels[fig]
         if title:
-            # The prediction figures are narrow: wrap long titles over more lines
+            # The prediction figures are narrow: wrap long titles over more lines, in small text
             title = '<br>'.join(textwrap.wrap(title, width=self.PRED_TITLE_WIDTH))
-            set_axis(label, 'top', pen='k', label=title, ticks=False)
+            axis = set_axis(label, 'top', pen='k', ticks=False)
+            axis.setLabel(title, **{'font-size': self.PRED_TITLE_SIZE})
         else:
             set_axis(label, 'top', pen='w', label=' ', ticks=False)
 

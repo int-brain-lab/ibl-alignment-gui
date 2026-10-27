@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
 # The Prediction Plots option that hides the prediction panels.
 NO_PREDICTION = 'None'
+# The Prediction Plots option that shows all the predictions side by side, instead of the ephys
+# plots.
+ALL_PREDICTIONS = 'All predictions (side by side)'
 
 
 class AlignmentGUIController:
@@ -161,6 +164,7 @@ class AlignmentGUIController:
 
         # The ephys view mode
         self.show_feature = False
+        self.show_predictions = False
 
         # Store the slice figures
         self.slice_figs: Bunch = Bunch()
@@ -338,6 +342,8 @@ class AlignmentGUIController:
             'Hide/Show Channels': {'shortcut': 'Shift+C', 'callback': self.toggle_channels},
             # Shortcut to change toggle between grid and tab view
             'Toggle layout': {'shortcut': 'T', 'callback': self.toggle_layout},
+            # Shortcut to show all the channel predictions side by side
+            'All Predictions': {'shortcut': 'Shift+P', 'callback': self.show_all_predictions},
             # Shortcuts to move between shanks
             'Next shank': {'shortcut': 'Right', 'callback': lambda: self.loop_through_tabs(1)},
             'Previous shank': {'shortcut': 'Left', 'callback': lambda: self.loop_through_tabs(-1)},
@@ -377,10 +383,15 @@ class AlignmentGUIController:
         self.region_init = self.view.populate_menu_tab(
             'region', self.plot_region_ref_panels, REGION_MAPPINGS
         )
+        prediction_keys = [NO_PREDICTION, *self.prediction_keys]
+        if self.prediction_keys:
+            prediction_keys.append(ALL_PREDICTIONS)
         self.prediction_init = self.view.populate_menu_tab(
-            'prediction', self.plot_prediction_panels, [NO_PREDICTION, *self.prediction_keys]
+            'prediction', self.plot_prediction_panels, prediction_keys
         )
         self.view.set_menu_enabled('prediction', bool(self.prediction_keys))
+        # A new session starts without predictions
+        self.show_predictions = False
 
     # --------------------------------------------------------------------------------------------
     # Plugins
@@ -421,7 +432,7 @@ class AlignmentGUIController:
         for i, shank in enumerate(self.all_shanks):
             for c in self.model.configs:
                 self.shank_items[shank][c] = ShankController(
-                    self.model.shanks[shank][c], shank, i, c
+                    self.model.shanks[shank][c], shank, i, c, prediction_keys=self.prediction_keys
                 )
 
     def init_shanks(self) -> None:
@@ -433,6 +444,7 @@ class AlignmentGUIController:
             self.model.non_default_config,
             feature_view=self.show_feature,
             prediction_view=self.show_prediction_panel,
+            all_predictions=self.show_predictions,
         )
         for tab in shank_tabs:
             tab.setup_double_click(self.on_mouse_double_clicked)
@@ -524,31 +536,90 @@ class AlignmentGUIController:
         bool
             True when a channel prediction is selected in Prediction Plots.
         """
-        return self.prediction_init not in (None, NO_PREDICTION)
+        return self.prediction_init not in (None, NO_PREDICTION, ALL_PREDICTIONS)
+
+    @property
+    def show_ephys_plots(self) -> bool:
+        """
+        Return whether the image, line and probe plots are shown.
+
+        Returns
+        -------
+        bool
+            False in the feature view and in the all predictions view.
+        """
+        return not (self.show_feature or self.show_predictions)
+
+    def show_all_predictions(self) -> None:
+        """
+        Show all the channel predictions side by side, instead of the ephys plots.
+
+        Triggered by pressing Shift+P.
+        """
+        if self.loaded and self.prediction_keys:
+            self.view.trigger_menu_option('prediction', ALL_PREDICTIONS)
 
     def plot_prediction_panels(self, plot_key: str, data_only: bool = True) -> None:
         """
-        Show the channel prediction chosen in Prediction Plots alongside the ephys plots.
+        Show the channel prediction chosen in Prediction Plots.
 
-        The prediction panels are added to the display when a prediction is first chosen and
-        removed when 'None' is chosen. The predictions are computed and drawn by the Channel
-        Prediction plugin.
+        A single prediction is shown on a panel alongside the ephys plots, added to the display
+        when a prediction is first chosen and removed when 'None' is chosen. 'All predictions'
+        shows every prediction side by side, instead of the ephys plots. The predictions are
+        computed and drawn by the Channel Prediction plugin.
 
         Parameters
         ----------
         plot_key: str
-            The channel prediction option, or 'None' to hide the prediction panels
+            The channel prediction option, 'None' to hide the prediction panels or
+            'All predictions (side by side)'
         data_only: bool
             Whether the plot can be generated without histology data
         """
+        loader = self.plugins['Channel Prediction']['loader']
         shown = self.show_prediction_panel
         self.prediction_init = plot_key
-        if self.show_prediction_panel != shown:
-            # Add or remove the prediction panels; the prediction is drawn once they are built
+
+        if plot_key == ALL_PREDICTIONS:
+            if not self.show_predictions:
+                # Replace the ephys plots; the predictions are drawn once the figures are built
+                self.show_predictions = True
+                self.on_view_changed()
+                return
+            loader.plot_all_predictions()
+            return
+
+        if self.show_predictions or self.show_prediction_panel != shown:
+            # Leave the all predictions view, or add or remove the prediction panels
+            self.show_predictions = False
             self.on_view_changed()
             return
         if self.show_prediction_panel:
-            self.plugins['Channel Prediction']['loader'].plot_predictions(plot_key)
+            loader.plot_predictions(plot_key)
+
+    def _show_ephys_view(self, feature: bool) -> bool:
+        """
+        Show the ephys plots or the feature plots, leaving the all predictions view.
+
+        Parameters
+        ----------
+        feature: bool
+            Whether to show the feature plots rather than the image, line and probe plots
+
+        Returns
+        -------
+        bool
+            Whether the display was rebuilt for the view, which also draws its plots
+        """
+        if self.show_feature == feature and not self.show_predictions:
+            return False
+        self.show_feature = feature
+        if self.show_predictions:
+            self.show_predictions = False
+            self.prediction_init = NO_PREDICTION
+            self.view.check_menu_option('prediction', NO_PREDICTION)
+        self.on_view_changed()
+        return True
 
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """
@@ -672,9 +743,7 @@ class AlignmentGUIController:
         """
         self.line_init = plot_key
 
-        if self.show_feature:
-            self.show_feature = False
-            self.on_view_changed()
+        if self._show_ephys_view(feature=False):
             return
 
         self._plot_line_panels(plot_key, data_only=data_only, **kwargs)
@@ -710,9 +779,7 @@ class AlignmentGUIController:
         """
         self.feature_init = plot_key
 
-        if not self.show_feature:
-            self.show_feature = True
-            self.on_view_changed()
+        if self._show_ephys_view(feature=True):
             return
 
         self._plot_feature_panels(plot_key, data_only=data_only, **kwargs)
@@ -770,9 +837,7 @@ class AlignmentGUIController:
         # Update which plot was last selected
         setattr(self, init_attr, plot_key)
 
-        if self.show_feature:
-            self.show_feature = False
-            self.on_view_changed()
+        if self._show_ephys_view(feature=False):
             return
 
         if self.model.selected_config == 'both':
@@ -949,7 +1014,9 @@ class AlignmentGUIController:
     def set_ephys_plots(self) -> None:
         """Set the ephys plots to the values stored in the init variables."""
         self.blockPlugins = True
-        if not self.show_feature:
+        if self.show_predictions:
+            self.view.trigger_menu_option('prediction', ALL_PREDICTIONS)
+        elif not self.show_feature:
             self.view.trigger_menu_option('image', self.img_init)
             self.view.trigger_menu_option('line', self.line_init)
             self.view.trigger_menu_option('probe', self.probe_init)
@@ -1849,7 +1916,9 @@ class AlignmentGUIController:
         """
         self.set_yaxis_range('fig_hist')
         self.set_yaxis_range('fig_hist_ref')
-        if self.show_feature:
+        if self.show_predictions:
+            self.reset_prediction_axis()
+        elif self.show_feature:
             self.set_yaxis_range('fig_feature')
             self.set_xaxis_range('fig_feature')
         else:
@@ -1860,6 +1929,13 @@ class AlignmentGUIController:
             self.reset_slice_axis(configs=[self.model.default_config])
         else:
             self.reset_slice_axis(configs=[self.model.selected_config])
+
+    @shank_loop
+    def reset_prediction_axis(self, items: ShankController, **kwargs) -> None:
+        """Reset the y-axis of the all predictions view, which all its figures follow."""
+        figs = list(items.view.fig_preds.values())
+        if figs:
+            items.view.set_yaxis_range(figs[0])
 
     @shank_loop
     def reset_slice_axis(self, items: ShankController, **kwargs) -> None:

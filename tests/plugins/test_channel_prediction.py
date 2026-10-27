@@ -204,6 +204,96 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.compute.assert_not_called()
 
 
+class TestAllPredictions(unittest.TestCase):
+    """plot_all_predictions computes the loaded models in one task and draws every option."""
+
+    TRANSFORMER = 'ProbeTransformer region prediction'
+
+    def setUp(self):
+        self.controller = _fake_controller()
+        self.controller.view = None
+        self.controller.plugins = {PLUGIN_KEY: Bunch()}
+        self.controller.run_in_thread = self.runner = InlineRunner()
+        self.loader = cp.ChannelPrediction(self.controller)
+        # Two models: the decoder is loaded, the transformer is not.
+        self.compute = MagicMock(
+            return_value=(
+                {DECODER: Bunch(region='view'), DECODER + ' (cumulative)': Bunch(region='c')},
+                None,
+            )
+        )
+        decoder = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=self.compute)
+        transformer = cp.MODEL_FOR_OPTION[self.TRANSFORMER]
+        self.specs = [decoder, transformer]
+        self.enterContext(patch.object(cp, 'available_models', return_value=self.specs))
+        self.enterContext(patch.dict(cp.MODEL_FOR_OPTION, {o: decoder for o in decoder.options}))
+        self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
+        self.controller.plugins[PLUGIN_KEY][decoder.key] = dict(model=object(), source=None)
+        self.options = [o for spec in self.specs for o in spec.options]
+        for shank in SHANKS:
+            view = self.controller.shank_items[shank]['default'].view
+            view.fig_preds = {option: MagicMock(name=option) for option in self.options}
+
+    def view(self, shank):
+        return self.controller.shank_items[shank]['default'].view
+
+    def test_loaded_model_computed_and_drawn(self):
+        """The loaded model runs once per shank in one task, and both its options are drawn"""
+        self.loader.plot_all_predictions()
+        self.assertEqual(len(self.runner.tasks), 1)
+        self.assertEqual(self.compute.call_count, len(SHANKS))
+        for shank in SHANKS:
+            view = self.view(shank)
+            drawn = [c.args[2] for c in view.plot_prediction.call_args_list]
+            self.assertEqual(drawn, [DECODER, DECODER + ' (cumulative)'])
+            figs = [c.args[0] for c in view.plot_prediction.call_args_list]
+            self.assertEqual(figs, [view.fig_preds[o] for o in drawn])
+
+    def test_unloaded_model_not_loaded(self):
+        """The options of a model that is not loaded say so, and it is not loaded"""
+        with patch.object(cp, 'load_model') as load:
+            self.loader.plot_all_predictions()
+        load.assert_not_called()
+        for shank in SHANKS:
+            cleared = {c.args[1]: c.args[2] for c in self.view(shank).clear_prediction.mock_calls}
+            self.assertEqual(
+                cleared,
+                {
+                    self.TRANSFORMER: cp.NOT_LOADED_MESSAGE,
+                    self.TRANSFORMER + ' (cumulative)': cp.NOT_LOADED_MESSAGE,
+                },
+            )
+
+    def test_cached_not_computed_again(self):
+        """Once computed, showing the view again needs no task"""
+        self.loader.plot_all_predictions()
+        self.loader.plot_all_predictions()
+        self.assertEqual(len(self.runner.tasks), 1)
+        self.assertEqual(self.compute.call_count, len(SHANKS))
+
+    def test_progress_names_model(self):
+        """Each progress message names the model it is for"""
+        self.loader.plot_all_predictions()
+        self.assertTrue(self.runner.progress)
+        for message in self.runner.progress:
+            self.assertTrue(message.startswith(DECODER + ', '), message)
+
+    def test_errors_one_warning(self):
+        """The models' errors on every shank are reported in one warning"""
+        self.compute.side_effect = PredictionError('no features')
+        self.loader.plot_all_predictions()
+        self.warning.assert_called_once()
+        self.assertEqual(self.warning.call_args.args[1], cp.ALL_TITLE)
+
+    def test_model_loaded_from_menu_redraws(self):
+        """In the all predictions view, a model loaded from the menu redraws that view"""
+        self.controller.show_predictions = True
+        self.controller.view = MagicMock()
+        cp._show_first_option(self.controller, self.specs[0])
+        self.controller.view.trigger_menu_option.assert_not_called()
+        self.assertEqual(self.compute.call_count, len(SHANKS))
+
+
 class TestPredictionTask(unittest.TestCase):
     """The background task: load the model if needed, then compute each shank."""
 

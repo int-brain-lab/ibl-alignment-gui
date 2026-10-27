@@ -1229,7 +1229,16 @@ class MenuWidget(QtWidgets.QMenuBar):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'feature', 'slice', 'region', 'filter']:
+        for group in [
+            'image',
+            'line',
+            'probe',
+            'feature',
+            'slice',
+            'region',
+            'prediction',
+            'filter',
+        ]:
             self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)
@@ -1466,6 +1475,31 @@ class ConfigWidget(QtWidgets.QWidget):
         """Create and return the electrophysiology figure layout."""
 
     @staticmethod
+    def add_prediction_column(
+        layout: pg.GraphicsLayout, items, col: int, link: pg.PlotItem, stretch: int = 2
+    ) -> None:
+        """
+        Add the prediction figure of a configuration, with its title above, as a layout column.
+
+        Parameters
+        ----------
+        layout: pg.GraphicsLayout
+            The ephys figure layout to add the column to.
+        items: ShankView
+            A ShankView object containing all the figure items for this configuration and shank.
+        col: int
+            The column of the layout.
+        link: pg.PlotItem
+            The ephys figure whose y-axis the prediction figure follows.
+        stretch: int
+            The stretch factor of the column.
+        """
+        items.fig_pred.setYLink(link)
+        layout.addItem(items.fig_pred_label, 0, col)
+        layout.addItem(items.fig_pred, 1, col)
+        layout.layout.setColumnStretchFactor(col, stretch)
+
+    @staticmethod
     def create_hist_figure_layout(items) -> pg.GraphicsLayout:
         """
         Build a histology figure layout for a single configuration.
@@ -1574,6 +1608,8 @@ class SingleConfigFeatureWidget(ConfigWidget):
     ----------
     items: ShankView
         A ShankView object containing all the figure items for this configuration and shank.
+    prediction: bool, optional
+        Whether to show the prediction figure alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1591,8 +1627,11 @@ class SingleConfigFeatureWidget(ConfigWidget):
         The name of the shank, provided by the subclass.
     """
 
-    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+    def __init__(
+        self, items, prediction: bool = False, parent: QtWidgets.QMainWindow | None = None
+    ):
         self.items = items
+        self.prediction: bool = prediction
         self.config: str = items.config
         self.idx: int = items.index
         self.name: str = items.name
@@ -1622,6 +1661,9 @@ class SingleConfigFeatureWidget(ConfigWidget):
         # Add items to layout with positions and spans
         fig_ephys_layout.addItem(items.fig_feature_label, 0, 0)
         fig_ephys_layout.addItem(items.fig_feature, 1, 0)
+        if self.prediction:
+            fig_ephys_layout.layout.setColumnStretchFactor(0, 8)
+            self.add_prediction_column(fig_ephys_layout, items, 1, link=items.fig_feature)
 
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
@@ -1655,6 +1697,8 @@ class SingleConfigWidget(ConfigWidget):
     ----------
     items: ShankView
         A ShankView object containing all the figure items for this configuration and shank.
+    prediction: bool, optional
+        Whether to show the prediction figure alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1672,8 +1716,11 @@ class SingleConfigWidget(ConfigWidget):
         The name of the shank, provided by the subclass.
     """
 
-    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+    def __init__(
+        self, items, prediction: bool = False, parent: QtWidgets.QMainWindow | None = None
+    ):
         self.items = items
+        self.prediction: bool = prediction
         self.config: str = items.config
         self.idx: int = items.index
         self.name: str = items.name
@@ -1714,6 +1761,8 @@ class SingleConfigWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(2, 1)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+        if self.prediction:
+            self.add_prediction_column(fig_ephys_layout, items, 3, link=items.fig_img)
 
         return fig_ephys_layout
 
@@ -1750,6 +1799,8 @@ class DualConfigWidget(ConfigWidget):
     items_non_default: ShankView
         A ShankView object containing all the figure items for the non-default configuration
         and shank
+    prediction: bool, optional
+        Whether to show the prediction figures alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1772,9 +1823,14 @@ class DualConfigWidget(ConfigWidget):
     """
 
     def __init__(
-        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+        self,
+        items_default,
+        items_non_default,
+        prediction: bool = False,
+        parent: QtWidgets.QMainWindow | None = None,
     ):
         self.items_default = items_default
+        self.prediction: bool = prediction
         self.items_non_default = items_non_default
         self.config: str = items_default.config
         self.idx: int = items_default.index
@@ -1851,6 +1907,9 @@ class DualConfigWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(5, 1)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+        if self.prediction:
+            for col, items in enumerate((items_default, items_non_default), 6):
+                self.add_prediction_column(fig_ephys_layout, items, col, link=items.fig_img)
 
         return fig_ephys_layout
 
@@ -1887,6 +1946,8 @@ class DualConfigFeatureWidget(ConfigWidget):
     items_non_default: ShankView
         A ShankView object containing all the figure items for the non-default configuration
         and shank
+    prediction: bool, optional
+        Whether to show the prediction figures alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1909,9 +1970,14 @@ class DualConfigFeatureWidget(ConfigWidget):
     """
 
     def __init__(
-        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+        self,
+        items_default,
+        items_non_default,
+        prediction: bool = False,
+        parent: QtWidgets.QMainWindow | None = None,
     ):
         self.items_default = items_default
+        self.prediction: bool = prediction
         self.items_non_default = items_non_default
         self.config: str = items_default.config
         self.idx: int = items_default.index
@@ -1964,6 +2030,9 @@ class DualConfigFeatureWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(1, 4)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+        if self.prediction:
+            for col, items in enumerate((items_default, items_non_default), 2):
+                self.add_prediction_column(fig_ephys_layout, items, col, link=items.fig_feature)
 
         return fig_ephys_layout
 

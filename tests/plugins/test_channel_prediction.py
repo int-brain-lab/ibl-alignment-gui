@@ -66,7 +66,7 @@ DECODER = 'XGBoost region prediction'
 
 
 class TestPlotRegionsModelLookup(unittest.TestCase):
-    """plot_regions gets the option's model once, then computes every shank in one task."""
+    """plot_predictions gets the option's model once, then computes every shank in one task."""
 
     def setUp(self):
         self.controller = _fake_controller()
@@ -88,7 +88,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
     def test_cancel_opens_dialog_once(self):
         """With no model loaded, a cancelled load dialog opens once and nothing is computed"""
         with patch.object(cp, 'choose_source', return_value=None) as dialog:
-            self.loader.plot_regions(DECODER)
+            self.loader.plot_predictions(DECODER)
         dialog.assert_called_once()
         self.assertEqual(self.runner.tasks, [])
         self.compute.assert_not_called()
@@ -98,7 +98,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.set_model(source=('org/missing', '2026_W39'))
         error = PredictionError('Could not load org/missing@2026_W39:\nnot found')
         self.load.side_effect = error
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.load.assert_called_once()
         self.warning.assert_called_once()
         self.assertEqual(self.warning.call_args.args[1:], (DECODER, str(error)))
@@ -109,7 +109,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.set_model(source=('org/model', '2026_W39'))
         self.load.side_effect = RuntimeError('boom')
         with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'):
-            self.loader.plot_regions(DECODER)
+            self.loader.plot_predictions(DECODER)
         self.warning.assert_called_once()
         self.assertIn('Unexpected error in', self.warning.call_args.args[2])
         self.compute.assert_not_called()
@@ -117,12 +117,12 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
     def test_loaded_model_computes_each_shank(self):
         """With the model loaded, one task computes every shank and they are all drawn"""
         self.set_model(model=object(), source=('org/model', '2026_W39'))
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.load.assert_not_called()
         self.assertEqual(len(self.runner.tasks), 1)
         self.assertEqual(self.compute.call_count, len(SHANKS))
         for shank in SHANKS:
-            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            self.controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
         self.warning.assert_not_called()
 
     def test_queued_warning_shown_once(self):
@@ -136,7 +136,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
             return {DECODER: Bunch(region='regions view')}, None
 
         self.compute.side_effect = compute
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.warning.assert_called_once()
         self.assertEqual(self.warning.call_args.args[1:], (DECODER, 'Features of another version'))
         self.assertNotIn('pending_warnings', state)
@@ -167,8 +167,8 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.enterContext(patch.dict(cp.MODEL_FOR_OPTION, specs))
         for spec in specs.values():
             self.controller.plugins[PLUGIN_KEY][spec.key] = dict(model=object(), source=None)
-        self.loader.plot_regions(DECODER)
-        self.loader.plot_regions(transformer)
+        self.loader.plot_predictions(DECODER)
+        self.loader.plot_predictions(transformer)
         # One dialog per model, though each ran on two shanks
         self.assertEqual([c.args[1] for c in self.warning.call_args_list], [DECODER, transformer])
 
@@ -178,28 +178,28 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
             self.controller.shank_items[shank]['default'].model.predictions = Bunch(
                 {DECODER: Bunch(region='cached')}
             )
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.assertEqual(self.runner.tasks, [])
         self.compute.assert_not_called()
         for shank in SHANKS:
-            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            self.controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
 
     def test_only_uncached_shanks_computed(self):
         """Only the shanks without the option cached are computed; all are drawn"""
         self.set_model(model=object())
         cached = self.controller.shank_items['a']['default']
         cached.model.predictions = Bunch({DECODER: Bunch(region='cached')})
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         computed = [c.args[1] for c in self.compute.call_args_list]
         self.assertEqual(computed, [self.controller.shank_items['b']['default']])
         for shank in SHANKS:
-            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            self.controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
 
     def test_another_task_running(self):
         """While another task runs, the plot is refused with a warning"""
         self.set_model(model=object())
         self.runner.busy = True
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.warning.assert_called_once()
         self.compute.assert_not_called()
 
@@ -303,7 +303,7 @@ class TestPredictionTask(unittest.TestCase):
 
 
 class TestPredictionInThread(unittest.TestCase):
-    """plot_regions with the controller's real background runner and a real thread."""
+    """plot_predictions with the controller's real background runner and a real thread."""
 
     @classmethod
     def setUpClass(cls):
@@ -326,7 +326,7 @@ class TestPredictionInThread(unittest.TestCase):
         spec = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=compute)
         controller.plugins = {PLUGIN_KEY: Bunch({spec.key: dict(model=object(), source=None)})}
         with patch.dict(cp.MODEL_FOR_OPTION, {DECODER: spec}):
-            cp.ChannelPrediction(controller).plot_regions(DECODER)
+            cp.ChannelPrediction(controller).plot_predictions(DECODER)
             for _ in range(500):
                 if not runner.task_running:
                     break
@@ -335,37 +335,52 @@ class TestPredictionInThread(unittest.TestCase):
         self.assertEqual(len(threads), len(SHANKS))
         self.assertNotIn(threading.get_ident(), threads)
         for shank in SHANKS:
-            controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
 
 
 class TestModelOptions(unittest.TestCase):
-    """Adding the model options to the region dropdown (which models: TestModelRegistry)."""
+    """The model options offered in Prediction Plots (which models: TestModelRegistry)."""
 
-    ALL = [
-        'XGBoost region prediction',
-        'XGBoost region prediction (cumulative)',
-        'ProbeTransformer region prediction',
-        'ProbeTransformer region prediction (cumulative)',
-        AUTO_ALIGNMENT_KEY,
-        AUTO_ALIGNMENT_CONFIDENCE_KEY,
-    ]
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-    def offered(self, present=()) -> list:
-        """The options _refresh_model_options adds, with torch and no model loaded."""
+    def offered(self, torch: bool = True, ephysatlas: bool = True) -> list:
+        """The prediction options setup gives the controller."""
+        view = QtWidgets.QWidget()
+        self.addCleanup(view.deleteLater)
         controller = SimpleNamespace(
-            plugins={PLUGIN_KEY: Bunch()},
-            view=MagicMock(),
-            plot_region_ref_panels=MagicMock(),
+            view=view, plugins={}, plugin_options=MagicMock(), prediction_keys=[]
         )
-        controller.view.has_menu_option.side_effect = lambda tab, key: key in present
-        with _installed(torch=True):
-            cp._refresh_model_options(controller)
-        populate = controller.view.populate_menu_tab
-        return populate.call_args.args[2] if populate.called else []
+        with _installed(torch=torch, ephysatlas=ephysatlas):
+            cp.setup(controller)
+        return controller.prediction_keys
 
-    def test_options_not_duplicated(self):
-        """Options already in the dropdown are not added again"""
-        self.assertCountEqual(self.offered(present=self.ALL[:2]), self.ALL[2:])
+    def test_every_option_of_each_model(self):
+        """With torch, both options of each decoder and of the auto-alignment, in order"""
+        self.assertEqual(
+            self.offered(),
+            [
+                'XGBoost region prediction',
+                'XGBoost region prediction (cumulative)',
+                'ProbeTransformer region prediction',
+                'ProbeTransformer region prediction (cumulative)',
+                AUTO_ALIGNMENT_KEY,
+                AUTO_ALIGNMENT_CONFIDENCE_KEY,
+            ],
+        )
+
+    def test_without_torch(self):
+        """Without torch, only the XGBoost decoder's options"""
+        self.assertEqual(
+            self.offered(torch=False),
+            ['XGBoost region prediction', 'XGBoost region prediction (cumulative)'],
+        )
+
+    def test_without_ephysatlas(self):
+        """Without ephysatlas, none"""
+        self.assertEqual(self.offered(ephysatlas=False), [])
 
 
 class TestModelRegistry(unittest.TestCase):

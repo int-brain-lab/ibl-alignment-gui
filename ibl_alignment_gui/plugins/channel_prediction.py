@@ -41,7 +41,7 @@ PLUGIN_NAME = 'Channel Prediction'
 
 # Every model the plugin offers, as the backends describe them (see ModelSpec).
 MODELS = (*DECODER_SPECS.values(), spatial.ENCODER_SPEC)
-# The model behind each of their region-plot options.
+# The model behind each of their prediction options.
 MODEL_FOR_OPTION = {option: spec for spec in MODELS for option in spec.options}
 
 
@@ -61,7 +61,8 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     Always installs the plugin state and its :class:`ChannelPrediction` loader. When ``ephysatlas``
     is importable, also adds the "Channel Prediction" menu (load inference/spatial models, load a
-    features file) and registers a data-loaded callback that exposes the model region options.
+    features file), offers the models' options in Prediction Plots and registers a data-loaded
+    callback that resets the per-session plugin state.
 
     Parameters
     ----------
@@ -81,6 +82,9 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     # One load action per model; those needing torch only when it is installed.
     models = available_models()
+    # Their options, offered in Prediction Plots. A model is loaded when one of its options is
+    # first selected (or from the Plugins menu).
+    controller.prediction_keys = [option for spec in models for option in spec.options]
     menu_actions = [
         (f'{spec.title} (Hugging Face)…', partial(_load_model, spec=spec)) for spec in models
     ]
@@ -359,18 +363,16 @@ def _load_done(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome:
 
 
 def _show_first_option(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
-    """Select the model's first region-plot option, which shows its predictions."""
-    _refresh_model_options(controller)  # make sure its options are offered
-    controller.view.trigger_menu_option('region', spec.options[0])
+    """Select the model's first prediction option, which shows its predictions."""
+    controller.view.trigger_menu_option('prediction', spec.options[0])
 
 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
-    """Data-load hook: reset per-session plugin state and expose available model region options.
+    """Data-load hook: reset per-session plugin state.
 
     Runs on every data load (i.e. each new session). Drops any manual features override so it does
-    not leak across sessions (each session supplies its own features), closes the previous
-    session's auto-alignment result windows, then refreshes which model region-plot options are
-    offered.
+    not leak across sessions (each session supplies its own features) and closes the previous
+    session's auto-alignment result windows.
 
     Parameters
     ----------
@@ -379,39 +381,14 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
     """
     controller.plugins[PLUGIN_NAME]['features_paths'] = None
     close_alignment_windows(controller)
-    _refresh_model_options(controller)
-
-
-def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
-    """Add the region-plot options of every available model, the same online and offline.
-
-    A model is loaded when one of its options is first selected (or from the Plugins menu). Models
-    that need torch are offered only when it is installed (:func:`available_models`). Options
-    already present are left untouched, so this is safe to call repeatedly (e.g. after each model
-    load and on every data reload).
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    """
-    new_keys = [
-        option
-        for spec in available_models()
-        for option in spec.options
-        if not controller.view.has_menu_option('region', option)
-    ]
-    if new_keys:
-        controller.view.populate_menu_tab(
-            'region', controller.plot_region_ref_panels, new_keys, set_checked=False
-        )
 
 
 class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
-    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` shows the
-    selected model option (``MODEL_FOR_OPTION``) on each shank, computed in the background.
+    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_predictions` shows the
+    selected model option (``MODEL_FOR_OPTION``) on each shank's prediction panel, computed in
+    the background.
     """
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
@@ -424,7 +401,7 @@ class ChannelPrediction:
         """
         self.controller = controller
 
-    def plot_regions(self, model: str) -> None:
+    def plot_predictions(self, option: str) -> None:
         """Show the selected model option on every aligned shank.
 
         A model's predictions are drawn from the cache, or computed first in the background
@@ -432,14 +409,13 @@ class ChannelPrediction:
 
         Parameters
         ----------
-        model : str
-            Region-plot option (e.g. 'Auto-alignment', 'XGBoost region prediction',
+        option : str
+            Prediction option (e.g. 'Auto-alignment', 'XGBoost region prediction',
             'XGBoost region prediction (cumulative)'). Unknown options are ignored.
         """
-        self.controller.region_init = model
-        spec = MODEL_FOR_OPTION.get(model)
+        spec = MODEL_FOR_OPTION.get(option)
         if spec is not None:
-            _predict(self.controller, spec, model)
+            _predict(self.controller, spec, option)
 
 
 # -----------------------------------------------------------------------------
@@ -598,7 +574,7 @@ def _busy_warning(controller: 'AlignmentGUIController', title: str) -> None:
 
 
 def _aligned_shanks(controller: 'AlignmentGUIController') -> list['ShankController']:
-    """Return the shanks a region option is shown on: the aligned ones, in shank_loop's order."""
+    """Return the shanks a prediction is shown on: the aligned ones, in shank_loop's order."""
     return [
         controller.shank_items[shank][config]
         for config in controller.model.configs
@@ -608,23 +584,19 @@ def _aligned_shanks(controller: 'AlignmentGUIController') -> list['ShankControll
 
 
 def _cache(items: 'ShankController') -> Bunch:
-    """Return the shank's cached region-plot views, by option."""
+    """Return the shank's cached prediction views, by option."""
     if not getattr(items.model, 'predictions', None):
         items.model.predictions = Bunch()
     return items.model.predictions
 
 
 def _draw(items: 'ShankController', option: str) -> None:
-    """Draw the shank's cached view of ``option``, if it has one."""
+    """Draw the shank's cached view of ``option`` on its prediction panel, or clear the panel."""
     pred = _cache(items).get(option)
-    if pred is None:
-        return
-    if 'probability' in pred:
-        items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
+    if pred is None:  # e.g. the prediction failed on this shank
+        items.view.clear_prediction(items.view.fig_pred, option)
     else:
-        items.view.plot_histology(
-            items.view.fig_hist_ref, pred, ax='right', boundaries=pred.get('boundaries', True)
-        )
+        items.view.plot_prediction(items.view.fig_pred, pred, option)
 
 
 def _draw_all(shanks: list['ShankController'], option: str) -> None:

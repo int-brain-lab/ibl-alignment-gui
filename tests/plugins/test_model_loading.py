@@ -47,7 +47,6 @@ def _fake_controller(features: bool = True) -> SimpleNamespace:
         name='probe00', model=SimpleNamespace(predictions=None), view=MagicMock()
     )
     view = MagicMock()
-    view.has_menu_option.return_value = True  # the model options are already offered
     return SimpleNamespace(
         plugins={PLUGIN_KEY: Bunch()},
         view=view,
@@ -148,13 +147,13 @@ class _ModelLoadingTests:
         cp._load_model(self.controller, self.test_spec)
 
     def plot(self) -> None:
-        """Select the model's first region-plot option."""
+        """Select the model's first prediction option."""
         cp._predict(self.controller, self.test_spec, self.test_spec.options[0])
 
     def shown(self) -> bool:
         """Whether, after loading from the menu, the model's first option was selected."""
         calls = self.controller.view.trigger_menu_option.call_args_list
-        return [c.args for c in calls] == [('region', self.test_spec.options[0])]
+        return [c.args for c in calls] == [('prediction', self.test_spec.options[0])]
 
     def set_state(self, model=None, source=None) -> None:
         self.controller.plugins[PLUGIN_KEY][self.key] = dict(model=model, source=source)

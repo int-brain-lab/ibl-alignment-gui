@@ -40,7 +40,7 @@ PLUGIN_KEY = 'Channel Prediction'
 # Track depths are stored along the histology track in meters; region plots expect microns.
 M_TO_UM = 1e6
 
-# Auto-alignment's region-plot options (also the per-shank prediction cache keys): the predicted
+# Auto-alignment's prediction options (also the per-shank prediction cache keys): the predicted
 # regions, and the alignment confidence along the probe.
 AUTO_ALIGNMENT_KEY = 'Auto-alignment'
 AUTO_ALIGNMENT_CONFIDENCE_KEY = 'Auto-alignment (confidence)'
@@ -72,7 +72,7 @@ class ModelSpec:
     invalidate : Callable
         ``invalidate(controller)``: drops the shanks' cached predictions of this model.
     options : tuple of str
-        The region-plot options the model offers, e.g. its most probable region and its
+        The prediction options the model offers, e.g. its most probable region and its
         cumulative probabilities. The first is selected after the model is loaded from the menu.
     compute : Callable
         ``compute(controller, items, model, progress) -> (views, extra)``: runs the loaded

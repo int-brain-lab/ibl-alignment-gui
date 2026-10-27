@@ -118,6 +118,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         default_config: str,
         non_default_config: str,
         feature_view: bool = False,
+        prediction_view: bool = False,
     ) -> list[QtWidgets.QWidget]:
         """
         Initialize the shank and slice tab widgets with the given shank items.
@@ -134,6 +135,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The non-default configuration.
         feature_view: bool
             Whether to display the ephys plot as a feature view or not.
+        prediction_view: bool
+            Whether to display the prediction plot alongside the ephys plots or not.
 
         Returns
         -------
@@ -153,19 +156,21 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
                     fig_area = custom_widgets.DualConfigFeatureWidget(
                         shank_items[shank][default_config].view,
                         shank_items[shank][non_default_config].view,
+                        prediction=prediction_view,
                     )
                 else:
                     fig_area = custom_widgets.DualConfigWidget(
                         shank_items[shank][default_config].view,
                         shank_items[shank][non_default_config].view,
+                        prediction=prediction_view,
                     )
             elif feature_view:
                 fig_area = custom_widgets.SingleConfigFeatureWidget(
-                    shank_items[shank][selected_config].view
+                    shank_items[shank][selected_config].view, prediction=prediction_view
                 )
             else:
                 fig_area = custom_widgets.SingleConfigWidget(
-                    shank_items[shank][selected_config].view
+                    shank_items[shank][selected_config].view, prediction=prediction_view
                 )
 
             # Add the fit items from each shank to the fit plot
@@ -286,6 +291,19 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         return self.menu_widgets.populate_exclusive_tab(
             tab, callback, options, set_checked=set_checked
         )
+
+    def set_menu_enabled(self, tab: str, enabled: bool) -> None:
+        """
+        Enable or grey out a menu tab.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        enabled: bool
+            Whether the tab can be opened
+        """
+        self.menu_widgets.tabs[tab]['menu'].setEnabled(enabled)
 
     def add_shortcuts_to_menu(self, tab: str, options: dict) -> None:
         """See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""

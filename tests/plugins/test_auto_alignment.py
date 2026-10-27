@@ -160,10 +160,10 @@ class TestAlignShank(unittest.TestCase):
         )
 
     def plot(self, option) -> None:
-        cp.ChannelPrediction(self.controller).plot_regions(option)
+        cp.ChannelPrediction(self.controller).plot_predictions(option)
 
     def drawn(self) -> list:
-        return [c.args[1] for c in self.items.view.plot_histology.call_args_list]
+        return [c.args[1] for c in self.items.view.plot_prediction.call_args_list]
 
     def test_align_returns_both_views(self):
         """align_shank returns the regions and confidence views, and what the window needs"""

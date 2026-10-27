@@ -3,6 +3,7 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
@@ -28,10 +29,15 @@ from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_di
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
+if TYPE_CHECKING:
+    from ibl_alignment_gui.app.views.shank_view import ShankView
+
 logger = logging.getLogger(__name__)
 
 # The atlas mappings offered in Region Plots, drawn on the reference histology panels.
 REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
+# The Prediction Plots option that hides the prediction panels.
+NO_PREDICTION = 'None'
 
 
 class AlignmentGUIController:
@@ -133,6 +139,7 @@ class AlignmentGUIController:
         self.hover_shank: str | None = None
         self.hover_idx: int | None = None
         self.hover_config: str | None = None
+        self.hover_prediction: ShankView | None = None
 
         # Available shanks and their controllers
         self.all_shanks: list = list()
@@ -146,6 +153,11 @@ class AlignmentGUIController:
         self.slice_init: str | None = None
         self.filter_init: str | None = None
         self.region_init: str | None = None
+        self.prediction_init: str | None = None
+
+        # The channel prediction options offered in Prediction Plots, set by the Channel
+        # Prediction plugin
+        self.prediction_keys: list[str] = []
 
         # The ephys view mode
         self.show_feature = False
@@ -288,6 +300,10 @@ class AlignmentGUIController:
                 'shortcut': 'Alt+5',
                 'callback': lambda: self.toggle_plots('region', 1),
             },
+            'Toggle Prediction Plots ->': {
+                'shortcut': 'Alt+6',
+                'callback': lambda: self.toggle_plots('prediction', 1),
+            },
             'Toggle Image Plots <-': {
                 'shortcut': 'Shift+Alt+1',
                 'callback': lambda: self.toggle_plots('image', -1),
@@ -307,6 +323,10 @@ class AlignmentGUIController:
             'Toggle Region Plots <-': {
                 'shortcut': 'Shift+Alt+5',
                 'callback': lambda: self.toggle_plots('region', -1),
+            },
+            'Toggle Prediction Plots <-': {
+                'shortcut': 'Shift+Alt+6',
+                'callback': lambda: self.toggle_plots('prediction', -1),
             },
             # Shortcut to reset axis on figures
             'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
@@ -357,6 +377,10 @@ class AlignmentGUIController:
         self.region_init = self.view.populate_menu_tab(
             'region', self.plot_region_ref_panels, REGION_MAPPINGS
         )
+        self.prediction_init = self.view.populate_menu_tab(
+            'prediction', self.plot_prediction_panels, [NO_PREDICTION, *self.prediction_keys]
+        )
+        self.view.set_menu_enabled('prediction', bool(self.prediction_keys))
 
     # --------------------------------------------------------------------------------------------
     # Plugins
@@ -408,6 +432,7 @@ class AlignmentGUIController:
             self.model.default_config,
             self.model.non_default_config,
             feature_view=self.show_feature,
+            prediction_view=self.show_prediction_panel,
         )
         for tab in shank_tabs:
             tab.setup_double_click(self.on_mouse_double_clicked)
@@ -484,13 +509,46 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.region_init = plot_key
-        if plot_key not in REGION_MAPPINGS:
-            self.plugins['Channel Prediction']['loader'].plot_regions(plot_key)
-            return
         errors = self.plot_histology_ref_panels(mapping=plot_key)
         messages = list(dict.fromkeys(error for error in errors if error))
         if messages:
             QtWidgets.QMessageBox.warning(self.view, plot_key, '\n\n'.join(messages))
+
+    @property
+    def show_prediction_panel(self) -> bool:
+        """
+        Return whether the prediction panel is shown alongside the ephys plots.
+
+        Returns
+        -------
+        bool
+            True when a channel prediction is selected in Prediction Plots.
+        """
+        return self.prediction_init not in (None, NO_PREDICTION)
+
+    def plot_prediction_panels(self, plot_key: str, data_only: bool = True) -> None:
+        """
+        Show the channel prediction chosen in Prediction Plots alongside the ephys plots.
+
+        The prediction panels are added to the display when a prediction is first chosen and
+        removed when 'None' is chosen. The predictions are computed and drawn by the Channel
+        Prediction plugin.
+
+        Parameters
+        ----------
+        plot_key: str
+            The channel prediction option, or 'None' to hide the prediction panels
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        shown = self.show_prediction_panel
+        self.prediction_init = plot_key
+        if self.show_prediction_panel != shown:
+            # Add or remove the prediction panels; the prediction is drawn once they are built
+            self.on_view_changed()
+            return
+        if self.show_prediction_panel:
+            self.plugins['Channel Prediction']['loader'].plot_predictions(plot_key)
 
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """
@@ -897,6 +955,8 @@ class AlignmentGUIController:
             self.view.trigger_menu_option('probe', self.probe_init)
         else:
             self.view.trigger_menu_option('feature', self.feature_init)
+        if self.show_prediction_panel:
+            self.view.trigger_menu_option('prediction', self.prediction_init)
         self.blockPlugins = False
 
     # --------------------------------------------------------------------------------------------
@@ -1670,6 +1730,11 @@ class AlignmentGUIController:
         self.hover_shank = name
         self.hover_config = config
 
+        # Restore the title of a prediction whose region was hovered over
+        if self.hover_prediction is not None:
+            self.hover_prediction.reset_prediction_title()
+            self.hover_prediction = None
+
         if len(hover_items) > 1:
             self.hover_line = None
             hover_item0, hover_item1 = hover_items[0], hover_items[1]
@@ -1687,6 +1752,11 @@ class AlignmentGUIController:
                     return
                 if hover_item0 == items.view.fig_hist_ref:
                     self.hover_region = hover_item1
+                    return
+                # Check if we are on a prediction plot
+                if hover_item0 in items.view.prediction_figs:
+                    items.view.show_prediction_region(hover_item0, hover_item1)
+                    self.hover_prediction = items.view
                     return
             elif self.show_feature and isinstance(hover_item1, pg.ImageItem):
                 items = self.shank_items[name][config]

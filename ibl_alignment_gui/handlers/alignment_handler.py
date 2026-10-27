@@ -364,6 +364,36 @@ class AlignmentHandler:
 
         return hist_data, hist_data_ref, scale_data
 
+    def get_reference_histology(self, mapping: str = 'Allen') -> Bunch:
+        """
+        Compute the brain regions along the probe track for an atlas mapping, without alignment.
+
+        Parameters
+        ----------
+        mapping : str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'.
+
+        Returns
+        -------
+        Bunch
+            The regions, axis labels and colours along the track, in um, for ``plot_histology``.
+        """
+        if mapping == 'Allen':
+            region, region_label = self.ephysalign.region, self.ephysalign.region_label
+            colour = self.ephysalign.region_colour
+        else:
+            region, region_label, colour, _ = self.ephysalign.get_histology_regions(
+                self.xyz_samples, self.ephysalign.sampling_trk, self.brain_atlas, mapping=mapping
+            )
+        region, region_label = self.ephysalign.scale_histology_regions(
+            self.ephysalign.track_extent,
+            self.ephysalign.track_extent,
+            region=region,
+            region_label=region_label,
+        )
+
+        return Bunch(region=region, axis_label=region_label, colour=colour)
+
     def scale_hist_data(
         self,
         line_track: np.ndarray,

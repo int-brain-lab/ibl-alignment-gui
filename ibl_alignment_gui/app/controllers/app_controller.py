@@ -30,6 +30,9 @@ from iblutil.util import Bunch
 
 logger = logging.getLogger(__name__)
 
+# The atlas mappings offered in Region Plots, drawn on the reference histology panels.
+REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
+
 
 class AlignmentGUIController:
     """
@@ -351,9 +354,8 @@ class AlignmentGUIController:
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
         )
-        region_keys = ['Allen', 'Beryl', 'Cosmos']
         self.region_init = self.view.populate_menu_tab(
-            'region', self.plot_region_ref_panels, region_keys
+            'region', self.plot_region_ref_panels, REGION_MAPPINGS
         )
 
     # --------------------------------------------------------------------------------------------
@@ -445,17 +447,50 @@ class AlignmentGUIController:
         self.hover_region = items.plot_histology()
 
     @shank_loop
-    def plot_histology_ref_panels(self, items: ShankController, **kwargs) -> None:
-        """Plot histology reference panel per shank and config."""
-        items.plot_histology_ref()
+    def plot_histology_ref_panels(
+        self, items: ShankController, mapping: str = 'Allen', **kwargs
+    ) -> str | None:
+        """
+        Plot histology reference panel per shank and config.
+
+        Parameters
+        ----------
+        mapping: str
+            The atlas mapping of the regions, e.g. 'Allen', 'Beryl' or 'Cosmos'
+
+        Returns
+        -------
+        str or None
+            The error message if the regions could not be found, else None. Errors are returned
+            rather than shown so that they are reported once for all shanks.
+        """
+        try:
+            items.plot_histology_ref(mapping)
+        except Exception as exc:
+            logger.exception(
+                '%s regions failed on shank %s (%s)', mapping, kwargs.get('shank'), items.config
+            )
+            return f'{mapping} regions could not be found: {type(exc).__name__}: {exc}'
 
     def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
-        """Handle Region Plots menu selection — delegates non-Original keys to the plugin."""
+        """
+        Plot the reference histology panels with the atlas mapping chosen in Region Plots.
+
+        Parameters
+        ----------
+        plot_key: str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
         self.region_init = plot_key
-        if plot_key == 'Allen':
-            self.plot_histology_ref_panels()
+        if plot_key not in REGION_MAPPINGS:
+            self.plugins['Channel Prediction']['loader'].plot_regions(plot_key)
             return
-        self.plugins['Channel Prediction']['loader'].plot_regions(plot_key, data_only=data_only)
+        errors = self.plot_histology_ref_panels(mapping=plot_key)
+        messages = list(dict.fromkeys(error for error in errors if error))
+        if messages:
+            QtWidgets.QMessageBox.warning(self.view, plot_key, '\n\n'.join(messages))
 
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """

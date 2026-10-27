@@ -10,7 +10,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 from qtpy import QtTest, QtWidgets
 
@@ -61,97 +60,6 @@ def _fake_controller() -> SimpleNamespace:
             get_current_shank=lambda shank, config: SimpleNamespace(align_exists=True),
         ),
     )
-
-
-class TestPlotRegionPanels(unittest.TestCase):
-    def setUp(self):
-        self.controller = _fake_controller()
-        self.items = [self.controller.shank_items[shank]['default'] for shank in SHANKS]
-        self.regions = Bunch(region='regions view')
-        self.other = Bunch(region='other view')
-
-    def drawn(self, items) -> list:
-        """The views drawn on a shank, in order."""
-        return [c.args[1] for c in items.view.plot_histology.call_args_list]
-
-    def test_single_view_cached(self):
-        """A single view is cached under its option and the model runs once per shank"""
-        func = MagicMock(return_value={'Model': self.regions})
-        cp._plot_region_panels(self.controller, 'Model', func)
-        cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(func.call_count, len(SHANKS))
-        for items in self.items:
-            self.assertIs(items.model.predictions['Model'], self.regions)
-            self.assertEqual(self.drawn(items), [self.regions, self.regions])
-
-    def test_error_not_cached(self):
-        """A PredictionError is returned per shank, nothing is cached, and the next call retries"""
-        func = MagicMock(side_effect=PredictionError('no features'))
-        errors = cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(errors, ['no features'] * len(SHANKS))
-        for items in self.items:
-            self.assertNotIn('Model', items.model.predictions)
-        func.side_effect, func.return_value = None, {'Model': self.regions}
-        cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(func.call_count, 2 * len(SHANKS))
-
-    def test_unexpected_error_reported(self):
-        """Any other error is returned per shank with its type and message, logged, not cached"""
-        func = MagicMock(side_effect=ValueError('boom'))
-        with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR') as logs:
-            errors = cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(len(errors), len(SHANKS))
-        for error in errors:
-            self.assertIn('Unexpected error in Model: ValueError: boom', error)
-            self.assertIn('See the log for details.', error)
-        self.assertEqual(len(logs.records), len(SHANKS))
-        self.assertIn('Traceback', logs.output[0])
-        for items in self.items:
-            self.assertNotIn('Model', items.model.predictions)
-
-    def test_unexpected_error_shown_once(self):
-        """Through plot_regions, the same error on every shank gives one warning"""
-        self.controller.view = None
-        self.controller.model.brain_atlas = None
-        loader = cp.ChannelPrediction(self.controller)
-        loader.func_map['Model'] = MagicMock(side_effect=ValueError('boom'))
-        with (
-            patch.object(cp.QtWidgets.QMessageBox, 'warning') as warning,
-            self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'),
-        ):
-            loader.plot_regions('Model')
-        warning.assert_called_once()
-        self.assertEqual(warning.call_args.args[1], 'Model')
-        self.assertEqual(warning.call_args.args[2].count('Unexpected error in Model'), 1)
-
-
-class TestComputeMappingPredictions(unittest.TestCase):
-    def test_keyed_by_mapping(self):
-        """Beryl and Cosmos return their regions keyed by their region-plot option"""
-        regions = Bunch(
-            id=np.array([1, 1]), acronym=np.array(['A', 'A']), rgb=np.array([[1, 2, 3]] * 2)
-        )
-        controller = SimpleNamespace(
-            model=SimpleNamespace(
-                brain_atlas=SimpleNamespace(
-                    get_labels=lambda xyz, mapping: np.array([1, 1]),
-                    regions=SimpleNamespace(get=lambda ids: regions),
-                )
-            )
-        )
-        items = SimpleNamespace(
-            model=SimpleNamespace(
-                align_handle=SimpleNamespace(
-                    xyz_samples=None,
-                    ephysalign=SimpleNamespace(sampling_trk=np.array([0.0, 1e-5])),
-                )
-            )
-        )
-        for mapping in ('Beryl', 'Cosmos'):
-            with self.subTest(mapping=mapping):
-                views = cp.compute_mapping_predictions(controller, items, mapping)
-                self.assertEqual(list(views), [mapping])
-                self.assertEqual(views[mapping].axis_label[:, 1].tolist(), ['A'])
 
 
 DECODER = 'XGBoost region prediction'
@@ -263,15 +171,6 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.loader.plot_regions(transformer)
         # One dialog per model, though each ran on two shanks
         self.assertEqual([c.args[1] for c in self.warning.call_args_list], [DECODER, transformer])
-
-    def test_mapping_needs_no_model(self):
-        """Beryl is computed at once, without a model or a background task"""
-        self.loader.func_map['Beryl'] = MagicMock(return_value={'Beryl': Bunch()})
-        with patch.object(cp, 'choose_source') as dialog:
-            self.loader.plot_regions('Beryl')
-        dialog.assert_not_called()
-        self.assertEqual(self.runner.tasks, [])
-        self.assertEqual(self.loader.func_map['Beryl'].call_count, len(SHANKS))
 
     def test_all_cached_no_task(self):
         """When every shank has the option cached, it is drawn without a task"""

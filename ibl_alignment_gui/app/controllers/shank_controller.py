@@ -74,9 +74,21 @@ class ShankController:
 
         return self.view.hist_regions[-2]
 
-    def plot_histology_ref(self) -> None:
-        """Plot the histology reference plot."""
-        self.view.plot_histology(self.view.fig_hist_ref, self.model.hist_data_ref, ax='right')
+    def plot_histology_ref(self, mapping: str = 'Allen') -> None:
+        """
+        Plot the histology reference plot.
+
+        Parameters
+        ----------
+        mapping: str
+            The atlas mapping of the regions, e.g. 'Allen', 'Beryl' or 'Cosmos'
+        """
+        data = (
+            self.model.hist_data_ref
+            if mapping == 'Allen'
+            else self.model.get_reference_histology(mapping)
+        )
+        self.view.plot_histology(self.view.fig_hist_ref, data, ax='right')
 
     def plot_scale_factor(self) -> ColorBar:
         """

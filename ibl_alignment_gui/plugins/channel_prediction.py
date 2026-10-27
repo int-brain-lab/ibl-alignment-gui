@@ -17,7 +17,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
     choose_source,
     close_alignment_windows,
-    get_region_boundaries,
     has_features,
     is_model_loaded,
     load_model,
@@ -26,7 +25,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     store_model,
 )
 from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
-from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 # NB: both backends import ``ephysatlas`` (and torch) only when a model is used, so this plugin
@@ -38,7 +36,6 @@ if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
     from ibl_alignment_gui.plugins.ephys_atlas._common import ModelSpec
-    from iblatlas.atlas import AllenAtlas
 
 PLUGIN_NAME = 'Channel Prediction'
 
@@ -414,12 +411,11 @@ class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
     Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` shows the
-    selected region option on each shank: an atlas mapping (``func_map``) computed at once, or a
-    model's predictions (``MODEL_FOR_OPTION``) computed in the background.
+    selected model option (``MODEL_FOR_OPTION``) on each shank, computed in the background.
     """
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
-        """Store the controller and cache its brain atlas.
+        """Store the controller.
 
         Parameters
         ----------
@@ -427,41 +423,23 @@ class ChannelPrediction:
             The main application controller.
         """
         self.controller = controller
-        self.ba: AllenAtlas = self.controller.model.brain_atlas
-        self.func_map = {
-            'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
-            'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
-        }
 
-    def plot_regions(self, model: str, data_only: bool = True) -> None:
-        """Show the selected region option on every aligned shank.
+    def plot_regions(self, model: str) -> None:
+        """Show the selected model option on every aligned shank.
 
-        An atlas mapping is computed and drawn at once. A model's predictions are drawn from the
-        cache, or computed first in the background (:func:`_predict`). Problems are reported in
-        one warning for all shanks.
+        A model's predictions are drawn from the cache, or computed first in the background
+        (:func:`_predict`). Problems are reported in one warning for all shanks.
 
         Parameters
         ----------
         model : str
-            Region-plot option (e.g. 'Beryl', 'Cosmos', 'Auto-alignment',
-            'XGBoost region prediction', 'XGBoost region prediction (cumulative)'). Unknown
-            options are ignored.
-        data_only : bool
-            Reserved for signature compatibility with the region-plot callback; not used here.
+            Region-plot option (e.g. 'Auto-alignment', 'XGBoost region prediction',
+            'XGBoost region prediction (cumulative)'). Unknown options are ignored.
         """
         self.controller.region_init = model
         spec = MODEL_FOR_OPTION.get(model)
         if spec is not None:
             _predict(self.controller, spec, model)
-            return
-        func = self.func_map.get(model)
-        if func is None:
-            return
-        errors = _plot_region_panels(self.controller, model, func)
-        # One dialog for all shanks; the shanks that succeeded are still drawn.
-        messages = list(dict.fromkeys(error for error in errors if error))
-        if messages:
-            QtWidgets.QMessageBox.warning(self.controller.view, model, '\n\n'.join(messages))
 
 
 # -----------------------------------------------------------------------------
@@ -653,92 +631,3 @@ def _draw_all(shanks: list['ShankController'], option: str) -> None:
     """Draw ``option`` on each shank that has it."""
     for items in shanks:
         _draw(items, option)
-
-
-# -----------------------------------------------------------------------------
-# Atlas mappings, computed at once
-# -----------------------------------------------------------------------------
-
-
-@shank_loop
-def _plot_region_panels(
-    controller: 'AlignmentGUIController',
-    items: 'ShankController',
-    model: str,
-    func: Callable[..., dict[str, Bunch]],
-    **kwargs,
-) -> str | None:
-    """Compute (and cache) a shank's atlas mapping ``model`` and draw it.
-
-    Decorated with :func:`shank_loop`, so a single call iterates over every shank/config (the
-    injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The view is computed
-    once per shank and cached on ``items.model.predictions``. The models' predictions are
-    computed in the background instead (:func:`_predict`).
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank to compute and draw.
-    model : str
-        The mapping's region-plot option, also its per-shank cache key.
-    func : Callable
-        The mapping's compute function, returning ``{model: view}``.
-
-    Returns
-    -------
-    str or None
-        The error message when the prediction failed, else None: a ``PredictionError``'s message,
-        or a short message naming the error when something unexpected failed (its traceback is
-        logged). Errors are returned rather than shown so that the caller reports them once for
-        all shanks.
-    """
-    if _cache(items).get(model) is None:
-        try:
-            views = func(controller, items)
-        except PredictionError as exc:
-            return str(exc)
-        except Exception as exc:
-            # Anything else is a bug or an unforeseen failure. Keep it out of Qt (an uncaught
-            # exception in a callback aborts the app), log the traceback, and report it with the
-            # other shanks' errors.
-            logger.exception(
-                '%s failed on shank %s (%s)', model, kwargs.get('shank'), kwargs.get('config')
-            )
-            return _unexpected(model, exc)
-        _cache(items).update(views)
-
-    _draw(items, model)
-
-
-def compute_mapping_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController', mapping: str = 'Beryl'
-) -> dict[str, Bunch]:
-    """
-    Return brain regions based on a specified atlas mapping, as an example prediction model.
-
-    Parameters
-    ----------
-    controller: 'AlignmentGUIController'
-        The main application controller.
-    items: 'ShankController'
-        The shank controller containing the model and view for the current shank.
-    mapping: str
-        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos'), also its
-        region-plot option.
-
-    Returns
-    -------
-    dict of {str: Bunch}
-        The predicted brain regions, keyed by the region-plot option (the mapping).
-    """
-    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
-    xyz_samples = items.model.align_handle.xyz_samples
-    # depths of these coordinates along the track
-    depth_samples = items.model.align_handle.ephysalign.sampling_trk
-
-    region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping=mapping)
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return {mapping: get_region_boundaries(regions, depth_samples)}

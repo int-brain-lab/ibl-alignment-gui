@@ -768,7 +768,7 @@ class TestFeatureLoaderOneTables(unittest.TestCase):
         """The rows read for an insertion say which vintage they are"""
         self.write_table()
         df = self.loader.load_dataframe('ea_active', '2026_W39', self.root)
-        self.assertEqual(df.attrs['vintage'], '2026_W39')
+        self.assertEqual(df.attrs['features_version'], '2026_W39')
 
     def test_other_download_error_raises(self):
         """Any other download failure (e.g. the network) still raises"""

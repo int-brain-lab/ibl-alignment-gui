@@ -17,7 +17,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     PredictionError,
     choose_source,
     close_alignment_windows,
-    get_region_boundaries,
     has_features,
     is_model_loaded,
     load_model,
@@ -26,7 +25,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     store_model,
 )
 from ibl_alignment_gui.plugins.ephys_atlas.inference import DECODER_SPECS
-from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 # NB: both backends import ``ephysatlas`` (and torch) only when a model is used, so this plugin
@@ -38,13 +36,16 @@ if TYPE_CHECKING:
     from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
     from ibl_alignment_gui.app.controllers.shank_controller import ShankController
     from ibl_alignment_gui.plugins.ephys_atlas._common import ModelSpec
-    from iblatlas.atlas import AllenAtlas
 
 PLUGIN_NAME = 'Channel Prediction'
+# Title of the dialogs of the all predictions view.
+ALL_TITLE = 'All predictions'
+# Shown in the all predictions view on the figures of a model that is not loaded.
+NOT_LOADED_MESSAGE = 'Not loaded: Plugins -> Channel Prediction'
 
 # Every model the plugin offers, as the backends describe them (see ModelSpec).
 MODELS = (*DECODER_SPECS.values(), spatial.ENCODER_SPEC)
-# The model behind each of their region-plot options.
+# The model behind each of their prediction options.
 MODEL_FOR_OPTION = {option: spec for spec in MODELS for option in spec.options}
 
 
@@ -64,7 +65,8 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     Always installs the plugin state and its :class:`ChannelPrediction` loader. When ``ephysatlas``
     is importable, also adds the "Channel Prediction" menu (load inference/spatial models, load a
-    features file) and registers a data-loaded callback that exposes the model region options.
+    features file), offers the models' options in Prediction Plots and registers a data-loaded
+    callback that resets the per-session plugin state.
 
     Parameters
     ----------
@@ -84,6 +86,9 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     # One load action per model; those needing torch only when it is installed.
     models = available_models()
+    # Their options, offered in Prediction Plots. A model is loaded when one of its options is
+    # first selected (or from the Plugins menu).
+    controller.prediction_keys = [option for spec in models for option in spec.options]
     menu_actions = [
         (f'{spec.title} (Hugging Face)…', partial(_load_model, spec=spec)) for spec in models
     ]
@@ -362,18 +367,22 @@ def _load_done(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome:
 
 
 def _show_first_option(controller: 'AlignmentGUIController', spec: 'ModelSpec') -> None:
-    """Select the model's first region-plot option, which shows its predictions."""
-    _refresh_model_options(controller)  # make sure its options are offered
-    controller.view.trigger_menu_option('region', spec.options[0])
+    """Select the model's first prediction option, which shows its predictions.
+
+    In the all predictions view, the view is redrawn instead, with the model's predictions.
+    """
+    if getattr(controller, 'show_predictions', False):
+        _predict_all(controller)
+        return
+    controller.view.trigger_menu_option('prediction', spec.options[0])
 
 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
-    """Data-load hook: reset per-session plugin state and expose available model region options.
+    """Data-load hook: reset per-session plugin state.
 
     Runs on every data load (i.e. each new session). Drops any manual features override so it does
-    not leak across sessions (each session supplies its own features), closes the previous
-    session's auto-alignment result windows, then refreshes which model region-plot options are
-    offered.
+    not leak across sessions (each session supplies its own features) and closes the previous
+    session's auto-alignment result windows.
 
     Parameters
     ----------
@@ -382,44 +391,18 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
     """
     controller.plugins[PLUGIN_NAME]['features_paths'] = None
     close_alignment_windows(controller)
-    _refresh_model_options(controller)
-
-
-def _refresh_model_options(controller: 'AlignmentGUIController') -> None:
-    """Add the region-plot options of every available model, the same online and offline.
-
-    A model is loaded when one of its options is first selected (or from the Plugins menu). Models
-    that need torch are offered only when it is installed (:func:`available_models`). Options
-    already present are left untouched, so this is safe to call repeatedly (e.g. after each model
-    load and on every data reload).
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    """
-    new_keys = [
-        option
-        for spec in available_models()
-        for option in spec.options
-        if not controller.view.has_menu_option('region', option)
-    ]
-    if new_keys:
-        controller.view.populate_menu_tab(
-            'region', controller.plot_region_ref_panels, new_keys, set_checked=False
-        )
 
 
 class ChannelPrediction:
     """Plugin loader that computes and plots per-channel region predictions.
 
-    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_regions` shows the
-    selected region option on each shank: an atlas mapping (``func_map``) computed at once, or a
-    model's predictions (``MODEL_FOR_OPTION``) computed in the background.
+    Registered as the Channel Prediction plugin's ``loader``; :meth:`plot_predictions` shows the
+    selected model option (``MODEL_FOR_OPTION``) on each shank's prediction panel, computed in
+    the background.
     """
 
     def __init__(self, controller: 'AlignmentGUIController') -> None:
-        """Store the controller and cache its brain atlas.
+        """Store the controller.
 
         Parameters
         ----------
@@ -427,41 +410,31 @@ class ChannelPrediction:
             The main application controller.
         """
         self.controller = controller
-        self.ba: AllenAtlas = self.controller.model.brain_atlas
-        self.func_map = {
-            'Beryl': partial(compute_mapping_predictions, mapping='Beryl'),
-            'Cosmos': partial(compute_mapping_predictions, mapping='Cosmos'),
-        }
 
-    def plot_regions(self, model: str, data_only: bool = True) -> None:
-        """Show the selected region option on every aligned shank.
+    def plot_predictions(self, option: str) -> None:
+        """Show the selected model option on every aligned shank.
 
-        An atlas mapping is computed and drawn at once. A model's predictions are drawn from the
-        cache, or computed first in the background (:func:`_predict`). Problems are reported in
-        one warning for all shanks.
+        A model's predictions are drawn from the cache, or computed first in the background
+        (:func:`_predict`). Problems are reported in one warning for all shanks.
 
         Parameters
         ----------
-        model : str
-            Region-plot option (e.g. 'Beryl', 'Cosmos', 'Auto-alignment',
-            'XGBoost region prediction', 'XGBoost region prediction (cumulative)'). Unknown
-            options are ignored.
-        data_only : bool
-            Reserved for signature compatibility with the region-plot callback; not used here.
+        option : str
+            Prediction option (e.g. 'Auto-alignment', 'XGBoost region prediction',
+            'XGBoost region prediction (cumulative)'). Unknown options are ignored.
         """
-        self.controller.region_init = model
-        spec = MODEL_FOR_OPTION.get(model)
+        spec = MODEL_FOR_OPTION.get(option)
         if spec is not None:
-            _predict(self.controller, spec, model)
-            return
-        func = self.func_map.get(model)
-        if func is None:
-            return
-        errors = _plot_region_panels(self.controller, model, func)
-        # One dialog for all shanks; the shanks that succeeded are still drawn.
-        messages = list(dict.fromkeys(error for error in errors if error))
-        if messages:
-            QtWidgets.QMessageBox.warning(self.controller.view, model, '\n\n'.join(messages))
+            _predict(self.controller, spec, option)
+
+    def plot_all_predictions(self) -> None:
+        """Show every option of the loaded models side by side on every aligned shank.
+
+        The options of models that are not loaded say so; their models are not loaded here. The
+        missing views are computed first, for all models in one background task
+        (:func:`_predict_all`).
+        """
+        _predict_all(self.controller)
 
 
 # -----------------------------------------------------------------------------
@@ -587,17 +560,108 @@ def _prediction_done(
     shanks: list['ShankController'],
     outcome: _Outcome,
 ) -> None:
-    """Keep and draw what the task computed, and report its errors once (main thread)."""
+    """Keep and draw what the task computed, and report its warnings and errors once (main thread).
+
+    The warnings are those the task queued in the plugin state's ``pending_warnings`` (e.g. local
+    features of another feature version than the model's).
+    """
+    _keep(controller, spec, outcome)
+    _draw_all(shanks, option)
+    _report(controller, option, outcome.errors)
+
+
+def _keep(controller: 'AlignmentGUIController', spec: 'ModelSpec', outcome: _Outcome) -> None:
+    """Keep the model a task loaded and the views it computed (main thread)."""
     if outcome.loaded_from is not None:
         store_model(controller, spec, outcome.model, outcome.loaded_from)
     for items, views, extra in outcome.results:
         _cache(items).update(views)
         if spec.on_computed is not None:
             spec.on_computed(controller, items, extra)
-    _draw_all(shanks, option)
-    messages = list(dict.fromkeys(outcome.errors))
+
+
+def _report(controller: 'AlignmentGUIController', title: str, errors: list[str]) -> None:
+    """Show the warnings queued by the task and its errors in one dialog, if there are any.
+
+    The warnings are those the task queued in the plugin state's ``pending_warnings`` (e.g. local
+    features of another feature version than the model's).
+    """
+    warnings = plugin_state(controller).pop('pending_warnings', [])
+    messages = list(dict.fromkeys(warnings + errors))
     if messages:
-        QtWidgets.QMessageBox.warning(controller.view, option, '\n\n'.join(messages))
+        QtWidgets.QMessageBox.warning(controller.view, title, '\n\n'.join(messages))
+
+
+def _all_predictions_task(
+    controller: 'AlignmentGUIController', jobs: list, progress_callback: Callable
+) -> list[tuple['ModelSpec', _Outcome]]:
+    """Run each loaded model on its shanks, one after the other (background thread, no Qt).
+
+    ``jobs`` holds each model's ``(spec, model, shanks)``. A model's errors are kept and the next
+    model is run; after Cancel, the models finished so far are kept and the rest skipped.
+    """
+    results = []
+    for spec, model, shanks in jobs:
+
+        def progress(message, current, total, name=spec.key):
+            progress_callback(f'{name}, {message}', current, total)
+
+        outcome = _prediction_task(controller, spec, model, None, shanks, progress)
+        results.append((spec, outcome))
+        if outcome.cancelled:
+            break
+    return results
+
+
+def _predict_all(controller: 'AlignmentGUIController') -> None:
+    """Show every option of the loaded models on every aligned shank, side by side.
+
+    The views missing for the loaded models are computed in one background task, behind one
+    progress dialog whose Cancel stops it, and the shanks are drawn when it ends
+    (:func:`_all_predictions_done`). Models that are not loaded are not loaded here.
+    """
+    shanks = _aligned_shanks(controller)
+    jobs = []
+    for spec in available_models():
+        if not is_model_loaded(controller, spec.key):
+            continue
+        todo = [
+            items
+            for items in shanks
+            if any(_cache(items).get(option) is None for option in spec.options)
+        ]
+        if todo:
+            jobs.append((spec, plugin_state(controller)[spec.key]['model'], todo))
+    if not jobs:
+        _draw_all_predictions(controller, shanks)
+        return
+    started = controller.run_in_thread(
+        _all_predictions_task,
+        controller,
+        jobs,
+        on_finished=partial(_all_predictions_done, controller, shanks),
+        on_error=partial(_task_failed, controller, ALL_TITLE),
+        busy_message='Starting…',
+        title=ALL_TITLE,
+        report_progress=True,
+        cancellable=True,
+    )
+    if not started:
+        _busy_warning(controller, ALL_TITLE)
+
+
+def _all_predictions_done(
+    controller: 'AlignmentGUIController',
+    shanks: list['ShankController'],
+    results: list[tuple['ModelSpec', _Outcome]],
+) -> None:
+    """Keep and draw what each model computed, and report all problems once (main thread)."""
+    errors = []
+    for spec, outcome in results:
+        _keep(controller, spec, outcome)
+        errors.extend(outcome.errors)
+    _draw_all_predictions(controller, shanks)
+    _report(controller, ALL_TITLE, errors)
 
 
 def _task_failed(controller: 'AlignmentGUIController', title: str, traceback: str) -> None:
@@ -615,7 +679,7 @@ def _busy_warning(controller: 'AlignmentGUIController', title: str) -> None:
 
 
 def _aligned_shanks(controller: 'AlignmentGUIController') -> list['ShankController']:
-    """Return the shanks a region option is shown on: the aligned ones, in shank_loop's order."""
+    """Return the shanks a prediction is shown on: the aligned ones, in shank_loop's order."""
     return [
         controller.shank_items[shank][config]
         for config in controller.model.configs
@@ -625,23 +689,23 @@ def _aligned_shanks(controller: 'AlignmentGUIController') -> list['ShankControll
 
 
 def _cache(items: 'ShankController') -> Bunch:
-    """Return the shank's cached region-plot views, by option."""
+    """Return the shank's cached prediction views, by option."""
     if not getattr(items.model, 'predictions', None):
         items.model.predictions = Bunch()
     return items.model.predictions
 
 
-def _draw(items: 'ShankController', option: str) -> None:
-    """Draw the shank's cached view of ``option``, if it has one."""
+def _draw(items: 'ShankController', option: str, fig=None) -> None:
+    """Draw the shank's cached view of ``option`` on a prediction figure, or clear the figure.
+
+    The figure is the shank's prediction panel unless given.
+    """
+    fig = items.view.fig_pred if fig is None else fig
     pred = _cache(items).get(option)
-    if pred is None:
-        return
-    if 'probability' in pred:
-        items.view.plot_histology_cumulative(items.view.fig_hist_ref, pred)
+    if pred is None:  # e.g. the prediction failed on this shank
+        items.view.clear_prediction(fig, option)
     else:
-        items.view.plot_histology(
-            items.view.fig_hist_ref, pred, ax='right', boundaries=pred.get('boundaries', True)
-        )
+        items.view.plot_prediction(fig, pred, option)
 
 
 def _draw_all(shanks: list['ShankController'], option: str) -> None:
@@ -650,90 +714,14 @@ def _draw_all(shanks: list['ShankController'], option: str) -> None:
         _draw(items, option)
 
 
-# -----------------------------------------------------------------------------
-# Atlas mappings, computed at once
-# -----------------------------------------------------------------------------
-
-
-@shank_loop
-def _plot_region_panels(
-    controller: 'AlignmentGUIController',
-    items: 'ShankController',
-    model: str,
-    func: Callable[..., dict[str, Bunch]],
-    **kwargs,
-) -> str | None:
-    """Compute (and cache) a shank's atlas mapping ``model`` and draw it.
-
-    Decorated with :func:`shank_loop`, so a single call iterates over every shank/config (the
-    injected ``shank``/``config`` keywords are absorbed via ``**kwargs``). The view is computed
-    once per shank and cached on ``items.model.predictions``. The models' predictions are
-    computed in the background instead (:func:`_predict`).
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank to compute and draw.
-    model : str
-        The mapping's region-plot option, also its per-shank cache key.
-    func : Callable
-        The mapping's compute function, returning ``{model: view}``.
-
-    Returns
-    -------
-    str or None
-        The error message when the prediction failed, else None: a ``PredictionError``'s message,
-        or a short message naming the error when something unexpected failed (its traceback is
-        logged). Errors are returned rather than shown so that the caller reports them once for
-        all shanks.
-    """
-    if _cache(items).get(model) is None:
-        try:
-            views = func(controller, items)
-        except PredictionError as exc:
-            return str(exc)
-        except Exception as exc:
-            # Anything else is a bug or an unforeseen failure. Keep it out of Qt (an uncaught
-            # exception in a callback aborts the app), log the traceback, and report it with the
-            # other shanks' errors.
-            logger.exception(
-                '%s failed on shank %s (%s)', model, kwargs.get('shank'), kwargs.get('config')
-            )
-            return _unexpected(model, exc)
-        _cache(items).update(views)
-
-    _draw(items, model)
-
-
-def compute_mapping_predictions(
-    controller: 'AlignmentGUIController', items: 'ShankController', mapping: str = 'Beryl'
-) -> dict[str, Bunch]:
-    """
-    Return brain regions based on a specified atlas mapping, as an example prediction model.
-
-    Parameters
-    ----------
-    controller: 'AlignmentGUIController'
-        The main application controller.
-    items: 'ShankController'
-        The shank controller containing the model and view for the current shank.
-    mapping: str
-        The atlas mapping to use for predictions (e.g., 'Beryl' or 'Cosmos'), also its
-        region-plot option.
-
-    Returns
-    -------
-    dict of {str: Bunch}
-        The predicted brain regions, keyed by the region-plot option (the mapping).
-    """
-    # xyz coordinates sampled at 10 um along histology track from bottom or brain to top
-    xyz_samples = items.model.align_handle.xyz_samples
-    # depths of these coordinates along the track
-    depth_samples = items.model.align_handle.ephysalign.sampling_trk
-
-    region_ids = controller.model.brain_atlas.get_labels(xyz_samples, mapping=mapping)
-    regions = controller.model.brain_atlas.regions.get(region_ids)
-
-    return {mapping: get_region_boundaries(regions, depth_samples)}
+def _draw_all_predictions(
+    controller: 'AlignmentGUIController', shanks: list['ShankController']
+) -> None:
+    """Draw every option on its own figure of each shank, saying which models are not loaded."""
+    for items in shanks:
+        for option, fig in items.view.fig_preds.items():
+            spec = MODEL_FOR_OPTION.get(option)
+            if spec is None or not is_model_loaded(controller, spec.key):
+                items.view.clear_prediction(fig, option, NOT_LOADED_MESSAGE)
+            else:
+                _draw(items, option, fig)

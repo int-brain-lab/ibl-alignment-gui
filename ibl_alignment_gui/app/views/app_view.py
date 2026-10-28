@@ -118,6 +118,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         default_config: str,
         non_default_config: str,
         feature_view: bool = False,
+        prediction_view: bool = False,
+        all_predictions: bool = False,
     ) -> list[QtWidgets.QWidget]:
         """
         Initialize the shank and slice tab widgets with the given shank items.
@@ -134,6 +136,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The non-default configuration.
         feature_view: bool
             Whether to display the ephys plot as a feature view or not.
+        prediction_view: bool
+            Whether to display the prediction plot alongside the ephys plots or not.
+        all_predictions: bool
+            Whether to display all the prediction plots side by side instead of the ephys plots.
 
         Returns
         -------
@@ -149,23 +155,34 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         for i, shank in enumerate(shank_items):
             # Create the shank panel depending on the configuration selected
             if selected_config == 'both':
-                if feature_view:
+                if all_predictions:
+                    fig_area = custom_widgets.DualConfigPredictionWidget(
+                        shank_items[shank][default_config].view,
+                        shank_items[shank][non_default_config].view,
+                    )
+                elif feature_view:
                     fig_area = custom_widgets.DualConfigFeatureWidget(
                         shank_items[shank][default_config].view,
                         shank_items[shank][non_default_config].view,
+                        prediction=prediction_view,
                     )
                 else:
                     fig_area = custom_widgets.DualConfigWidget(
                         shank_items[shank][default_config].view,
                         shank_items[shank][non_default_config].view,
+                        prediction=prediction_view,
                     )
+            elif all_predictions:
+                fig_area = custom_widgets.SingleConfigPredictionWidget(
+                    shank_items[shank][selected_config].view
+                )
             elif feature_view:
                 fig_area = custom_widgets.SingleConfigFeatureWidget(
-                    shank_items[shank][selected_config].view
+                    shank_items[shank][selected_config].view, prediction=prediction_view
                 )
             else:
                 fig_area = custom_widgets.SingleConfigWidget(
-                    shank_items[shank][selected_config].view
+                    shank_items[shank][selected_config].view, prediction=prediction_view
                 )
 
             # Add the fit items from each shank to the fit plot
@@ -286,6 +303,34 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         return self.menu_widgets.populate_exclusive_tab(
             tab, callback, options, set_checked=set_checked
         )
+
+    def set_menu_enabled(self, tab: str, enabled: bool) -> None:
+        """
+        Enable or grey out a menu tab.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        enabled: bool
+            Whether the tab can be opened
+        """
+        self.menu_widgets.tabs[tab]['menu'].setEnabled(enabled)
+
+    def check_menu_option(self, tab: str, option: str) -> None:
+        """
+        Check an action in an action group stored in the menubar, without triggering it.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        option: str
+            The name of the option in the tab to check
+        """
+        action = self.menu_widgets.find_actions(option, self.menu_widgets.tabs[tab]['group'])
+        if action is not None:
+            action.setChecked(True)
 
     def add_shortcuts_to_menu(self, tab: str, options: dict) -> None:
         """See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""

@@ -258,11 +258,11 @@ class RangeController:
         self.controller.plugins[PLUGIN_NAME]['activated'] = False
 
     def disable_sliders(self) -> None:
-        """Disable sliders when the view is changed to feature view."""
+        """Disable sliders when the view is changed to the feature or all predictions view."""
         for slider_widget in self.view.sliders.values():
-            slider_widget.set_enabled(not self.controller.show_feature)
+            slider_widget.set_enabled(self.controller.show_ephys_plots)
 
-        if not self.controller.show_feature:
+        if self.controller.show_ephys_plots:
             self.set_init_levels()
 
     def set_init_levels(self) -> None:
@@ -383,8 +383,8 @@ class RangeController:
         plot_type: str
             The type of the plot
         """
-        # If not feature plot shown and feature slider moved, return
-        if self.controller.show_feature:
+        # If the image, line and probe plots are not shown, return
+        if not self.controller.show_ephys_plots:
             return
 
         # Ensure we don't go into on_plot_changed

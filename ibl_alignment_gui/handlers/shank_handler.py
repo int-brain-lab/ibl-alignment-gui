@@ -85,6 +85,10 @@ class ShankHandler:
             self.align_handle.get_scaled_histology()
         )
 
+    def get_reference_histology(self, *args, **kwargs) -> Bunch:
+        """See :meth:`AlignmentHandler.get_reference_histology` for details."""
+        return self.align_handle.get_reference_histology(*args, **kwargs)
+
     def feature2track_lin(
         self, depths: np.ndarray, feature: np.ndarray, track: np.ndarray
     ) -> np.ndarray:

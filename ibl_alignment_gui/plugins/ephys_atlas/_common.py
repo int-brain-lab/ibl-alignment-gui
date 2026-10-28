@@ -40,7 +40,7 @@ PLUGIN_KEY = 'Channel Prediction'
 # Track depths are stored along the histology track in meters; region plots expect microns.
 M_TO_UM = 1e6
 
-# Auto-alignment's region-plot options (also the per-shank prediction cache keys): the predicted
+# Auto-alignment's prediction options (also the per-shank prediction cache keys): the predicted
 # regions, and the alignment confidence along the probe.
 AUTO_ALIGNMENT_KEY = 'Auto-alignment'
 AUTO_ALIGNMENT_CONFIDENCE_KEY = 'Auto-alignment (confidence)'
@@ -72,7 +72,7 @@ class ModelSpec:
     invalidate : Callable
         ``invalidate(controller)``: drops the shanks' cached predictions of this model.
     options : tuple of str
-        The region-plot options the model offers, e.g. its most probable region and its
+        The prediction options the model offers, e.g. its most probable region and its
         cumulative probabilities. The first is selected after the model is loaded from the menu.
     compute : Callable
         ``compute(controller, items, model, progress) -> (views, extra)``: runs the loaded
@@ -213,9 +213,9 @@ def model_vintage(index: dict | None) -> str:
 def features_vintage(df: pd.DataFrame) -> str | None:
     """Return the vintage a features table was computed with, when it says so.
 
-    The vintage is the table's ``vintage`` attribute (``df.attrs['vintage']``), which pandas keeps
-    in a parquet file: the GUI sets it on the ephys-atlas tables it reads, and a features file
-    written with it set carries it too.
+    The vintage is the table's ``features_version`` attribute (``df.attrs['features_version']``),
+    which pandas keeps in a parquet file: the GUI sets it on the ephys-atlas tables it reads, and
+    ibleatools on the features it computes (``compute_denoised_features``).
 
     Parameters
     ----------
@@ -227,7 +227,7 @@ def features_vintage(df: pd.DataFrame) -> str | None:
     str or None
         The vintage, e.g. ``2026_W26``, or None if the table does not say.
     """
-    return df.attrs.get('vintage') or None
+    return df.attrs.get('features_version') or None
 
 
 def missing_features_error(
@@ -586,7 +586,9 @@ def features_for_vintage(
     a model was trained on (columns are renamed or dropped between vintages). When the features
     come from ONE, the table labelled ``vintage`` is loaded instead, and cached on the shank so the
     feature plots keep the latest table. A local features file (from the session or chosen with
-    ``Load features file…``) is used as is.
+    ``Load features file…``) is used as is; when it records another feature version than
+    ``vintage`` (:func:`features_vintage`), a warning is queued in the plugin state
+    (``pending_warnings``), which the main thread shows when the prediction ends.
 
     The ephys-atlas tables are already outlier-treated when ephysatlas builds them (the alpha
     features), so the features are not treated again here.
@@ -619,7 +621,18 @@ def features_for_vintage(
         or not isinstance(loader, FeatureLoaderOne)
         or loader.feature_version == vintage
     ):
-        return _get_features_df(controller, items)
+        df = _get_features_df(controller, items)
+        # The features' version, when they record it. This may run on a background thread, so the
+        # message is queued; the main thread shows it when the prediction ends.
+        data_vintage = None if df is None else features_vintage(df)
+        if data_vintage not in (None, vintage):
+            message = (
+                f'The features were computed with feature version {data_vintage}, but the model '
+                f'was trained on {vintage} features: its predictions may be unreliable.'
+            )
+            logger.warning(message)
+            plugin_state(controller).setdefault('pending_warnings', []).append(message)
+        return df
 
     cache = items.model.raw_data.setdefault('model_features', {})
     if vintage not in cache:

@@ -10,11 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import numpy as np
+import pandas as pd
 from qtpy import QtTest, QtWidgets
 
 from ibl_alignment_gui.plugins import channel_prediction as cp
-from ibl_alignment_gui.plugins.ephys_atlas import inference, spatial_encoder
+from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     ALL_SHANKS,
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
@@ -62,102 +62,11 @@ def _fake_controller() -> SimpleNamespace:
     )
 
 
-class TestPlotRegionPanels(unittest.TestCase):
-    def setUp(self):
-        self.controller = _fake_controller()
-        self.items = [self.controller.shank_items[shank]['default'] for shank in SHANKS]
-        self.regions = Bunch(region='regions view')
-        self.other = Bunch(region='other view')
-
-    def drawn(self, items) -> list:
-        """The views drawn on a shank, in order."""
-        return [c.args[1] for c in items.view.plot_histology.call_args_list]
-
-    def test_single_view_cached(self):
-        """A single view is cached under its option and the model runs once per shank"""
-        func = MagicMock(return_value={'Model': self.regions})
-        cp._plot_region_panels(self.controller, 'Model', func)
-        cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(func.call_count, len(SHANKS))
-        for items in self.items:
-            self.assertIs(items.model.predictions['Model'], self.regions)
-            self.assertEqual(self.drawn(items), [self.regions, self.regions])
-
-    def test_error_not_cached(self):
-        """A PredictionError is returned per shank, nothing is cached, and the next call retries"""
-        func = MagicMock(side_effect=PredictionError('no features'))
-        errors = cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(errors, ['no features'] * len(SHANKS))
-        for items in self.items:
-            self.assertNotIn('Model', items.model.predictions)
-        func.side_effect, func.return_value = None, {'Model': self.regions}
-        cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(func.call_count, 2 * len(SHANKS))
-
-    def test_unexpected_error_reported(self):
-        """Any other error is returned per shank with its type and message, logged, not cached"""
-        func = MagicMock(side_effect=ValueError('boom'))
-        with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR') as logs:
-            errors = cp._plot_region_panels(self.controller, 'Model', func)
-        self.assertEqual(len(errors), len(SHANKS))
-        for error in errors:
-            self.assertIn('Unexpected error in Model: ValueError: boom', error)
-            self.assertIn('See the log for details.', error)
-        self.assertEqual(len(logs.records), len(SHANKS))
-        self.assertIn('Traceback', logs.output[0])
-        for items in self.items:
-            self.assertNotIn('Model', items.model.predictions)
-
-    def test_unexpected_error_shown_once(self):
-        """Through plot_regions, the same error on every shank gives one warning"""
-        self.controller.view = None
-        self.controller.model.brain_atlas = None
-        loader = cp.ChannelPrediction(self.controller)
-        loader.func_map['Model'] = MagicMock(side_effect=ValueError('boom'))
-        with (
-            patch.object(cp.QtWidgets.QMessageBox, 'warning') as warning,
-            self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'),
-        ):
-            loader.plot_regions('Model')
-        warning.assert_called_once()
-        self.assertEqual(warning.call_args.args[1], 'Model')
-        self.assertEqual(warning.call_args.args[2].count('Unexpected error in Model'), 1)
-
-
-class TestComputeMappingPredictions(unittest.TestCase):
-    def test_keyed_by_mapping(self):
-        """Beryl and Cosmos return their regions keyed by their region-plot option"""
-        regions = Bunch(
-            id=np.array([1, 1]), acronym=np.array(['A', 'A']), rgb=np.array([[1, 2, 3]] * 2)
-        )
-        controller = SimpleNamespace(
-            model=SimpleNamespace(
-                brain_atlas=SimpleNamespace(
-                    get_labels=lambda xyz, mapping: np.array([1, 1]),
-                    regions=SimpleNamespace(get=lambda ids: regions),
-                )
-            )
-        )
-        items = SimpleNamespace(
-            model=SimpleNamespace(
-                align_handle=SimpleNamespace(
-                    xyz_samples=None,
-                    ephysalign=SimpleNamespace(sampling_trk=np.array([0.0, 1e-5])),
-                )
-            )
-        )
-        for mapping in ('Beryl', 'Cosmos'):
-            with self.subTest(mapping=mapping):
-                views = cp.compute_mapping_predictions(controller, items, mapping)
-                self.assertEqual(list(views), [mapping])
-                self.assertEqual(views[mapping].axis_label[:, 1].tolist(), ['A'])
-
-
 DECODER = 'XGBoost region prediction'
 
 
 class TestPlotRegionsModelLookup(unittest.TestCase):
-    """plot_regions gets the option's model once, then computes every shank in one task."""
+    """plot_predictions gets the option's model once, then computes every shank in one task."""
 
     def setUp(self):
         self.controller = _fake_controller()
@@ -179,7 +88,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
     def test_cancel_opens_dialog_once(self):
         """With no model loaded, a cancelled load dialog opens once and nothing is computed"""
         with patch.object(cp, 'choose_source', return_value=None) as dialog:
-            self.loader.plot_regions(DECODER)
+            self.loader.plot_predictions(DECODER)
         dialog.assert_called_once()
         self.assertEqual(self.runner.tasks, [])
         self.compute.assert_not_called()
@@ -189,7 +98,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.set_model(source=('org/missing', '2026_W39'))
         error = PredictionError('Could not load org/missing@2026_W39:\nnot found')
         self.load.side_effect = error
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.load.assert_called_once()
         self.warning.assert_called_once()
         self.assertEqual(self.warning.call_args.args[1:], (DECODER, str(error)))
@@ -200,7 +109,7 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
         self.set_model(source=('org/model', '2026_W39'))
         self.load.side_effect = RuntimeError('boom')
         with self.assertLogs('ibl_alignment_gui.plugins.channel_prediction', 'ERROR'):
-            self.loader.plot_regions(DECODER)
+            self.loader.plot_predictions(DECODER)
         self.warning.assert_called_once()
         self.assertIn('Unexpected error in', self.warning.call_args.args[2])
         self.compute.assert_not_called()
@@ -208,22 +117,60 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
     def test_loaded_model_computes_each_shank(self):
         """With the model loaded, one task computes every shank and they are all drawn"""
         self.set_model(model=object(), source=('org/model', '2026_W39'))
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.load.assert_not_called()
         self.assertEqual(len(self.runner.tasks), 1)
         self.assertEqual(self.compute.call_count, len(SHANKS))
         for shank in SHANKS:
-            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            self.controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
         self.warning.assert_not_called()
 
-    def test_mapping_needs_no_model(self):
-        """Beryl is computed at once, without a model or a background task"""
-        self.loader.func_map['Beryl'] = MagicMock(return_value={'Beryl': Bunch()})
-        with patch.object(cp, 'choose_source') as dialog:
-            self.loader.plot_regions('Beryl')
-        dialog.assert_not_called()
-        self.assertEqual(self.runner.tasks, [])
-        self.assertEqual(self.loader.func_map['Beryl'].call_count, len(SHANKS))
+    def test_queued_warning_shown_once(self):
+        """A warning queued while computing is shown once when the task ends, then cleared"""
+        self.set_model(model=object(), source=('org/model', '2026_W39'))
+        state = self.controller.plugins[PLUGIN_KEY]
+
+        def compute(controller, items, model, progress):
+            # As features_for_vintage does, on the background thread, for every shank.
+            state.setdefault('pending_warnings', []).append('Features of another version')
+            return {DECODER: Bunch(region='regions view')}, None
+
+        self.compute.side_effect = compute
+        self.loader.plot_predictions(DECODER)
+        self.warning.assert_called_once()
+        self.assertEqual(self.warning.call_args.args[1:], (DECODER, 'Features of another version'))
+        self.assertNotIn('pending_warnings', state)
+
+    def test_version_warning_for_each_model(self):
+        """Features of another version warn for every model run on them, not once per session"""
+        transformer = 'ProbeTransformer region prediction'
+        df = pd.DataFrame({'a': [1.0]})
+        df.attrs['features_version'] = '2026_W39'
+        shank = SimpleNamespace(
+            name='probe00',
+            config='default',
+            model=SimpleNamespace(loaders={}, raw_data={'features': Bunch(exists=True, df=df)}),
+        )
+
+        def compute_for(option):
+            def compute(controller, items, model, progress):
+                # The models read their features as the backends do; both trained on 2026_W42.
+                _common.features_for_vintage(controller, shank, '2026_W42')
+                return {option: Bunch(region='regions view')}, None
+
+            return compute
+
+        specs = {
+            name: dataclasses.replace(cp.MODEL_FOR_OPTION[name], compute=compute_for(name))
+            for name in (DECODER, transformer)
+        }
+        self.enterContext(patch.dict(cp.MODEL_FOR_OPTION, specs))
+        for spec in specs.values():
+            self.controller.plugins[PLUGIN_KEY][spec.key] = dict(model=object(), source=None)
+        self.loader.plot_predictions(DECODER)
+        self.loader.plot_predictions(transformer)
+        # One dialog per model, though each ran on two shanks
+        self.assertEqual([c.args[1] for c in self.warning.call_args_list], [DECODER, transformer])
 
     def test_all_cached_no_task(self):
         """When every shank has the option cached, it is drawn without a task"""
@@ -231,30 +178,120 @@ class TestPlotRegionsModelLookup(unittest.TestCase):
             self.controller.shank_items[shank]['default'].model.predictions = Bunch(
                 {DECODER: Bunch(region='cached')}
             )
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.assertEqual(self.runner.tasks, [])
         self.compute.assert_not_called()
         for shank in SHANKS:
-            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            self.controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
 
     def test_only_uncached_shanks_computed(self):
         """Only the shanks without the option cached are computed; all are drawn"""
         self.set_model(model=object())
         cached = self.controller.shank_items['a']['default']
         cached.model.predictions = Bunch({DECODER: Bunch(region='cached')})
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         computed = [c.args[1] for c in self.compute.call_args_list]
         self.assertEqual(computed, [self.controller.shank_items['b']['default']])
         for shank in SHANKS:
-            self.controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            self.controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
 
     def test_another_task_running(self):
         """While another task runs, the plot is refused with a warning"""
         self.set_model(model=object())
         self.runner.busy = True
-        self.loader.plot_regions(DECODER)
+        self.loader.plot_predictions(DECODER)
         self.warning.assert_called_once()
         self.compute.assert_not_called()
+
+
+class TestAllPredictions(unittest.TestCase):
+    """plot_all_predictions computes the loaded models in one task and draws every option."""
+
+    TRANSFORMER = 'ProbeTransformer region prediction'
+
+    def setUp(self):
+        self.controller = _fake_controller()
+        self.controller.view = None
+        self.controller.plugins = {PLUGIN_KEY: Bunch()}
+        self.controller.run_in_thread = self.runner = InlineRunner()
+        self.loader = cp.ChannelPrediction(self.controller)
+        # Two models: the decoder is loaded, the transformer is not.
+        self.compute = MagicMock(
+            return_value=(
+                {DECODER: Bunch(region='view'), DECODER + ' (cumulative)': Bunch(region='c')},
+                None,
+            )
+        )
+        decoder = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=self.compute)
+        transformer = cp.MODEL_FOR_OPTION[self.TRANSFORMER]
+        self.specs = [decoder, transformer]
+        self.enterContext(patch.object(cp, 'available_models', return_value=self.specs))
+        self.enterContext(patch.dict(cp.MODEL_FOR_OPTION, {o: decoder for o in decoder.options}))
+        self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
+        self.controller.plugins[PLUGIN_KEY][decoder.key] = dict(model=object(), source=None)
+        self.options = [o for spec in self.specs for o in spec.options]
+        for shank in SHANKS:
+            view = self.controller.shank_items[shank]['default'].view
+            view.fig_preds = {option: MagicMock(name=option) for option in self.options}
+
+    def view(self, shank):
+        return self.controller.shank_items[shank]['default'].view
+
+    def test_loaded_model_computed_and_drawn(self):
+        """The loaded model runs once per shank in one task, and both its options are drawn"""
+        self.loader.plot_all_predictions()
+        self.assertEqual(len(self.runner.tasks), 1)
+        self.assertEqual(self.compute.call_count, len(SHANKS))
+        for shank in SHANKS:
+            view = self.view(shank)
+            drawn = [c.args[2] for c in view.plot_prediction.call_args_list]
+            self.assertEqual(drawn, [DECODER, DECODER + ' (cumulative)'])
+            figs = [c.args[0] for c in view.plot_prediction.call_args_list]
+            self.assertEqual(figs, [view.fig_preds[o] for o in drawn])
+
+    def test_unloaded_model_not_loaded(self):
+        """The options of a model that is not loaded say so, and it is not loaded"""
+        with patch.object(cp, 'load_model') as load:
+            self.loader.plot_all_predictions()
+        load.assert_not_called()
+        for shank in SHANKS:
+            cleared = {c.args[1]: c.args[2] for c in self.view(shank).clear_prediction.mock_calls}
+            self.assertEqual(
+                cleared,
+                {
+                    self.TRANSFORMER: cp.NOT_LOADED_MESSAGE,
+                    self.TRANSFORMER + ' (cumulative)': cp.NOT_LOADED_MESSAGE,
+                },
+            )
+
+    def test_cached_not_computed_again(self):
+        """Once computed, showing the view again needs no task"""
+        self.loader.plot_all_predictions()
+        self.loader.plot_all_predictions()
+        self.assertEqual(len(self.runner.tasks), 1)
+        self.assertEqual(self.compute.call_count, len(SHANKS))
+
+    def test_progress_names_model(self):
+        """Each progress message names the model it is for"""
+        self.loader.plot_all_predictions()
+        self.assertTrue(self.runner.progress)
+        for message in self.runner.progress:
+            self.assertTrue(message.startswith(DECODER + ', '), message)
+
+    def test_errors_one_warning(self):
+        """The models' errors on every shank are reported in one warning"""
+        self.compute.side_effect = PredictionError('no features')
+        self.loader.plot_all_predictions()
+        self.warning.assert_called_once()
+        self.assertEqual(self.warning.call_args.args[1], cp.ALL_TITLE)
+
+    def test_model_loaded_from_menu_redraws(self):
+        """In the all predictions view, a model loaded from the menu redraws that view"""
+        self.controller.show_predictions = True
+        self.controller.view = MagicMock()
+        cp._show_first_option(self.controller, self.specs[0])
+        self.controller.view.trigger_menu_option.assert_not_called()
+        self.assertEqual(self.compute.call_count, len(SHANKS))
 
 
 class TestPredictionTask(unittest.TestCase):
@@ -356,7 +393,7 @@ class TestPredictionTask(unittest.TestCase):
 
 
 class TestPredictionInThread(unittest.TestCase):
-    """plot_regions with the controller's real background runner and a real thread."""
+    """plot_predictions with the controller's real background runner and a real thread."""
 
     @classmethod
     def setUpClass(cls):
@@ -379,7 +416,7 @@ class TestPredictionInThread(unittest.TestCase):
         spec = dataclasses.replace(cp.MODEL_FOR_OPTION[DECODER], compute=compute)
         controller.plugins = {PLUGIN_KEY: Bunch({spec.key: dict(model=object(), source=None)})}
         with patch.dict(cp.MODEL_FOR_OPTION, {DECODER: spec}):
-            cp.ChannelPrediction(controller).plot_regions(DECODER)
+            cp.ChannelPrediction(controller).plot_predictions(DECODER)
             for _ in range(500):
                 if not runner.task_running:
                     break
@@ -388,37 +425,52 @@ class TestPredictionInThread(unittest.TestCase):
         self.assertEqual(len(threads), len(SHANKS))
         self.assertNotIn(threading.get_ident(), threads)
         for shank in SHANKS:
-            controller.shank_items[shank]['default'].view.plot_histology.assert_called_once()
+            controller.shank_items[shank]['default'].view.plot_prediction.assert_called_once()
 
 
 class TestModelOptions(unittest.TestCase):
-    """Adding the model options to the region dropdown (which models: TestModelRegistry)."""
+    """The model options offered in Prediction Plots (which models: TestModelRegistry)."""
 
-    ALL = [
-        'XGBoost region prediction',
-        'XGBoost region prediction (cumulative)',
-        'ProbeTransformer region prediction',
-        'ProbeTransformer region prediction (cumulative)',
-        AUTO_ALIGNMENT_KEY,
-        AUTO_ALIGNMENT_CONFIDENCE_KEY,
-    ]
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-    def offered(self, present=()) -> list:
-        """The options _refresh_model_options adds, with torch and no model loaded."""
+    def offered(self, torch: bool = True, ephysatlas: bool = True) -> list:
+        """The prediction options setup gives the controller."""
+        view = QtWidgets.QWidget()
+        self.addCleanup(view.deleteLater)
         controller = SimpleNamespace(
-            plugins={PLUGIN_KEY: Bunch()},
-            view=MagicMock(),
-            plot_region_ref_panels=MagicMock(),
+            view=view, plugins={}, plugin_options=MagicMock(), prediction_keys=[]
         )
-        controller.view.has_menu_option.side_effect = lambda tab, key: key in present
-        with _installed(torch=True):
-            cp._refresh_model_options(controller)
-        populate = controller.view.populate_menu_tab
-        return populate.call_args.args[2] if populate.called else []
+        with _installed(torch=torch, ephysatlas=ephysatlas):
+            cp.setup(controller)
+        return controller.prediction_keys
 
-    def test_options_not_duplicated(self):
-        """Options already in the dropdown are not added again"""
-        self.assertCountEqual(self.offered(present=self.ALL[:2]), self.ALL[2:])
+    def test_every_option_of_each_model(self):
+        """With torch, both options of each decoder and of the auto-alignment, in order"""
+        self.assertEqual(
+            self.offered(),
+            [
+                'XGBoost region prediction',
+                'XGBoost region prediction (cumulative)',
+                'ProbeTransformer region prediction',
+                'ProbeTransformer region prediction (cumulative)',
+                AUTO_ALIGNMENT_KEY,
+                AUTO_ALIGNMENT_CONFIDENCE_KEY,
+            ],
+        )
+
+    def test_without_torch(self):
+        """Without torch, only the XGBoost decoder's options"""
+        self.assertEqual(
+            self.offered(torch=False),
+            ['XGBoost region prediction', 'XGBoost region prediction (cumulative)'],
+        )
+
+    def test_without_ephysatlas(self):
+        """Without ephysatlas, none"""
+        self.assertEqual(self.offered(ephysatlas=False), [])
 
 
 class TestModelRegistry(unittest.TestCase):
@@ -636,7 +688,9 @@ class TestSetLocalFeatures(unittest.TestCase):
         ):
             cp._set_local_features(controller)
         self.warning.assert_called_once()
-        self.assertIn('a (default): /notes.txt could not be read', self.warning.call_args.args[2])
+        self.assertIn(
+            f'a (default): {Path("/notes.txt")} could not be read', self.warning.call_args.args[2]
+        )
         self.assertNotIn('features_paths', controller.plugins[PLUGIN_KEY])
 
     def test_cancel_changes_nothing(self):
@@ -683,7 +737,7 @@ class TestFeaturesFilesDialog(unittest.TestCase):
 
     def test_opens_with_current_files(self):
         """Each row opens with the shank's current file"""
-        self.assertEqual(self.field(('a', 'default')).text(), '/a.pqt')
+        self.assertEqual(self.field(('a', 'default')).text(), str(Path('/a.pqt')))
         self.assertEqual(self.field(('c', 'default')).text(), '')
 
     def test_only_changed_rows(self):

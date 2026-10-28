@@ -6,11 +6,11 @@ only their GUI. The released model is loaded with ``ephysatlas.load_pretrained``
 ``ephysatlas.alignment.ChannelModel``) from the Hugging Face Hub or a local release, and run with
 its ``predict``. The shank's recorded channel features are then warped along its histology track
 (the GUI's ``xyz_samples``, top to bottom of the brain) onto the model's predictions along it,
-behind a progress dialog. The result figure opens in a pop-up window, and the region panel shows
-either the predicted regions or the alignment confidence along the probe.
+behind a progress dialog. The result figure opens in a pop-up window, and the prediction panel
+shows either the predicted regions or the alignment confidence along the probe.
 
-Each shank is aligned once: both region-panel views -- the predicted regions and the alignment
-confidence, two region-plot options -- are built from the alignment straight away and cached by
+Each shank is aligned once: both prediction-panel views -- the predicted regions and the alignment
+confidence, two prediction options -- are built from the alignment straight away and cached by
 the plugin, so switching between them, or selecting one again, does not re-align. The result
 window opens once and is kept in the plugin state; the 'Show auto-alignment results' menu item
 shows it again.
@@ -128,7 +128,7 @@ def invalidate_predictions(
 class AlignmentResultWindow(QtWidgets.QDialog):
     """A non-modal window with the alignment result figure, a toolbar and a save button.
 
-    Closing only hides it, so the region-panel option can show it again.
+    Closing only hides it, so the prediction option can show it again.
     """
 
     def __init__(self, parent, figure, title: str):
@@ -364,7 +364,7 @@ def _show_result(controller: AlignmentGUIController, items: ShankController, ext
 
 
 # -----------------------------------------------------------------------------
-# The region-panel views: predicted regions and confidence
+# The prediction-panel views: predicted regions and confidence
 # -----------------------------------------------------------------------------
 def predict_regions(brain_atlas, track: np.ndarray, track_depth_um: np.ndarray) -> Bunch:
     """Return the regions view: the atlas regions along the shank's whole histology track.
@@ -383,7 +383,7 @@ def predict_regions(brain_atlas, track: np.ndarray, track_depth_um: np.ndarray) 
     Bunch
         The region boundaries, labels and colours along the probe, for ``plot_histology``.
     """
-    # Allen region ids, as the region panel's ``regions.get`` expects (not region-table indices).
+    # Allen region ids, as ``regions.get`` expects (not region-table indices).
     ids = brain_atlas.get_labels(track, mapping='Allen')
     regions = brain_atlas.regions.get(ids)
     return get_region_boundaries(regions, np.asarray(track_depth_um, dtype=float) / M_TO_UM)

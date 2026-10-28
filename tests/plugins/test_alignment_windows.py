@@ -109,8 +109,8 @@ class TestAlignmentWindows(unittest.TestCase):
         )
         loader = cp.ChannelPrediction(self.controller)
         for option in (AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY):
-            loader.plot_regions(option)
-        self.assertEqual(items.view.plot_histology.call_count, 2)
+            loader.plot_predictions(option)
+        self.assertEqual(items.view.plot_prediction.call_count, 2)
         self.windows_made[0].show.assert_called_once()  # only when it was opened
 
     def test_invalidate_closes_shank_window(self):
@@ -137,8 +137,7 @@ class TestAlignmentWindows(unittest.TestCase):
         """Loading a new session closes every window and greys the menu item out"""
         for name in ('probe00a', 'probe00b'):
             self.open_window(_shank(name))
-        with patch.object(cp, '_refresh_model_options'):
-            cp._on_data_loaded(self.controller)
+        cp._on_data_loaded(self.controller)
         for window in self.windows_made:
             window.close.assert_called_once()
         self.assertEqual(self.windows(), {})

@@ -1133,8 +1133,9 @@ class FeatureLoaderOne(FeatureLoader):
         data = self.read_full_dataframe(project, feature, save_path)
         if data.empty:  # the table is not available (it has no columns to filter on)
             return data
-        # Record the table's vintage, so a model can tell which feature set these are.
-        data.attrs['vintage'] = feature
+        # Record the table's vintage, so a model can tell which feature set these are (the key
+        # ibleatools writes on the features it computes).
+        data.attrs['features_version'] = feature
 
         return data[data['pid'] == self.pid]
 

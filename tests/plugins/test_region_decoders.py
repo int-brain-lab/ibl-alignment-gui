@@ -1,7 +1,8 @@
 """Tests for the Hugging Face region decoders of the Channel Prediction plugin.
 
-They load the released decoders (``ephysatlas.load_pretrained``, tag ``MODEL_REVISION``) and run
-them on a small features fixture, so they are skipped when ephysatlas or torch are not installed.
+They load the released decoders (``ephysatlas.load_pretrained``, each at its default release in
+``ephysatlas.models.DECODER_VINTAGES``) and run them on a small features fixture, so they are
+skipped when ephysatlas or torch are not installed.
 """
 
 import importlib.util
@@ -21,7 +22,9 @@ from iblutil.util import Bunch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 # Per-channel features of one recorded probe (96 channels, every 4th of a Neuropixels 1.0 probe),
-# reduced to the columns the 2026_W39 decoders need plus ``axial_um``, indexed (pid, channel).
+# computed with ibleatools' compute_denoised_features (features version 2026_W42) and reduced to
+# the columns the 2026_W42 decoders need plus ``axial_um``, indexed (pid, channel). Its attrs hold
+# the features version, the snippet windows and the ibleatools version that computed them.
 FEATURES_FILE = Path(__file__).parents[1].joinpath('fixtures', 'region_decoders', 'features.pqt')
 
 TRANSFORMER = 'ProbeTransformer region prediction'
@@ -132,7 +135,7 @@ class TestRunDecoder(unittest.TestCase):
             raise KeyError("missing ['b']")
 
         df = pd.DataFrame({'a': [1.0], 'axial_um': [0.0]})
-        df.attrs['vintage'] = 'V0'
+        df.attrs['features_version'] = 'V0'
         with self.assertRaisesRegex(PredictionError, 'load a V0 release of the model'):
             inference.run_decoder(self._model(['a', 'b'], predict), df)
 
@@ -153,9 +156,10 @@ class TestRegionDecoders(unittest.TestCase):
     def setUpClass(cls):
         # Imported here so the module still imports (and skips) without ephysatlas installed.
         from ephysatlas import load_pretrained  # noqa: PLC0415
+        from ephysatlas.models import DECODER_VINTAGES  # noqa: PLC0415
 
         cls.models = {
-            name: load_pretrained(decoder.repo, revision=inference.MODEL_REVISION)
+            name: load_pretrained(decoder.repo, revision=DECODER_VINTAGES[decoder.repo])
             for name, decoder in inference.DECODERS.items()
         }
         cls.controller = _fake_controller(cls.models)
@@ -213,6 +217,24 @@ class TestRegionDecoders(unittest.TestCase):
                     inference.decode_shank(
                         self.controller, _fake_shank(df), model, _no_progress, name
                     )
+
+    def test_features_version_warning(self):
+        """Features of another version than a decoder's queue one warning; its own queue none."""
+        other = self.df.copy()
+        other.attrs['features_version'] = '2026_W39'
+        for df, n_warnings in ((other, 1), (self.df, 0)):
+            for name, model in self.models.items():
+                version = df.attrs['features_version']
+                with self.subTest(name=name, features_version=version):
+                    # A fresh controller: the queued warnings live in the plugin state.
+                    controller = _fake_controller(self.models)
+                    out, _ = inference._decode(controller, _fake_shank(df), model, _no_progress)
+                    self.assertEqual(len(out), len(df))  # still predicted
+                    warnings = controller.plugins['Channel Prediction'].get('pending_warnings', [])
+                    self.assertEqual(len(warnings), n_warnings)
+                    for warning in warnings:
+                        self.assertIn(version, warning)
+                        self.assertIn(model.index['vintage'], warning)
 
 
 RED, BLUE, GREEN = [255, 0, 0], [0, 0, 255], [0, 255, 0]

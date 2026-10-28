@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the shank's histology track onto the Ephys Atlas channel-level model's predictions
   (`ephysatlas.alignment` in ibleatools). The released model is loaded with
   `ephysatlas.load_pretrained` from the Hugging Face Hub or a local release
-  (`Load alignment model (Hugging Face)…`). Two Region Plots entries show the result:
+  (`Load alignment model (Hugging Face)…`). Two Prediction Plots entries show the result:
   `Auto-alignment` (the atlas regions along the track, at the aligned probe depths) and
   `Auto-alignment (confidence)` (green high, red low). Each shank is aligned once for both, so
   switching between them does not re-align.
@@ -28,14 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Plugins -> Channel Prediction -> Show auto-alignment results` (greyed out until then) shows the
   windows again. They close when a new model, features file or session is loaded.
 - `ShankView.plot_histology(..., boundaries=False)` draws a column without region boundary lines.
+- A Prediction Plots menu (`Alt+6` / `Shift+Alt+6`) shows a channel prediction on its own panel
+  in the Ephys figure, after the probe plot (or the feature plot in the feature view). It carries
+  the reference lines, and hovering over a predicted region adds its acronym to the panel's title.
+  `None` removes the panel.
+- `All predictions (side by side)` in Prediction Plots (`Shift+P`) replaces the image, line and
+  probe plots with one panel per prediction option of the loaded models, computed in one
+  background task; the panels of a model that is not loaded say so.
 
 ### Changed
+- The model predictions are shown in the Ephys figure (Prediction Plots) instead of the reference
+  histology panel (Region Plots): they are placed by depth along the probe, like the ephys plots.
+  Region Plots keeps the `Allen`, `Beryl` and `Cosmos` mappings, now drawn by the GUI itself
+  rather than the Channel Prediction plugin.
 - The inference model is replaced by two released region decoders, `XGBoost region prediction`
   (`int-brain-lab/ea-decoder-channel-xgboost`) and `ProbeTransformer region prediction`
   (`int-brain-lab/ea-decoder-channel-transformer`, needs torch), both loaded with
   `ephysatlas.load_pretrained` from the Hugging Face Hub (release tag `2026_W39` by default) or a
   local release directory holding its `ephysatlas_model.json`, and run with their `predict`. Each
-  has its own `Load … model (Hugging Face)…` menu entry and two Region Plots entries: the most
+  has its own `Load … model (Hugging Face)…` menu entry and two Prediction Plots entries: the most
   probable region and the `(cumulative)` probabilities. The `void_fluid` class is drawn with its
   own colour.
 - The region decoders and auto-alignment model run on the ephys-atlas feature table matching the
@@ -59,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's vintage instead.
 - A feature table download that finds nothing, or is interrupted, is retried the next time instead
   of failing until its folder is deleted by hand.
-- A region decoder runs once per shank for both of its Region Plots entries (the most probable
+- A region decoder runs once per shank for both of its Prediction Plots entries (the most probable
   region and the cumulative probabilities), instead of once for each.
 - A model's load dialog, or a model that fails to load, is handled once per plot rather than once
   per shank; cancelling the dialog stops the plot.

@@ -63,7 +63,7 @@ class Decoder(NamedTuple):
     needs_torch: bool
 
 
-# Released channel-level region decoders on the Hugging Face Hub, by region-plot option name (also
+# Released channel-level region decoders on the Hugging Face Hub, by prediction option name (also
 # the plugin-state key the loaded model is cached under). The ProbeTransformer is a torch model;
 # the XGBoost decoder is not.
 DECODERS = {
@@ -78,10 +78,7 @@ DECODERS = {
         needs_torch=True,
     ),
 }
-# Release tag of the vintage (the feature set the decoders were trained on), pinned rather than
-# ``main``, which moves whenever a new release is published. Update it when adopting a new release.
-MODEL_REVISION = '2026_W39'
-# Suffix of the region-plot option showing a decoder's cumulative class probabilities.
+# Suffix of the prediction option showing a decoder's cumulative class probabilities.
 CUMULATIVE_SUFFIX = ' (cumulative)'
 # Explanation shown in the decoders' load dialog.
 DECODER_NOTE = (
@@ -93,6 +90,13 @@ DECODER_NOTE = (
 # -----------------------------------------------------------------------------
 # Model loading
 # -----------------------------------------------------------------------------
+
+
+def _default_source(repo: str) -> tuple[str, str]:
+    """Return a decoder's default repository and release tag, from ephysatlas."""
+    from ephysatlas.models import DECODER_VINTAGES  # noqa: PLC0415 - heavy, lazy
+
+    return repo, DECODER_VINTAGES[repo]
 
 
 def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None]):
@@ -286,7 +290,7 @@ def decode_shank(
     progress: Callable[[float | None, str], None],
     name: str,
 ) -> tuple[dict[str, Bunch], None]:
-    """Run decoder ``name`` once on the shank and return both of its region-plot views.
+    """Run decoder ``name`` once on the shank and return both of its prediction views.
 
     The decoder's ``compute`` (see :class:`ModelSpec`): no Qt is used, so it can run on a
     background thread.
@@ -302,7 +306,7 @@ def decode_shank(
     progress : Callable
         ``progress(fraction, message)``, told of each step.
     name : str
-        The decoder, a key of :data:`DECODERS`, also its region-plot option.
+        The decoder, a key of :data:`DECODERS`, also its prediction option.
 
     Returns
     -------
@@ -363,7 +367,7 @@ def predict_cumulative(out: pd.DataFrame, depths: np.ndarray, model) -> Bunch:
     -------
     Bunch
         ``probability`` (cumulative, channels x classes), ``depths``, ``regions`` (the class
-        region ids) and ``colours`` (one per class), for ``plot_histology_cumulative``.
+        region ids) and ``colours`` (one per class), for ``ShankView.plot_prediction``.
     """
     # One p_<acronym> column per class, in the manifest's class order.
     cprobas = out.filter(regex=r'^p_').to_numpy().cumsum(axis=1)
@@ -383,8 +387,7 @@ DECODER_SPECS = {
     name: ModelSpec(
         key=name,
         title=f'Load {name} model',
-        # The release tag is pinned here until ibleatools publishes the decoders' vintage.
-        default_source=functools.partial(lambda repo: (repo, MODEL_REVISION), decoder.repo),
+        default_source=functools.partial(_default_source, decoder.repo),
         note=DECODER_NOTE,
         load=_load_decoder,
         invalidate=functools.partial(invalidate_predictions, names=(name,)),

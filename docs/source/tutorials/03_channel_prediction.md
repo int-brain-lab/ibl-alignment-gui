@@ -13,17 +13,20 @@ Screenshot of the prediction panel showing `XGBoost region prediction` next to t
 `_static/tutorials/03_channel_prediction/result.png`
 :::
 
-It takes about 30 minutes, plus the time to download the models the first time.
+The models are downloaded the first time you use them, which can take a few minutes.
 
 ## Before you start
 
 - Complete {ref}`tutorial-first-alignment`.
 - Install the `ephysatlas` extra (see {ref}`howto-install-extras`). It also installs `torch`,
   which the auto-alignment model needs.
-- Download the features file for Sample data 1, `ephys_atlas_features_2026_W42.pqt`
-  ([TODO: download link]), and put it in the Sample data 1 folder. It holds the
-  electrophysiology features of every channel, computed from the raw data with
-  [`ibleatools`](https://github.com/int-brain-lab/ibleatools).
+- Download the `sample_data_1_prediction` folder ([TODO: download link]) and put it next to the
+  `sample_data1` folder, in the same parent folder. It holds:
+
+  - `ephys_atlas_features_2026_W42.pqt`: the electrophysiology features of every channel of
+    Sample data 1, computed from the raw data with
+    [`ibleatools`](https://github.com/int-brain-lab/ibleatools)
+  - `sample_data_1_prediction.yaml`: a session YAML that loads Sample data 1 with these features
 
 ## 1. Check the plugin is installed
 
@@ -36,42 +39,53 @@ from.
 
 ## 2. Load the data with its features
 
-The features are added as a dataset in a session YAML, alongside the folder you opened in
+The features are given to the GUI in a session YAML, alongside the data you opened in
 {ref}`tutorial-first-alignment`.
 
-1. Create a file called `sample_data_1.yaml` in the Sample data 1 folder:
+1. Open `sample_data_1_prediction.yaml` in a text editor:
 
    ```yaml
-   path: /path/to/sample_data1      # <- the Sample data 1 folder
+   path: /path/to/ephys_alignment_sample_data
 
    probes:
      probe00:
        datasets:
+         # The recording, histology and alignments of Sample data 1
          spike_sorting:
-           path: .
-         processed_ephys:
-           path: .
-         picks:
-           path: .
-         output:
-           path: .
+           path: sample_data1
          histology:
-           path: .
+           path: sample_data1
+         output:
+           path: sample_data1
+         # The features the models run on
          features:
-           path: ephys_atlas_features_2026_W42.pqt
+           path: sample_data_1_prediction/ephys_atlas_features_2026_W42.pqt
    ```
 
-   `.` is the Sample data 1 folder itself, so this is the same data you opened directly in
-   {ref}`tutorial-first-alignment`, plus the features.
+2. Set `path` to the full path of the folder that holds `sample_data1` and
+   `sample_data_1_prediction`, and save the file.
 
-2. Click `...`, choose **Open session YAML…**, and choose `sample_data_1.yaml`.
+   The other paths are relative to it. The spike sorting and histology come from `sample_data1`,
+   and the trajectory and the RMS and power spectra are read from there too, because they are
+   saved beside the spike sorting. The results are written to `sample_data1` as well, so you carry
+   on from your alignment in {ref}`tutorial-first-alignment`. Only the features come from
+   `sample_data_1_prediction`.
 
-The data loads as before. Your alignment from {ref}`tutorial-first-alignment` is selected in the
-alignment dropdown. With the features loaded, the `Feature Plots` and `Prediction Plots` menus and
-`Plugins → Channel Prediction` are now available.
+3. In the GUI, click `...`, choose **Open session YAML…**, and choose
+   `sample_data_1_prediction.yaml`.
 
-Opening the Sample data 1 folder directly would also pick up the features file, as its name
-contains `features`. The YAML makes the file you are using explicit.
+The data loads as before, and your alignment from {ref}`tutorial-first-alignment` is selected in
+the alignment dropdown. With the features loaded, the `Feature Plots` and `Prediction Plots` menus
+and `Plugins → Channel Prediction` are now available. Before, they were greyed out: hovering over
+one says why.
+
+:::{admonition} TODO
+:class: warning
+
+Screenshot of Sample data 1 loaded from `sample_data_1_prediction.yaml`, with the `Prediction Plots`
+menu open.
+`_static/tutorials/03_channel_prediction/loaded.png`
+:::
 
 ## 3. Look at the features
 
@@ -95,7 +109,8 @@ A panel appears beside the ephys plots, showing the region the model predicts fo
 from the electrophysiology alone. Each predicted region is labelled with its acronym.
 
 4. Compare the prediction with the regions in the Histology figure. Look for boundaries where the
-   two agree, and where they do not.
+   two agree, and where they do not. Press {kbd}`Alt+M` to show the histology at the `Beryl` or
+   `Cosmos` level, with fewer, larger regions, and again to go back to `Allen`.
 
 :::{admonition} TODO
 :class: warning
@@ -154,7 +169,7 @@ The predictions do not change your alignment. They are a guide for placing refer
 
 You have:
 
-- added a features file to a session
+- loaded a session and its features from a session YAML
 - predicted regions from the electrophysiology and compared them with the histology
 - read the confidence of a prediction
 - run the automatic alignment and used it to guide your own

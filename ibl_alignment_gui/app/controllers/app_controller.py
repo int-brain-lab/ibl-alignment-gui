@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The atlas mappings offered in Region Plots, drawn on the reference histology panels.
+# The atlas mappings offered in the Mapping menu, drawn on the reference histology panels.
 REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
 # The Prediction Plots option that hides the prediction panels.
 NO_PREDICTION = 'None'
@@ -300,12 +300,12 @@ class AlignmentGUIController:
                 'shortcut': 'Alt+4',
                 'callback': lambda: self.toggle_plots('slice', 1),
             },
-            'Toggle Region Plots ->': {
-                'shortcut': 'Alt+5',
+            'Toggle Mapping ->': {
+                'shortcut': 'Alt+M',
                 'callback': lambda: self.toggle_plots('region', 1),
             },
             'Toggle Prediction Plots ->': {
-                'shortcut': 'Alt+6',
+                'shortcut': 'Alt+5',
                 'callback': lambda: self.toggle_plots('prediction', 1),
             },
             'Toggle Image Plots <-': {
@@ -324,12 +324,12 @@ class AlignmentGUIController:
                 'shortcut': 'Shift+Alt+4',
                 'callback': lambda: self.toggle_plots('slice', -1),
             },
-            'Toggle Region Plots <-': {
-                'shortcut': 'Shift+Alt+5',
+            'Toggle Mapping <-': {
+                'shortcut': 'Shift+Alt+M',
                 'callback': lambda: self.toggle_plots('region', -1),
             },
             'Toggle Prediction Plots <-': {
-                'shortcut': 'Shift+Alt+6',
+                'shortcut': 'Shift+Alt+5',
                 'callback': lambda: self.toggle_plots('prediction', -1),
             },
             # Shortcut to reset axis on figures
@@ -511,7 +511,7 @@ class AlignmentGUIController:
 
     def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
         """
-        Plot the reference histology panels with the atlas mapping chosen in Region Plots.
+        Plot the reference histology panels with the atlas mapping chosen in the Mapping menu.
 
         Parameters
         ----------

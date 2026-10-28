@@ -66,14 +66,25 @@ The image in the Slice figure. {kbd}`Alt+4` / {kbd}`Shift+Alt+4` cycle through t
 | `Annotation` | Allen atlas annotation |
 | `Histology red`, `Histology green` | Your histology volumes, when given (see {ref}`ref-input-datasets`) |
 
-## Region Plots
+## Mapping
 
-The brain regions in the Histology figure. {kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them.
+The atlas mapping of the brain regions in the right panel of the Histology figure. {kbd}`Alt+M` /
+{kbd}`Shift+Alt+M` cycle through them.
 
 | Entry | Shows |
 |---|---|
 | `Allen`, `Beryl`, `Cosmos` | Atlas regions at three levels of detail (see {ref}`explanation-region-mappings`) |
-| Model entries | Predicted regions and auto-alignment, with the Channel Prediction plugin (see {ref}`ref-channel-prediction`) |
+
+## Prediction Plots
+
+The channel predictions of the Channel Prediction plugin, in a panel beside the ephys plots.
+{kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them. Greyed out without the plugin.
+
+| Entry | Shows |
+|---|---|
+| `None` | No prediction panel |
+| Model entries | Predicted regions and auto-alignment (see {ref}`ref-channel-prediction`) |
+| `All predictions (side by side)` | Every prediction, side by side, instead of the image, line and probe plots ({kbd}`Shift+P`) |
 
 ## Filter Plots
 
@@ -82,8 +93,8 @@ The units shown in the spike sorting plots.
 | Entry | Units shown |
 |---|---|
 | `All` | Every unit |
-| `KS good` | Kilosort good units (`ks2_label`) |
-| `KS mua` | Kilosort multi-unit (`ks2_label`) |
+| `KS good` | kilosort good units (`ks2_label`) |
+| `KS mua` | kilosort multi-unit (`ks2_label`) |
 | `IBL good` | Units passing the IBL metrics (`label`) |
 | Custom filters | Added by plugins (see {ref}`howto-add-unit-filter`) |
 
@@ -103,13 +114,15 @@ The units shown in the spike sorting plots.
 
 | Entry | Shortcut |
 |---|---|
-| `Toggle Image Plots ->` … `Toggle Region Plots ->` | {kbd}`Alt+1` … {kbd}`Alt+5` |
-| `Toggle Image Plots <-` … `Toggle Region Plots <-` | {kbd}`Shift+Alt+1` … {kbd}`Shift+Alt+5` |
+| `Toggle Image Plots ->` … `Toggle Prediction Plots ->` | {kbd}`Alt+1` … {kbd}`Alt+5` |
+| `Toggle Image Plots <-` … `Toggle Prediction Plots <-` | {kbd}`Shift+Alt+1` … {kbd}`Shift+Alt+5` |
+| `Toggle Mapping ->` / `Toggle Mapping <-` | {kbd}`Alt+M` / {kbd}`Shift+Alt+M` |
 | `Reset Axis` | {kbd}`Shift+A` |
 | `Hide/Show Labels` | {kbd}`Shift+L` |
 | `Hide/Show Lines` | {kbd}`Shift+H` |
 | `Hide/Show Channels` | {kbd}`Shift+C` |
 | `Toggle layout` | {kbd}`T` |
+| `All Predictions` | {kbd}`Shift+P` |
 | `Next shank` | {kbd}`Right` |
 | `Previous shank` | {kbd}`Left` |
 | `Reset Range` | {kbd}`R` |

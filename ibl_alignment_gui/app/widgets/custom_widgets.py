@@ -1239,7 +1239,9 @@ class MenuWidget(QtWidgets.QMenuBar):
             'prediction',
             'filter',
         ]:
-            self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
+            # The region menu chooses the atlas mapping, so it is titled for that
+            title = 'Mapping' if group == 'region' else f'{group.capitalize()} Plots'
+            self.tabs[group]['menu'] = self.addMenu(title)
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)
 
@@ -1476,7 +1478,7 @@ class ConfigWidget(QtWidgets.QWidget):
 
     @staticmethod
     def add_prediction_column(
-        layout: pg.GraphicsLayout, items, col: int, link: pg.PlotItem, stretch: int = 2
+        layout: pg.GraphicsLayout, items, col: int, link: pg.PlotItem, stretch: int = 1
     ) -> None:
         """
         Add the prediction figure of a configuration, with its title above, as a layout column.

@@ -181,6 +181,6 @@ Prediction plugin (see {ref}`ref-channel-prediction`).
 `features`
 : **Format** parquet · **Rows** one per channel
 
-  Per-channel electrophysiology features computed with `ibleatools`. A `channel` column holds the
+  Per-channel electrophysiology features computed with [`ibleatools`](https://github.com/int-brain-lab/ibleatools). A `channel` column holds the
   raw-data channel index. For a probe with more than one shank, one file can hold every shank's
   channels: the rows are split per shank by matching `channel` against `channels.rawInd`.

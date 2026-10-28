@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Plugins -> Channel Prediction -> Show auto-alignment results` (greyed out until then) shows the
   windows again. They close when a new model, features file or session is loaded.
 - `ShankView.plot_histology(..., boundaries=False)` draws a column without region boundary lines.
-- A Prediction Plots menu (`Alt+6` / `Shift+Alt+6`) shows a channel prediction on its own panel
+- A Prediction Plots menu (`Alt+5` / `Shift+Alt+5`) shows a channel prediction on its own panel
   in the Ephys figure, after the probe plot (or the feature plot in the feature view). It carries
   the reference lines, and hovering over a predicted region adds its acronym to the panel's title.
   `None` removes the panel.
@@ -38,9 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The model predictions are shown in the Ephys figure (Prediction Plots) instead of the reference
-  histology panel (Region Plots): they are placed by depth along the probe, like the ephys plots.
-  Region Plots keeps the `Allen`, `Beryl` and `Cosmos` mappings, now drawn by the GUI itself
-  rather than the Channel Prediction plugin.
+  histology panel: they are placed by depth along the probe, like the ephys plots. The Region
+  Plots menu is renamed `Mapping` (`Alt+M` / `Shift+Alt+M`) and keeps the `Allen`, `Beryl` and
+  `Cosmos` mappings, now drawn by the GUI itself rather than the Channel Prediction plugin.
 - The inference model is replaced by two released region decoders, `XGBoost region prediction`
   (`int-brain-lab/ea-decoder-channel-xgboost`) and `ProbeTransformer region prediction`
   (`int-brain-lab/ea-decoder-channel-transformer`, needs torch), both loaded with

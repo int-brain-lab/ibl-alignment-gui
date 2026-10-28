@@ -7,11 +7,11 @@ Requires the `ephysatlas` extra (see {ref}`ref-optional-dependencies`). For how 
 
 ## Models
 
-| Model | Hugging Face repository | Default release | Region plot entries | Needs `torch` |
+| Model | Hugging Face repository | Default release | Prediction plot entries | Needs `torch` |
 |---|---|---|---|---|
 | XGBoost region decoder | `int-brain-lab/ea-decoder-channel-xgboost` | `2026_W39` | `XGBoost region prediction`, `XGBoost region prediction (cumulative)` | No |
 | ProbeTransformer region decoder | `int-brain-lab/ea-decoder-channel-transformer` | `2026_W39` | `ProbeTransformer region prediction`, `ProbeTransformer region prediction (cumulative)` | Yes |
-| Alignment model | `int-brain-lab/ea-encoder-channel`, set by `ibleatools` | Set by `ibleatools` | `Auto-alignment`, `Auto-alignment (confidence)` | Yes |
+| Alignment model | `int-brain-lab/ea-encoder-channel`, set by [`ibleatools`](https://github.com/int-brain-lab/ibleatools) | Set by `ibleatools` | `Auto-alignment`, `Auto-alignment (confidence)` | Yes |
 
 Each model is loaded with `ephysatlas.load_pretrained`, from a Hugging Face repository and release
 tag or from a local release directory holding an `ephysatlas_model.json`. A downloaded release is
@@ -35,11 +35,11 @@ it on are unknown.
 
 `Load features file…`
 : Choose the features file for the session. With one shank, a file dialog. With several shanks or
-  configurations, one row per shank and configuration, each starting with the shank's current
-  file. Rows left unchanged keep their current features. Tick
-  `One file for all shanks (split by channel)` for a probe sorted as a whole whose features file
-  holds every shank. The files are checked before any is used: if one has no features for its
-  shank or cannot be read, it is reported and nothing changes.
+  configurations, one row per shank and configuration, each starting with the shank's current file.
+  Rows left unchanged keep their current features. Tick `One file for all shanks (split by channel)`
+  for a probe whose shanks were sorted together, whose features file holds every shank. The files
+  are checked before any is used: if one has no features for its shank or cannot be read, it is
+  reported and nothing changes.
 
 `Show auto-alignment results`
 : Reopen the auto-alignment result windows. Greyed out until a shank has been aligned.
@@ -65,12 +65,16 @@ the session's vintage when one exists.
 
 | Menu | Entries added |
 |---|---|
-| `Region Plots` | The region plot entries of each model (table above). The most probable region per channel, and its `(cumulative)` stacked class probabilities. |
+| `Prediction Plots` | `None`, the entries of each model (table above), and `All predictions (side by side)`. Each region decoder shows the most probable region per channel, and its `(cumulative)` stacked class probabilities. |
 | `Feature Plots` | `Ephys Atlas`: every feature, normalised across the shank's channels, side by side |
 | `Probe Plots` | `Ephys Atlas - <feature>`: one entry per feature, on the probe geometry |
 
-The region entries are offered as soon as a session is loaded. Selecting one whose model has not
-been loaded opens the model's load dialog.
+The prediction entries are offered as soon as a session is loaded. Selecting one whose model has
+not been loaded opens the model's load dialog. A prediction is shown in a panel beside the ephys
+plots, placed by depth along the probe (see {ref}`ref-interface-ephys`).
+
+`All predictions (side by side)` shows only the models already loaded, computed for the shanks
+that need them in one go; the panels of a model that is not loaded say so.
 
 Selecting `Auto-alignment` or `Auto-alignment (confidence)` aligns each shank, with a progress
 dialog, and opens a result window per shank showing:

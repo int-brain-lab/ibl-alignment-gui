@@ -30,6 +30,16 @@ Line plots
 Probe plots
 : 2D data drawn on the probe geometry. Switched from the `Probe Plots` menu.
 
+Prediction panel
+: A channel prediction from the Channel Prediction plugin, shown after the probe plot (or after
+  the feature plot, in the feature view) once one is chosen from the `Prediction Plots` menu.
+  Predictions are placed by depth along the probe, like the other ephys plots. The panel carries
+  the reference lines, and hovering over a predicted region adds its acronym to the panel's
+  title. Choosing `None` removes it.
+
+`All predictions (side by side)` ({kbd}`Shift+P`) replaces the image, line and probe plots with
+one panel per prediction, to compare the models. Choosing any other plot returns to the usual view.
+
 By default every unit from the spike sorting is shown. The `Filter Plots` menu restricts the plots
 to a class of units; which filters are available depends on the fields in `clusters.metrics` (see
 {ref}`ref-input-datasets`).
@@ -51,8 +61,8 @@ Original brain regions
 
 Black dotted lines in the left and right panels mark the deepest and the shallowest channel.
 
-The regions can be shown with three mappings, chosen from the `Region Plots` menu (see
-{ref}`explanation-region-mappings`):
+The regions in the right panel can be shown with three mappings, chosen from the `Mapping` menu
+(see {ref}`explanation-region-mappings`):
 
 Allen
 : The full Allen atlas hierarchy.

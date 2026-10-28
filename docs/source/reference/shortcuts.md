@@ -29,7 +29,8 @@ Each plot type cycles forward with {kbd}`Alt` and backward with {kbd}`Shift+Alt`
 | {kbd}`Alt+2` / {kbd}`Shift+Alt+2` | Line plots (forward / backward) |
 | {kbd}`Alt+3` / {kbd}`Shift+Alt+3` | Probe plots (forward / backward) |
 | {kbd}`Alt+4` / {kbd}`Shift+Alt+4` | Slice plots (forward / backward) |
-| {kbd}`Alt+5` / {kbd}`Shift+Alt+5` | Region plots (forward / backward) |
+| {kbd}`Alt+5` / {kbd}`Shift+Alt+5` | Prediction plots (forward / backward) |
+| {kbd}`Alt+M` / {kbd}`Shift+Alt+M` | Region mapping: Allen, Beryl or Cosmos (forward / backward) |
 
 ## Display
 
@@ -39,6 +40,7 @@ Each plot type cycles forward with {kbd}`Alt` and backward with {kbd}`Shift+Alt`
 | {kbd}`R` | Reset the range of every plot to its default |
 | {kbd}`Shift+L` | Hide or show the brain region labels |
 | {kbd}`Shift+C` | Hide or show the trajectory and the channels on the slice image |
+| {kbd}`Shift+P` | Show all the channel predictions side by side |
 | {kbd}`T` | Switch between the tabbed and the grid layout |
 
 ## Shanks

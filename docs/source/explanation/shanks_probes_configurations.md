@@ -54,7 +54,7 @@ configurations can be loaded.
 | Your data | Session YAML |
 |---|---|
 | One single-shank probe | One probe entry |
-| One multi-shank probe, sorted as a whole | One probe entry, one picks file per shank |
+| One multi-shank probe, sorted together | One probe entry, one picks file per shank |
 | One multi-shank probe, sorted per shank | One probe entry per shank, each with its own `output` |
 | Two versions of the same recording | Two configurations with the same probe names |
 

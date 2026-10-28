@@ -7,29 +7,28 @@ Prediction models run on.
 ## Prerequisites
 
 - The `ephysatlas` extra installed (see {ref}`howto-install-extras`).
-- The raw SpikeGLX AP and LF binary files of the probe.
+- The raw SpikeGLX AP and LF files of the probe (`.bin` or `.cbin`), each with its `.meta` file.
 
 ## Steps
 
-1. Run `compute_features_from_file` on the probe's raw data:
+1. Compute the features with [`ibleatools`](https://github.com/int-brain-lab/ibleatools), following
+   its guide
+   [How to compute features from SpikeGLX AP/LF files](https://int-brain-lab.github.io/ibleatools/how-to/compute-features-spikeglx.html).
+   It gives a table of features with one row per channel.
 
-   ```python
-   from pathlib import Path
+2. Save the table as a parquet file, for example `df.to_parquet('/path/to/probe00/features.pqt')`.
+   Parquet keeps the table's attributes, including the features' vintage (`features_version`),
+   which the GUI checks against the model.
 
-   from ephysatlas.feature_computation import compute_features_from_file
+3. Repeat for every probe you want to run the models on.
 
-   ap_file = Path('/path/to/probe00/data.ap.bin')
-   lf_file = Path('/path/to/probe00/data.lf.bin')
-   output_dir = Path('/path/to/probe00/features')
+4. Point the GUI at the file (see {ref}`howto-give-shanks-features`).
 
-   compute_features_from_file(ap_file=ap_file, lf_file=lf_file, output_dir=output_dir)
-   ```
-
-   This writes a parquet file of per-channel features into `output_dir`.
-
-2. Repeat for every probe you want to run the models on.
-
-3. Point the GUI at the file (see {ref}`howto-give-shanks-features`).
+:::{note}
+The published models need all four feature families. The `waveforms` family needs the full
+install of `ibleatools` (`ibleatools[full]`). The feature computation also assumes a single-shank
+probe: on a multi-shank recording some features can fail or mix the shanks.
+:::
 
 The features must be of the vintage the model was trained on. If they are not, see
 {ref}`howto-fix-vintage-mismatch`.

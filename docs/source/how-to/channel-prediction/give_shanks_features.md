@@ -35,8 +35,8 @@ This is the best choice for a session you will come back to.
    - With one shank, choose the file.
    - With several shanks or configurations, there is one row per shank and configuration. Change
      the rows that need a different file; rows left unchanged keep their current features.
-   - For a probe sorted as a whole, whose one file holds every shank's channels, tick
-     **One file for all shanks (split by channel)** and choose that file.
+   - For a probe whose shanks were sorted together, whose one file holds every shank's channels,
+     tick **One file for all shanks (split by channel)** and choose that file.
 
 3. Click **OK**. The files are checked before any is used; if one has no features for its shank,
    or cannot be read, it is reported and nothing changes.

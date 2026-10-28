@@ -11,8 +11,8 @@ pip install -e ".[ephysatlas]"
 
 | Extra | Installs | Needed for |
 |---|---|---|
-| `ibl` | `ibllib` | Converting Kilosort output with `extract_data`; the `alignment-gui-ibl` command |
-| `ephysatlas` | `ibleatools`, which also installs `ibllib`, `torch` and `xgboost` | The Channel Prediction plugin |
+| `ibl` | `ibllib` | Converting kilosort output with `extract_data`; the `alignment-gui-ibl` command |
+| `ephysatlas` | [`ibleatools`](https://github.com/int-brain-lab/ibleatools), which also installs `ibllib`, `torch` and `xgboost` | The Channel Prediction plugin |
 
 Installing `ephysatlas` therefore also gives everything the `ibl` extra provides.
 
@@ -24,10 +24,10 @@ Without `ibl`
   works.
 
 Without `ephysatlas`
-: The `Channel Prediction` menu is not added to `Plugins`, and the predicted regions and Ephys
-  Atlas feature plots are not offered.
+: The `Channel Prediction` menu is not added to `Plugins`, the `Prediction Plots` menu is greyed
+  out, and the Ephys Atlas feature plots are not offered.
 
 Without `torch`
 : Only relevant if `ibleatools` was installed without its dependencies. The Channel Prediction
-  menu then has no entries for the ProbeTransformer and alignment models; the XGBoost decoder
-  still works.
+  menu and the `Prediction Plots` menu then have no entries for the ProbeTransformer and alignment
+  models; the XGBoost decoder still works.

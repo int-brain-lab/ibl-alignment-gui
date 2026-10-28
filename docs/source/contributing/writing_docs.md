@@ -138,12 +138,12 @@ look consistent.
 ## Building
 
 ```console
-uv run sphinx-build -W --keep-going docs/source docs/build
+uv run --group doc sphinx-build -W --keep-going docs/source docs/build
 ```
 
 `-W` turns warnings into errors, as in CI, so a broken link or cross-reference fails the build.
 Open `docs/build/index.html` to view the result. To rebuild automatically while editing:
 
 ```console
-uv run sphinx-autobuild docs/source docs/build
+uv run --group doc sphinx-autobuild docs/source docs/build
 ```

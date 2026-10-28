@@ -9,7 +9,7 @@ to place your own reference lines.
 :::{admonition} TODO
 :class: warning
 
-Screenshot of the Histology figure showing `XGBoost region prediction` next to the Ephys figure.
+Screenshot of the prediction panel showing `XGBoost region prediction` next to the ephys plots.
 `_static/tutorials/03_channel_prediction/result.png`
 :::
 
@@ -22,7 +22,7 @@ It takes about 30 minutes, plus the time to download the models the first time.
   which the auto-alignment model needs.
 - Download the features file for Sample data 1, [TODO: file name and download link], and put it
   in the Sample data 1 folder. It holds the electrophysiology features of every channel, computed
-  from the raw data with `ibleatools`.
+  from the raw data with [`ibleatools`](https://github.com/int-brain-lab/ibleatools).
 
 ## 1. Check the plugin is installed
 
@@ -81,15 +81,15 @@ These are the numbers the models work from: the same kinds of signal you looked 
 
 1. Choose `original` from the alignment dropdown, so the histology shows the track before any
    alignment.
-2. Open the `Region Plots` menu and choose `XGBoost region prediction`.
+2. Open the `Prediction Plots` menu and choose `XGBoost region prediction`.
 3. The model's dialog opens. Keep the default repository and release, and click **OK**. The model
    is downloaded the first time, then the prediction runs.
 
-The Histology figure now shows the region the model predicts for each channel, from the
-electrophysiology alone.
+A panel appears beside the ephys plots, showing the region the model predicts for each channel
+from the electrophysiology alone. Hover over a region to see its name.
 
-4. Press {kbd}`Alt+5` to switch between the prediction and the `Allen`, `Beryl` and `Cosmos`
-   regions. Look for boundaries where the two agree, and where they do not.
+4. Compare the prediction with the regions in the Histology figure. Look for boundaries where the
+   two agree, and where they do not.
 
 :::{admonition} TODO
 :class: warning
@@ -105,7 +105,8 @@ where they differ.
 
 ## 5. Run the automatic alignment
 
-1. Choose `Auto-alignment` from the `Region Plots` menu, and click **OK** in the model's dialog.
+1. Choose `Auto-alignment` from the `Prediction Plots` menu, and click **OK** in the model's
+   dialog.
 2. A progress dialog shows the alignment running. When it finishes, a result window opens.
 
 The result window shows how the model matched the recording to the track:
@@ -123,9 +124,11 @@ Screenshot of the auto-alignment result window for Sample data 1.
 `_static/tutorials/03_channel_prediction/auto_alignment.png`
 :::
 
-3. Back in the main window, the Histology figure shows the atlas regions at the depths the
+3. Back in the main window, the prediction panel shows the atlas regions at the depths the
    automatic alignment found. Choose `Auto-alignment (confidence)` to see how confident it is
    along the probe: green is high, red is low.
+4. Press {kbd}`Shift+P` to see all the predictions side by side, and compare the two models with
+   the auto-alignment. Choose any image plot to go back.
 
 To see the result window again later, use `Plugins → Channel Prediction → Show auto-alignment
 results`.
@@ -134,7 +137,7 @@ results`.
 
 The predictions do not change your alignment. They are a guide for placing reference lines.
 
-1. Choose `Cosmos` with {kbd}`Alt+5`.
+1. Choose `Cosmos` with {kbd}`Alt+M`.
 2. [TODO: pick one boundary where the auto-alignment is confident and differs from the original
    track, and describe it.] Add a reference line pair there, with the Ephys line on the
    electrophysiology feature and the Histology line on the boundary.

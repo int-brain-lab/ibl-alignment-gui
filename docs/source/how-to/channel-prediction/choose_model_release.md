@@ -14,7 +14,7 @@ disk.
 
 3. Click **OK**. The release is downloaded once and cached in `~/.cache/ephysatlas/models`.
 
-4. Select the model's entry in `Region Plots` to run it.
+4. Select the model's entry in `Prediction Plots` to run it.
 
 Loading a model clears its previous predictions and closes any auto-alignment result windows.
 

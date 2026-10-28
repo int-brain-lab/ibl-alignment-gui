@@ -426,6 +426,12 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
             data = json.load(f)
         self.assertEqual(data, json_data)
 
+    def test_save_json_file_creates_missing_folder(self):
+        """Test the output folder is created if it does not exist yet"""
+        file_path = self.temp_path.joinpath('not', 'made', 'yet', 'test_file.json')
+        self.uploader._save_json_file(file_path, {'a': 1})
+        self.assertTrue(file_path.exists())
+
 
 class TestUploaderLoaderPaths(unittest.TestCase):
     """Test that the uploader writes the files that the loader reads back in.

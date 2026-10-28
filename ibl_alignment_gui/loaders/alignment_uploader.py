@@ -127,6 +127,8 @@ class AlignmentUploader(ABC):
         json_data:
             The data to save to the JSON file. Must be JSON serializable
         """
+        # The output folder named in the session yaml may not have been created yet
+        file.parent.mkdir(parents=True, exist_ok=True)
         with open(file, 'w') as f:
             json.dump(json_data, f, indent=2, separators=(',', ': '))
 

@@ -27,7 +27,7 @@ select a prediction straight away.
 
 2. If the YAML has no `features` dataset, add `--features /path/to/features.pqt`.
 
-3. When the window opens, select a prediction from `Region Plots`, such as
+3. When the window opens, select a prediction from `Prediction Plots`, such as
    `XGBoost region prediction` or `Auto-alignment`. It runs without asking for a model.
 
 ## Related

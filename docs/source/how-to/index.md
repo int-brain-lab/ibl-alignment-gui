@@ -2,7 +2,7 @@
 # How-to guides
 
 These guides are here for when you have something specific to get done with your own data. Each
-one starts from a goal, such as "convert my Kilosort output" or "open a probe whose shanks were
+one starts from a goal, such as "convert my kilosort output" or "open a probe whose shanks were
 sorted separately", and takes you straight to the steps that get you there.
 
 They assume you are already familiar with the GUI and how it works. If this is your first time,
@@ -12,7 +12,7 @@ everything fits together, and these guides will make much more sense afterwards.
 The guides are grouped by what you're trying to do:
 
 {doc}`install/index`
-: Add the optional packages for converting Kilosort output, the IBL online mode and the Channel
+: Add the optional packages for converting kilosort output, the IBL online mode and the Channel
   Prediction plugin.
 
 {doc}`prepare-data/index`

@@ -24,7 +24,7 @@ Choose one of:
 
 **Compute features of the model's vintage**
 
-1. Compute the features again with a version of `ibleatools` that produces the model's vintage
+1. Compute the features again with a version of [`ibleatools`](https://github.com/int-brain-lab/ibleatools) that produces the model's vintage
    (see {ref}`howto-compute-features`).
 2. Load the new file (see {ref}`howto-give-shanks-features`).
 

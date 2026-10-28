@@ -7,7 +7,7 @@ not hidden by noise or multi-unit activity.
 ## Prerequisites
 
 - A `clusters.metrics` file in the spike sorting folder, with a `ks2_label` column (for the
-  Kilosort filters) or a `label` column (for the IBL filter).
+  kilosort filters) or a `label` column (for the IBL filter).
 
 ## Steps
 
@@ -23,8 +23,8 @@ not hidden by noise or multi-unit activity.
    | Filter | Units shown | Needs |
    |---|---|---|
    | `All` | Every unit | |
-   | `KS good` | Units Kilosort labelled good | `ks2_label` |
-   | `KS mua` | Units Kilosort labelled multi-unit | `ks2_label` |
+   | `KS good` | Units kilosort labelled good | `ks2_label` |
+   | `KS mua` | Units kilosort labelled multi-unit | `ks2_label` |
    | `IBL good` | Units passing the IBL quality metrics | `label` |
 
 If the column a filter needs is missing, a warning is logged and every unit is shown.

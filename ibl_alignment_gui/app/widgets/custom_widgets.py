@@ -1225,6 +1225,31 @@ class MenuWidget(QtWidgets.QMenuBar):
 
         self.create_tabs()
 
+    def event(self, event: QtCore.QEvent) -> bool:
+        """
+        Show why a menu is greyed out when the mouse rests on it.
+
+        Qt shows no tooltips in a menu bar, so the tooltip of a disabled menu is shown here.
+
+        Parameters
+        ----------
+        event: QtCore.QEvent
+            The event
+
+        Returns
+        -------
+        bool
+            Whether the event was handled
+        """
+        if event.type() == QtCore.QEvent.ToolTip:
+            action = self.actionAt(event.pos())
+            if action is not None and not action.isEnabled() and action.toolTip():
+                QtWidgets.QToolTip.showText(event.globalPos(), action.toolTip(), self)
+            else:
+                QtWidgets.QToolTip.hideText()
+            return True
+        return super().event(event)
+
     def create_tabs(self):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options

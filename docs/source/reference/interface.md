@@ -34,8 +34,8 @@ Prediction panel
 : A channel prediction from the Channel Prediction plugin, shown after the probe plot (or after
   the feature plot, in the feature view) once one is chosen from the `Prediction Plots` menu.
   Predictions are placed by depth along the probe, like the other ephys plots. The panel carries
-  the reference lines, and hovering over a predicted region adds its acronym to the panel's
-  title. Choosing `None` removes it.
+  the reference lines, and its predicted regions are labelled with their acronyms. Choosing
+  `None` removes it.
 
 `All predictions (side by side)` ({kbd}`Shift+P`) replaces the image, line and probe plots with
 one panel per prediction, to compare the models. Choosing any other plot returns to the usual view.

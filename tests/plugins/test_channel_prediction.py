@@ -551,6 +551,30 @@ class TestModelRegistry(unittest.TestCase):
             self.menu(torch=False), ['Load XGBoost region prediction model (Hugging Face)…']
         )
 
+    def test_menu_needs_features(self):
+        """The menu is greyed out until a session with features is loaded"""
+        view = QtWidgets.QWidget()
+        self.addCleanup(view.deleteLater)
+        controller = SimpleNamespace(
+            view=view, plugins={}, plugin_options=MagicMock(), model=SimpleNamespace()
+        )
+        with _installed(torch=False):
+            cp.setup(controller)
+        menu = controller.plugin_options.addMenu.call_args.args[0]
+        self.assertFalse(menu.isEnabled())
+        self.assertEqual(menu.menuAction().toolTip(), cp.NO_FEATURES_MESSAGE)
+        for features in (True, False):
+            with self.subTest(features=features):
+                with (
+                    patch.object(cp, 'has_features', return_value=features),
+                    patch.object(cp, 'close_alignment_windows'),
+                ):
+                    controller.plugins[PLUGIN_KEY]['data_button_pressed']()
+                self.assertEqual(menu.isEnabled(), features)
+                # Without its hint, Qt reports the menu's own name as its tooltip
+                hint = menu.menuAction().toolTip() == cp.NO_FEATURES_MESSAGE
+                self.assertEqual(hint, not features)
+
 
 class TestLazyImports(unittest.TestCase):
     def test_no_heavy_imports(self):

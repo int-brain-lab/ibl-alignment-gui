@@ -2,7 +2,8 @@
 # Menus
 
 This page lists every entry in the menu bar. The plot menus list only the plots for which data was
-found, so some entries appear only with certain datasets or modes.
+found, so some entries appear only with certain datasets or modes. Hover over a greyed-out menu to
+see why it is unavailable.
 
 ## Image Plots
 
@@ -48,15 +49,15 @@ Drawn on the probe geometry. The channels in the Slice figure are coloured by th
 | `rms AP`, `rms LF` | Mean RMS per channel | `_iblqc_ephysTimeRms*` |
 | `0 - 4 Hz`, `4 - 10 Hz`, `10 - 30 Hz`, `30 - 80 Hz`, `80 - 200 Hz` | LF power per channel in each band | `_iblqc_ephysSpectralDensityLF` |
 | `RF Map - on`, `RF Map - off` | Receptive field maps | Receptive field mapping data (IBL sessions) and the `ibl` extra |
-| `Ephys Atlas - <feature>` | One ephys-atlas feature per channel | Channel Prediction plugin |
+| `Ephys Atlas - <feature>` | One ephys-atlas feature per channel | The `ephysatlas` extra and a features file |
 
 ## Feature Plots
 
-Greyed out when the session has no ephys-atlas features.
+Only shown with the `ephysatlas` extra. Greyed out when the session has no ephys-atlas features.
 
 | Entry | Shows | Needs |
 |---|---|---|
-| `Ephys Atlas` | Every ephys-atlas feature side by side | Channel Prediction plugin |
+| `Ephys Atlas` | Every ephys-atlas feature side by side | The `ephysatlas` extra and a features file |
 
 ## Slice Plots
 
@@ -71,8 +72,8 @@ The image in the Slice figure. {kbd}`Alt+4` / {kbd}`Shift+Alt+4` cycle through t
 ## Prediction Plots
 
 The channel predictions of the Channel Prediction plugin, in a panel beside the ephys plots.
-{kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them. Greyed out without the plugin. Without
-features, choosing a prediction shows a warning saying how to load a features file.
+{kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them. Only shown with the `ephysatlas` extra.
+Greyed out when the session has no ephys-atlas features.
 
 | Entry | Shows |
 |---|---|

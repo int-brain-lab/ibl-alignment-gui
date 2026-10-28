@@ -9,7 +9,7 @@ write your own, see {ref}`howto-extend`.
 | Cluster Features | Clicking a cluster in an image plot | All modes |
 | Range Controller | `Plugins → Range Controller` | All modes |
 | 3D features | `Plugins → 3D features` | All modes |
-| Channel Prediction | `Plugins → Channel Prediction` | All modes, with the `ephysatlas` extra |
+| Channel Prediction | `Plugins → Channel Prediction` | All modes, with the `ephysatlas` extra and a session with features |
 | Ephys Features | `Plugins → Ephys Features` | `alignment-gui-ibl` only |
 | Upload dialog | Uploading with more than one shank | All modes |
 | QC dialog | Uploading | `alignment-gui-ibl` only |

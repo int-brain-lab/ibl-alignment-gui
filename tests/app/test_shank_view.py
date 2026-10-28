@@ -110,7 +110,7 @@ class TestPrediction(unittest.TestCase):
         self.view.plot_prediction(self.fig, _regions(), 'Model')
         regions = [i for i in self.fig.items if isinstance(i, pg.LinearRegionItem)]
         self.assertEqual([r.region_name for r in regions], ['A', 'B'])
-        self.assertEqual(self.view.pred_titles[self.fig], 'Model')
+        self.assertEqual(self.view.pred_labels[self.fig].getAxis('top').labelText, 'Model')
         self.assertIn(self.line, self.fig.items)
 
     def test_cumulative(self):
@@ -134,16 +134,6 @@ class TestPrediction(unittest.TestCase):
         self.assertEqual([t.toPlainText() for t in texts], ['Not loaded'])
         self.assertFalse([i for i in self.fig.items if isinstance(i, pg.LinearRegionItem)])
         self.assertIn(self.line, self.fig.items)
-
-    def test_hover_title(self):
-        """Hovering a region adds its name to the title, until the title is reset"""
-        self.view.plot_prediction(self.fig, _regions(), 'Model')
-        region = next(i for i in self.fig.items if isinstance(i, pg.LinearRegionItem))
-        label = self.view.pred_labels[self.fig].getAxis('top')
-        self.view.show_prediction_region(self.fig, region)
-        self.assertEqual(label.labelText, 'Model: A')
-        self.view.reset_prediction_title()
-        self.assertEqual(label.labelText, 'Model')
 
     def test_long_title_wrapped(self):
         """A long title is wrapped over several lines"""

@@ -3,7 +3,6 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as mpl  # noqa  # This is needed to make qt show properly :/
 import numpy as np
@@ -29,18 +28,20 @@ from ibl_alignment_gui.plugins.upload_dialog import display as display_upload_di
 from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
-if TYPE_CHECKING:
-    from ibl_alignment_gui.app.views.shank_view import ShankView
-
 logger = logging.getLogger(__name__)
 
-# The atlas mappings offered in the Set Mapping menu, drawn on the reference histology panels.
+# The atlas mappings offered in the Set Mapping menu, drawn on the histology panels.
 REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
 # The Prediction Plots option that hides the prediction panels.
 NO_PREDICTION = 'None'
 # The Prediction Plots option that shows all the predictions side by side, instead of the ephys
 # plots.
 ALL_PREDICTIONS = 'All predictions (side by side)'
+# Why the feature and prediction menus are greyed out, shown when the mouse rests on them
+NO_FEATURES_HINT = (
+    'No ephys-atlas features for this session. Provide a features file: give it as the features '
+    'dataset in the session YAML, or put one with "features" in its name in the data folder.'
+)
 
 
 class AlignmentGUIController:
@@ -142,7 +143,6 @@ class AlignmentGUIController:
         self.hover_shank: str | None = None
         self.hover_idx: int | None = None
         self.hover_config: str | None = None
-        self.hover_prediction: ShankView | None = None
 
         # Available shanks and their controllers
         self.all_shanks: list = list()
@@ -184,6 +184,8 @@ class AlignmentGUIController:
 
         # Setup plugins
         Plugins(self)
+        # No session yet, so the feature and prediction menus start greyed out (or hidden)
+        self.update_feature_menus()
 
         # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
@@ -371,8 +373,6 @@ class AlignmentGUIController:
         self.feature_init = self.view.populate_menu_tab(
             'feature', self.plot_feature_panels, self.model.feature_keys
         )
-        # Without features the menu has no entries, so grey it out
-        self.view.set_menu_enabled('feature', bool(self.model.feature_keys))
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys
         )
@@ -391,7 +391,7 @@ class AlignmentGUIController:
         self.prediction_init = self.view.populate_menu_tab(
             'prediction', self.plot_prediction_panels, prediction_keys
         )
-        self.view.set_menu_enabled('prediction', bool(self.prediction_keys))
+        self.update_feature_menus()
         # A new session starts without predictions
         self.show_predictions = False
 
@@ -553,10 +553,31 @@ class AlignmentGUIController:
         self.get_scaled_histology()
         self.plot_histology_panels()
         self.plot_scale_factor_panels()
+        # Redrawing the histology clears its figure, so the reference lines are added back
+        self.remove_reference_lines_from_display()
+        self.add_reference_lines_to_display()
+        self.align_reference_lines()
         errors += self.plot_histology_ref_panels(mapping=plot_key)
         messages = list(dict.fromkeys(error for error in errors if error))
         if messages:
             QtWidgets.QMessageBox.warning(self.view, plot_key, '\n\n'.join(messages))
+
+    def update_feature_menus(self) -> None:
+        """
+        Offer the feature and prediction menus only with ephysatlas, and only with features.
+
+        Without ephysatlas there are no ephys-atlas feature plots or predictions, so the menus are
+        hidden. With it, they are greyed out until a session with features is loaded, with a hint
+        saying how to provide a features file.
+        """
+        for tab in ('feature', 'prediction'):
+            self.view.set_menu_visible(tab, plot_loader.EPHYS_ATLAS)
+        if not plot_loader.EPHYS_ATLAS:
+            return
+        self.view.set_menu_enabled('feature', bool(self.model.feature_keys), NO_FEATURES_HINT)
+        self.view.set_menu_enabled(
+            'prediction', bool(self.prediction_keys) and self.model.has_features, NO_FEATURES_HINT
+        )
 
     @property
     def show_prediction_panel(self) -> bool:
@@ -1833,11 +1854,6 @@ class AlignmentGUIController:
         self.hover_shank = name
         self.hover_config = config
 
-        # Restore the title of a prediction whose region was hovered over
-        if self.hover_prediction is not None:
-            self.hover_prediction.reset_prediction_title()
-            self.hover_prediction = None
-
         if len(hover_items) > 1:
             self.hover_line = None
             hover_item0, hover_item1 = hover_items[0], hover_items[1]
@@ -1855,11 +1871,6 @@ class AlignmentGUIController:
                     return
                 if hover_item0 == items.view.fig_hist_ref:
                     self.hover_region = hover_item1
-                    return
-                # Check if we are on a prediction plot
-                if hover_item0 in items.view.prediction_figs:
-                    items.view.show_prediction_region(hover_item0, hover_item1)
-                    self.hover_prediction = items.view
                     return
             elif self.show_feature and isinstance(hover_item1, pg.ImageItem):
                 items = self.shank_items[name][config]

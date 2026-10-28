@@ -404,6 +404,22 @@ class ProbeHandler(ABC):
         return self.get_plot_keys('probe_plots')
 
     @property
+    def has_features(self) -> bool:
+        """
+        Return whether any loaded shank has ephys-atlas features.
+
+        Returns
+        -------
+        bool
+            True when a shank and configuration loaded features with the session, else False.
+        """
+        return any(
+            handler.data_loaded and handler.raw_data.get('features', {}).get('exists', False)
+            for configs in self.shanks.values()
+            for handler in configs.values()
+        )
+
+    @property
     def feature_keys(self) -> list[str]:
         """
         Find the list of available feature plot keys across all shanks and configurations.

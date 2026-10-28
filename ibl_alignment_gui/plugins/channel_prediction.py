@@ -80,6 +80,11 @@ def setup(controller: 'AlignmentGUIController') -> None:
 
     plugin_menu = QtWidgets.QMenu(PLUGIN_NAME, controller.view)
     controller.plugin_options.addMenu(plugin_menu)
+    # The models need features, which come with a session: greyed out until one has them, with a
+    # hint saying how to provide them
+    controller.plugin_options.setToolTipsVisible(True)
+    controller.plugins[PLUGIN_NAME]['menu'] = plugin_menu
+    _enable_menu(plugin_menu, False)
 
     # One load action per model; those needing torch only when it is installed.
     models = available_models()
@@ -186,8 +191,8 @@ def _show_first_option(controller: 'AlignmentGUIController', spec: 'ModelSpec') 
 def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
     """Data-load hook: reset per-session plugin state.
 
-    Runs on every data load (i.e. each new session) and closes the previous session's
-    auto-alignment result windows.
+    Runs on every data load (i.e. each new session). Closes the previous session's auto-alignment
+    result windows, and enables the plugin's menu only when the session has features.
 
     Parameters
     ----------
@@ -195,6 +200,15 @@ def _on_data_loaded(controller: 'AlignmentGUIController') -> None:
         The main application controller.
     """
     close_alignment_windows(controller)
+    menu = controller.plugins[PLUGIN_NAME].get('menu')
+    if menu is not None:
+        _enable_menu(menu, has_features(controller))
+
+
+def _enable_menu(menu: QtWidgets.QMenu, enabled: bool) -> None:
+    """Enable the plugin's menu, or grey it out with a hint saying a features file is needed."""
+    menu.setEnabled(enabled)
+    menu.menuAction().setToolTip('' if enabled else NO_FEATURES_MESSAGE)
 
 
 class ChannelPrediction:

@@ -132,8 +132,6 @@ class ShankView:
         self.fig_preds: dict[str, pg.PlotItem] = {}
         self.pred_labels: dict[pg.PlotItem, pg.PlotItem] = {}
         self.pred_items: dict[pg.PlotItem, list] = {}
-        self.pred_titles: dict[pg.PlotItem, str] = {}
-        self.pred_hovered: pg.PlotItem | None = None
 
         # Plot items for the slice plot
         self.slice_lines: list[pg.PlotCurveItem] = []
@@ -387,7 +385,6 @@ class ShankView:
 
         self.pred_labels[fig] = label
         self.pred_items[fig] = []
-        self.pred_titles[fig] = ''
 
         return fig, label
 
@@ -614,7 +611,6 @@ class ShankView:
         """
         self.pred_items[fig] = self.remove_items(fig, self.pred_items[fig])
         fig.getAxis('right').setTicks([[]])
-        self.pred_titles[fig] = title or ''
         self.set_prediction_title(fig, title)
         set_axis(fig, 'bottom', pen='w', label=' ')
         self.set_xaxis_range(fig, [0, 1])
@@ -1306,29 +1302,6 @@ class ShankView:
             axis.setLabel(title, **{'font-size': self.PRED_TITLE_SIZE})
         else:
             set_axis(label, 'top', pen='w', label=' ', ticks=False)
-
-    def show_prediction_region(self, fig: pg.PlotItem, region: pg.LinearRegionItem) -> None:
-        """
-        Add the name of a hovered region of a prediction to the title above its figure.
-
-        Parameters
-        ----------
-        fig : pg.PlotItem
-            The prediction figure being hovered over.
-        region : pg.LinearRegionItem
-            The region being hovered over.
-        """
-        name = getattr(region, 'region_name', None)
-        if name is None:
-            return
-        self.set_prediction_title(fig, f'{self.pred_titles[fig]}: {name}')
-        self.pred_hovered = fig
-
-    def reset_prediction_title(self) -> None:
-        """Restore the title of the prediction figure whose region was hovered over, if any."""
-        if self.pred_hovered is not None:
-            fig, self.pred_hovered = self.pred_hovered, None
-            self.set_prediction_title(fig, self.pred_titles[fig])
 
     def match_linear_region(self, hover_item: pg.LinearRegionItem) -> int | None:
         """

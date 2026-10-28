@@ -174,9 +174,9 @@ class ModelSourceDialog(QtWidgets.QDialog):
 
 
 NO_FEATURES_MESSAGE = (
-    'No features found for this probe. '
-    'Give a features file as the features dataset in the session YAML, or put one with '
-    '"features" in its name in the data folder, then load the session again.'
+    'No ephys-atlas features for this session. Provide a features file: give it as the features '
+    'dataset in the session YAML, or put one with "features" in its name in the data folder, then '
+    'load the session.'
 )
 
 

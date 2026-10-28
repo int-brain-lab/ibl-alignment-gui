@@ -75,7 +75,7 @@ class TestDecode(unittest.TestCase):
     def test_no_features(self):
         """No features for the shank raises PredictionError before predicting"""
         self.features.return_value = None
-        with self.assertRaisesRegex(PredictionError, 'No features found'):
+        with self.assertRaisesRegex(PredictionError, 'No ephys-atlas features'):
             self.decode()
         self.run_decoder.assert_not_called()
 

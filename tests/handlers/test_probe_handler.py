@@ -1,11 +1,16 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from ibl_alignment_gui.handlers.probe_handler import ProbeHandlerONE, find_features_file
+from ibl_alignment_gui.handlers.probe_handler import (
+    ProbeHandler,
+    ProbeHandlerONE,
+    find_features_file,
+)
 
 
 def make_insertion(subject: str, name: str, pid: str) -> dict:
@@ -76,6 +81,23 @@ class TestResolvePid(unittest.TestCase):
         # Act / Assert
         with self.assertRaises(ValueError):
             self.model.resolve_pid('pid-other')
+
+
+class TestHasFeatures(unittest.TestCase):
+    """The session has features when any loaded shank has them."""
+
+    def handler(self, loaded=True, exists=True):
+        return MagicMock(data_loaded=loaded, raw_data={'features': {'exists': exists}})
+
+    def has_features(self, *handlers):
+        shanks = {f'shank_{i}': {'default': h} for i, h in enumerate(handlers)}
+        return ProbeHandler.has_features.fget(SimpleNamespace(shanks=shanks))
+
+    def test_has_features(self):
+        self.assertTrue(self.has_features(self.handler(exists=False), self.handler()))
+        self.assertFalse(self.has_features(self.handler(exists=False)))
+        self.assertFalse(self.has_features(self.handler(loaded=False)))
+        self.assertFalse(self.has_features())
 
 
 class TestFindFeaturesFile(unittest.TestCase):

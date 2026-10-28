@@ -24,8 +24,8 @@ Without `ibl`
   works.
 
 Without `ephysatlas`
-: The `Channel Prediction` menu is not added to `Plugins`, the `Prediction Plots` menu is greyed
-  out, and the Ephys Atlas feature plots are not offered.
+: The `Channel Prediction` entry of `Plugins`, and the `Feature Plots` and `Prediction Plots`
+  menus, are not shown.
 
 Without `torch`
 : Only relevant if `ibleatools` was installed without its dependencies. The Channel Prediction

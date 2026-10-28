@@ -310,7 +310,7 @@ class TestAlign(unittest.TestCase):
     def test_no_features(self):
         """No features for the probe raises PredictionError"""
         self.features_for_vintage.return_value = None
-        with self.assertRaisesRegex(PredictionError, 'No features found'):
+        with self.assertRaisesRegex(PredictionError, 'No ephys-atlas features'):
             self.align()
 
     def test_no_vintage(self):

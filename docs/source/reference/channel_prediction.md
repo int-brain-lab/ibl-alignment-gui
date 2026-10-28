@@ -9,8 +9,8 @@ Requires the `ephysatlas` extra (see {ref}`ref-optional-dependencies`). For how 
 
 | Model | Hugging Face repository | Default release | Prediction plot entries | Needs `torch` |
 |---|---|---|---|---|
-| XGBoost region decoder | `int-brain-lab/ea-decoder-channel-xgboost` | `2026_W39` | `XGBoost region prediction`, `XGBoost region prediction (cumulative)` | No |
-| ProbeTransformer region decoder | `int-brain-lab/ea-decoder-channel-transformer` | `2026_W39` | `ProbeTransformer region prediction`, `ProbeTransformer region prediction (cumulative)` | Yes |
+| XGBoost region decoder | `int-brain-lab/ea-decoder-channel-xgboost` | Set by `ibleatools` | `XGBoost region prediction`, `XGBoost region prediction (cumulative)` | No |
+| ProbeTransformer region decoder | `int-brain-lab/ea-decoder-channel-transformer` | Set by `ibleatools` | `ProbeTransformer region prediction`, `ProbeTransformer region prediction (cumulative)` | Yes |
 | Alignment model | `int-brain-lab/ea-encoder-channel`, set by [`ibleatools`](https://github.com/int-brain-lab/ibleatools) | Set by `ibleatools` | `Auto-alignment`, `Auto-alignment (confidence)` | Yes |
 
 Each model is loaded with `ephysatlas.load_pretrained`, from a Hugging Face repository and release
@@ -22,7 +22,8 @@ it on are unknown.
 
 ## Menu entries
 
-`Plugins → Channel Prediction`:
+`Plugins → Channel Prediction`, greyed out until a session with features is loaded (hover over it
+to see why):
 
 `Load XGBoost region prediction model (Hugging Face)…`
 : Choose the repository and release, or a local directory, for the XGBoost decoder.
@@ -61,10 +62,10 @@ the session's vintage when one exists.
 | `Feature Plots` | `Ephys Atlas`: every feature, normalised across the shank's channels, side by side |
 | `Probe Plots` | `Ephys Atlas - <feature>`: one entry per feature, on the probe geometry |
 
-The prediction entries are offered as soon as a session is loaded. Without features, selecting
-one shows a warning saying how to load a features file. Selecting one whose model has not been
-loaded opens the model's load dialog. A prediction is shown in a panel beside the ephys
-plots, placed by depth along the probe (see {ref}`ref-interface-ephys`).
+The prediction entries are offered as soon as a session with features is loaded; without features,
+`Prediction Plots` is greyed out. Selecting one whose model has not been loaded opens the model's
+load dialog. A prediction is shown in a panel beside the ephys plots, placed by depth along the
+probe (see {ref}`ref-interface-ephys`).
 
 `All predictions (side by side)` shows only the models already loaded, computed for the shanks
 that need them in one go; the panels of a model that is not loaded say so.

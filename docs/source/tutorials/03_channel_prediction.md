@@ -20,14 +20,16 @@ It takes about 30 minutes, plus the time to download the models the first time.
 - Complete {ref}`tutorial-first-alignment`.
 - Install the `ephysatlas` extra (see {ref}`howto-install-extras`). It also installs `torch`,
   which the auto-alignment model needs.
-- Download the features file for Sample data 1, [TODO: file name and download link], and put it
-  in the Sample data 1 folder. It holds the electrophysiology features of every channel, computed
-  from the raw data with [`ibleatools`](https://github.com/int-brain-lab/ibleatools).
+- Download the features file for Sample data 1, `ephys_atlas_features_2026_W42.pqt`
+  ([TODO: download link]), and put it in the Sample data 1 folder. It holds the
+  electrophysiology features of every channel, computed from the raw data with
+  [`ibleatools`](https://github.com/int-brain-lab/ibleatools).
 
 ## 1. Check the plugin is installed
 
 1. Start the GUI with `alignment-gui`.
-2. Open the `Plugins` menu. It has a `Channel Prediction` entry.
+2. Open the `Plugins` menu. It has a `Channel Prediction` entry, greyed out until you load a
+   session with features in the next step.
 
 If it does not, the `ephysatlas` extra is not installed in the environment you started the GUI
 from.
@@ -56,7 +58,7 @@ The features are added as a dataset in a session YAML, alongside the folder you 
          histology:
            path: .
          features:
-           path: [TODO: features file name]
+           path: ephys_atlas_features_2026_W42.pqt
    ```
 
    `.` is the Sample data 1 folder itself, so this is the same data you opened directly in
@@ -65,7 +67,11 @@ The features are added as a dataset in a session YAML, alongside the folder you 
 2. Click `...`, choose **Open session YAML…**, and choose `sample_data_1.yaml`.
 
 The data loads as before. Your alignment from {ref}`tutorial-first-alignment` is selected in the
-alignment dropdown.
+alignment dropdown. With the features loaded, the `Feature Plots` and `Prediction Plots` menus and
+`Plugins → Channel Prediction` are now available.
+
+Opening the Sample data 1 folder directly would also pick up the features file, as its name
+contains `features`. The YAML makes the file you are using explicit.
 
 ## 3. Look at the features
 
@@ -86,7 +92,7 @@ These are the numbers the models work from: the same kinds of signal you looked 
    is downloaded the first time, then the prediction runs.
 
 A panel appears beside the ephys plots, showing the region the model predicts for each channel
-from the electrophysiology alone. Hover over a region to see its name.
+from the electrophysiology alone. Each predicted region is labelled with its acronym.
 
 4. Compare the prediction with the regions in the Histology figure. Look for boundaries where the
    two agree, and where they do not.

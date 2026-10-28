@@ -304,7 +304,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             tab, callback, options, set_checked=set_checked
         )
 
-    def set_menu_enabled(self, tab: str, enabled: bool) -> None:
+    def set_menu_enabled(self, tab: str, enabled: bool, reason: str = '') -> None:
         """
         Enable or grey out a menu tab.
 
@@ -314,8 +314,25 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The name of the tab
         enabled: bool
             Whether the tab can be opened
+        reason: str
+            Why the tab is greyed out, shown when the mouse rests on it
         """
-        self.menu_widgets.tabs[tab]['menu'].setEnabled(enabled)
+        menu = self.menu_widgets.tabs[tab]['menu']
+        menu.setEnabled(enabled)
+        menu.menuAction().setToolTip('' if enabled else reason)
+
+    def set_menu_visible(self, tab: str, visible: bool) -> None:
+        """
+        Show or hide a menu tab in the menu bar.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        visible: bool
+            Whether the tab is shown
+        """
+        self.menu_widgets.tabs[tab]['menu'].menuAction().setVisible(visible)
 
     def check_menu_option(self, tab: str, option: str) -> None:
         """

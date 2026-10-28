@@ -32,13 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ShankView.plot_histology(..., boundaries=False)` draws a column without region boundary lines.
 - A Prediction Plots menu (`Alt+5` / `Shift+Alt+5`) shows a channel prediction on its own panel
   in the Ephys figure, after the probe plot (or the feature plot in the feature view). It carries
-  the reference lines, and hovering over a predicted region adds its acronym to the panel's title.
-  `None` removes the panel.
+  the reference lines, and labels its predicted regions with their acronyms. `None` removes the
+  panel.
 - `All predictions (side by side)` in Prediction Plots (`Shift+P`) replaces the image, line and
   probe plots with one panel per prediction option of the loaded models, computed in one
   background task; the panels of a model that is not loaded say so.
 
 ### Changed
+- The `Feature Plots` and `Prediction Plots` menus and `Plugins -> Channel Prediction` are only
+  shown with the `ephysatlas` extra, and are greyed out when the session has no ephys-atlas
+  features. Hovering over a greyed-out menu says how to provide a features file.
 - The model predictions are shown in the Ephys figure (Prediction Plots) instead of the reference
   histology panel: they are placed by depth along the probe, like the ephys plots. The Region
   Plots menu is renamed `Set Mapping` (`Alt+M` / `Shift+Alt+M`), moves after Prediction Plots,

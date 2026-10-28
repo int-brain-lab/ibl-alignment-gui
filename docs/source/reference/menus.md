@@ -92,7 +92,7 @@ cycle through them.
 
 ## Filter Plots
 
-The units shown in the spike sorting plots.
+The units shown in the spike sorting plots. Greyed out when the session has no spike sorting.
 
 | Entry | Units shown |
 |---|---|

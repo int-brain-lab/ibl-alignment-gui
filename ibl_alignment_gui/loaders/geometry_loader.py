@@ -322,7 +322,10 @@ class GeometryLoader(ABC):
             self.channels.split_sites_per_shank()
 
         if self.electrodes is None and self.channels is None:
-            raise ValueError('Could not load geometry: metadata and channels both missing')
+            raise ValueError(
+                'Could not load the probe geometry: there are no spike sorting channels '
+                '(channels.localCoordinates) and no .ap.meta file in the raw_ephys folder'
+            )
 
         # When both sources are available they should describe the same probe. If they do not,
         # the spike sorting channels are the ones the data is indexed against, so drop the
@@ -491,8 +494,11 @@ class GeometryLoaderLocal(GeometryLoader):
         Returns
         -------
         Bunch or None
-            A Bunch containing the channels data, or None if not found.
+            A Bunch containing the channels data, or None if not found (or there is no spike
+            sorting).
         """
+        if self.spike_path is None:
+            return None
         chns = dloader.DataLoader.load_data(
             alfio.load_object,
             self.spike_path,

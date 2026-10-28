@@ -467,6 +467,21 @@ class TestDataLoaderLocal(unittest.TestCase):
         self.assertTrue(data, mock_data)
 
 
+class TestLoadersWithoutDatasets(unittest.TestCase):
+    """A session can have no spike sorting, and no raw data."""
+
+    def test_no_spike_sorting(self):
+        loader = DataLoaderLocal(DatasetPaths(processed_ephys=Path('/proc')))
+        self.assertIsNone(loader.probe_collection)
+        self.assertEqual(loader.load_spikes_data('spikes', attributes=['amps']), {'exists': False})
+
+    def test_no_raw_data(self):
+        loader = SpikeGLXLoaderLocal(None)
+        self.assertIsNone(loader.load_meta_data())
+        self.assertIsNone(loader.load_ap_data())
+        self.assertIsNone(loader.load_lf_data())
+
+
 class TestSpikeGLXLoader(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

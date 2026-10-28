@@ -10,6 +10,7 @@ from qtpy import QtCore, QtGui, QtWidgets
 from ibl_alignment_gui.app.controllers import app_controller
 from ibl_alignment_gui.app.controllers.app_controller import (
     NO_FEATURES_HINT,
+    NO_SPIKE_SORTING_HINT,
     AlignmentGUIController,
 )
 from ibl_alignment_gui.app.widgets.custom_widgets import MenuWidget
@@ -52,23 +53,36 @@ class TestMenuHint(unittest.TestCase):
 
 
 class TestUpdateFeatureMenus(unittest.TestCase):
-    """The feature and prediction menus need ephysatlas, and then a session with features."""
+    """The filter menu needs spike sorting; the feature and prediction menus need ephysatlas
+    and features."""
 
-    def controller(self, feature_keys=(), prediction_keys=(), has_features=False):
+    def controller(self, feature_keys=(), prediction_keys=(), has_features=False, spikes=False):
         controller = SimpleNamespace(
             view=MagicMock(),
             prediction_keys=list(prediction_keys),
-            model=SimpleNamespace(feature_keys=list(feature_keys), has_features=has_features),
+            model=SimpleNamespace(
+                feature_keys=list(feature_keys),
+                has_features=has_features,
+                has_spike_sorting=spikes,
+            ),
         )
-        AlignmentGUIController.update_feature_menus(controller)
+        AlignmentGUIController.update_data_menus(controller)
         return controller.view
+
+    def test_filters_need_spike_sorting(self):
+        for spikes in (True, False):
+            with self.subTest(spikes=spikes):
+                view = self.controller(spikes=spikes)
+                view.set_menu_enabled.assert_any_call('filter', spikes, NO_SPIKE_SORTING_HINT)
 
     def test_hidden_without_ephysatlas(self):
         with patch.object(app_controller.plot_loader, 'EPHYS_ATLAS', False):
             view = self.controller()
         view.set_menu_visible.assert_any_call('feature', False)
         view.set_menu_visible.assert_any_call('prediction', False)
-        view.set_menu_enabled.assert_not_called()
+        enabled = [c.args[0] for c in view.set_menu_enabled.call_args_list]
+        self.assertNotIn('feature', enabled)
+        self.assertNotIn('prediction', enabled)
 
     def test_greyed_out_without_features(self):
         with patch.object(app_controller.plot_loader, 'EPHYS_ATLAS', True):

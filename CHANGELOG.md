@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background task; the panels of a model that is not loaded say so.
 
 ### Changed
+- Session YAML: `output` must always be given, so the results are never written to a folder that
+  was not chosen. `picks` is still read from `spike_sorting` when not given, and `processed_ephys`
+  from `raw_ephys`, then `spike_sorting`. `raw_ephys` no longer falls back to `spike_sorting`.
 - The `Feature Plots` and `Prediction Plots` menus and `Plugins -> Channel Prediction` are only
   shown with the `ephysatlas` extra, and are greyed out when the session has no ephys-atlas
   features. Hovering over a greyed-out menu says how to provide a features file.
@@ -82,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per shank; cancelling the dialog stops the plot.
 - Model region options are offered offline too before the model is loaded, as online: selecting one
   opens its load dialog.
+
+### Fixed
+- A session without spike sorting now opens, with the probe geometry read from the `.ap.meta` file
+  in `raw_ephys`, which such a session must give; it used to fail on loading. The `Filter Plots`
+  menu is greyed out without spike sorting.
+- Saving progress or uploading no longer fails when the `output` folder does not exist yet; it is
+  created.
 
 ### Removed
 - `Plugins -> Channel Prediction -> Load features file…`. The features come with the session: the

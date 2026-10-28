@@ -172,6 +172,13 @@ configurations:
 
 ## Datasets that are not given
 
-After the paths are resolved, a dataset that is still missing is not filled in from another, with
-one exception: without `processed_ephys`, the RMS and power spectra are read from `raw_ephys`.
-Which datasets are required is listed in {ref}`ref-session-yaml`.
+After the paths are resolved, a dataset that is still missing is looked for where it is usually
+saved, but only if it is read and never written:
+
+- without `picks`, the trajectory is read from the `spike_sorting` folder
+- without `processed_ephys`, the RMS and power spectra are read from the `raw_ephys` folder, or
+  from the `spike_sorting` folder if there is no `raw_ephys`
+
+The raw data is never looked for, and `output`, the only dataset the GUI writes to, must always be
+given, so the results are never written to a folder you did not choose. Which datasets are
+required is listed in {ref}`ref-session-yaml`.

@@ -73,18 +73,20 @@ configurations:                 # ... or configurations, not both
 
 ## Datasets
 
-Every probe must give `picks` and `output`, and at least one of `spike_sorting` and
-`processed_ephys`. The other datasets are optional. Datasets are not filled in from one another,
-with one exception: if `processed_ephys` is not given, the RMS and power spectra are read from
-`raw_ephys`.
+Every probe must give `output`, the folder the results are written to, and at least one of
+`spike_sorting` and `processed_ephys`. A probe without `spike_sorting` must also give `raw_ephys`,
+the folder with the `.ap.meta` file, which is then the only source of the probe geometry. A dataset
+that is only read, and is not given, is looked for where it is usually saved: the trajectory beside
+the spike sorting, and the RMS and power spectra beside the raw data or the spike sorting. The raw
+data is never looked for.
 
 | Dataset | Contents | If not given |
 |---|---|---|
-| `spike_sorting` | Spike sorting output | Required if `processed_ephys` is not given; otherwise the plots that need spike sorting are empty |
-| `processed_ephys` | RMS and power spectra | Read from `raw_ephys`; required if `spike_sorting` is not given |
-| `picks` | Traced probe trajectory | Required |
 | `output` | Where the results are written | Required |
-| `raw_ephys` | Raw SpikeGLX recordings and metadata | No raw data snippets are shown |
+| `spike_sorting` | Spike sorting output | Required if `processed_ephys` is not given; otherwise the plots that need spike sorting are empty |
+| `processed_ephys` | RMS and power spectra | Read from `raw_ephys`, or from `spike_sorting` if there is no `raw_ephys`; required if neither is given |
+| `picks` | Traced probe trajectory | Read from `spike_sorting`; required if there is no `spike_sorting` |
+| `raw_ephys` | Raw SpikeGLX recordings and metadata | No raw data snippets are shown; required if `spike_sorting` is not given |
 | `histology` | Histology volumes | Only the Allen atlas slices are shown |
 | `features` | Per-channel features file | No channel predictions |
 
@@ -109,7 +111,9 @@ examples, is explained in {ref}`explanation-session-yaml-resolution`.
 Loading the file fails when:
 
 - the file does not exist, is empty, or does not hold a mapping
-- a probe does not give `picks` or `output`, or gives neither `spike_sorting` nor `processed_ephys`
+- a probe does not give `output`, gives neither `spike_sorting` nor `processed_ephys`, or has no
+  `picks` and no `spike_sorting` to read them from
+- a probe without `spike_sorting` does not give `raw_ephys`
 - there are more than two configurations
 - the configurations do not all contain the same probes
 - a relative path cannot be made absolute

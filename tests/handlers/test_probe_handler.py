@@ -100,6 +100,24 @@ class TestHasFeatures(unittest.TestCase):
         self.assertFalse(self.has_features())
 
 
+class TestHasSpikeSorting(unittest.TestCase):
+    """The session has spike sorting when any loaded shank has spikes."""
+
+    def has_spike_sorting(self, *exists):
+        shanks = {
+            f'shank_{i}': {
+                'default': MagicMock(data_loaded=True, raw_data={'spikes': {'exists': e}})
+            }
+            for i, e in enumerate(exists)
+        }
+        return ProbeHandler.has_spike_sorting.fget(SimpleNamespace(shanks=shanks))
+
+    def test_has_spike_sorting(self):
+        self.assertTrue(self.has_spike_sorting(False, True))
+        self.assertFalse(self.has_spike_sorting(False))
+        self.assertFalse(self.has_spike_sorting())
+
+
 class TestFindFeaturesFile(unittest.TestCase):
     """A data folder's features file is the one parquet file with 'features' in its name."""
 

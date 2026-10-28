@@ -555,7 +555,8 @@ class DataLoaderLocal(DataLoader):
         self.task_path: Path = data_paths.task
         self.raw_task_path: Path = data_paths.raw_task
         self.meta_path: Path = data_paths.raw_ephys
-        self.probe_collection: str = self.spike_path.name
+        # A session can have no spike sorting, only the RMS and power spectra
+        self.probe_collection: str | None = self.spike_path.name if self.spike_path else None
 
         super().__init__()
 
@@ -625,7 +626,10 @@ class DataLoaderLocal(DataLoader):
         Returns
         -------
         Bunch
+            The data, with ``exists`` False when the session has no spike sorting.
         """
+        if self.spike_path is None:
+            return Bunch(exists=False)
         return self.load_data(
             alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs
         )
@@ -1010,6 +1014,8 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         dict or None
             A dict containing the spikeglx AP band metadata, or None if not found.
         """
+        if self.meta_path is None:  # no raw_ephys dataset
+            return None
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
         return spikeglx.read_meta_data(meta_file) if meta_file else None
 
@@ -1022,6 +1028,8 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         spikeglx.Reader or None
             A spikeglx.Reader instance to load the raw data, or None if not found.
         """
+        if self.meta_path is None:
+            return None
         ap_file = next(self.meta_path.glob('*.ap.*bin'), None)
         return spikeglx.Reader(ap_file) if ap_file else None
 
@@ -1034,6 +1042,8 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         spikeglx.Reader or None
             A spikeglx.Reader instance to load the raw data, or None if not found.
         """
+        if self.meta_path is None:
+            return None
         lf_file = next(self.meta_path.glob('*.lf.*bin'), None)
         return spikeglx.Reader(lf_file) if lf_file else None
 

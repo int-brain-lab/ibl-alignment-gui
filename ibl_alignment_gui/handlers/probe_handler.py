@@ -420,6 +420,22 @@ class ProbeHandler(ABC):
         )
 
     @property
+    def has_spike_sorting(self) -> bool:
+        """
+        Return whether any loaded shank has spike sorting.
+
+        Returns
+        -------
+        bool
+            True when a shank and configuration loaded spikes with the session, else False.
+        """
+        return any(
+            handler.data_loaded and handler.raw_data.get('spikes', {}).get('exists', False)
+            for configs in self.shanks.values()
+            for handler in configs.values()
+        )
+
+    @property
     def feature_keys(self) -> list[str]:
         """
         Find the list of available feature plot keys across all shanks and configurations.

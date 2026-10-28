@@ -28,8 +28,9 @@ in one folder.
    ```
 
 2. Add any optional datasets you have: `histology` or `features` (see {ref}`ref-session-yaml`).
-   `picks` and `output` must always be given. `processed_ephys` can be left out if the RMS and
-   power spectrum files are in the `raw_ephys` folder.
+   `output` must always be given. `picks` can be left out if `xyz_picks.json` is in the spike
+   sorting folder, and `processed_ephys` if the RMS and power spectrum files are in the
+   `raw_ephys` or the spike sorting folder.
 
 3. Open the file (see {ref}`howto-open-session`) and check that each figure shows data.
 

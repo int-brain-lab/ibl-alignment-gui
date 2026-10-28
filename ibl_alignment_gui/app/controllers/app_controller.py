@@ -42,6 +42,10 @@ NO_FEATURES_HINT = (
     'No ephys-atlas features for this session. Provide a features file: give it as the features '
     'dataset in the session YAML, or put one with "features" in its name in the data folder.'
 )
+NO_SPIKE_SORTING_HINT = (
+    'No spike sorting for this session, so there are no units to filter. Give a spike_sorting '
+    'dataset in the session YAML.'
+)
 
 
 class AlignmentGUIController:
@@ -185,7 +189,7 @@ class AlignmentGUIController:
         # Setup plugins
         Plugins(self)
         # No session yet, so the feature and prediction menus start greyed out (or hidden)
-        self.update_feature_menus()
+        self.update_data_menus()
 
         # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
@@ -391,7 +395,7 @@ class AlignmentGUIController:
         self.prediction_init = self.view.populate_menu_tab(
             'prediction', self.plot_prediction_panels, prediction_keys
         )
-        self.update_feature_menus()
+        self.update_data_menus()
         # A new session starts without predictions
         self.show_predictions = False
 
@@ -562,14 +566,16 @@ class AlignmentGUIController:
         if messages:
             QtWidgets.QMessageBox.warning(self.view, plot_key, '\n\n'.join(messages))
 
-    def update_feature_menus(self) -> None:
+    def update_data_menus(self) -> None:
         """
-        Offer the feature and prediction menus only with ephysatlas, and only with features.
+        Offer the menus that need particular data only when the session has it.
 
-        Without ephysatlas there are no ephys-atlas feature plots or predictions, so the menus are
-        hidden. With it, they are greyed out until a session with features is loaded, with a hint
-        saying how to provide a features file.
+        The unit filters are greyed out without spike sorting. Without ephysatlas there are no
+        ephys-atlas feature plots or predictions, so their menus are hidden; with it, they are
+        greyed out until a session with features is loaded. A greyed-out menu has a hint saying
+        what is missing.
         """
+        self.view.set_menu_enabled('filter', self.model.has_spike_sorting, NO_SPIKE_SORTING_HINT)
         for tab in ('feature', 'prediction'):
             self.view.set_menu_visible(tab, plot_loader.EPHYS_ATLAS)
         if not plot_loader.EPHYS_ATLAS:

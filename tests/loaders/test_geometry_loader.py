@@ -837,6 +837,20 @@ class TestGeometryLoaderLocal(unittest.TestCase):
             self.assertIsNone(data)
 
 
+class TestGeometryWithoutSpikeSorting(unittest.TestCase):
+    """Without spike sorting, the geometry comes from the raw data's metadata alone."""
+
+    def test_no_channels(self):
+        loader = GeometryLoaderLocal(DatasetPaths(processed_ephys=Path('/proc')))
+        self.assertIsNone(loader.load_channels())
+
+    def test_no_channels_and_no_metadata(self):
+        loader = GeometryLoaderLocal(DatasetPaths(processed_ephys=Path('/proc')))
+        with self.assertRaises(ValueError) as ctx:
+            loader.get_geometry()
+        self.assertIn('raw_ephys', str(ctx.exception))
+
+
 class TestArrangeChannelsIntoBanks(unittest.TestCase):
     """Test the arrange_channels_into_banks function"""
 

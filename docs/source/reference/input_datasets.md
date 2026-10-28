@@ -83,7 +83,7 @@ Read from the `spike_sorting` folder.
 ## Processed electrophysiology
 
 Read from the `processed_ephys` folder. If no `processed_ephys` path is given, it is read from the
-`raw_ephys` folder.
+`raw_ephys` folder, or from the `spike_sorting` folder if there is no `raw_ephys`.
 
 `_iblqc_ephysSpectralDensityLF.power`
 : **Units** V²/Hz · **Type** float32 · **Dimensions** [number of frequencies, number of channels]
@@ -159,7 +159,8 @@ volume are loaded. The colour sets the volume's name in the menu.
 
 ## Probe trajectory
 
-Read from the `picks` folder.
+Read from the `picks` folder. If no `picks` path is given, it is read from the `spike_sorting`
+folder.
 
 `xyz_picks`
 : **Units** µm · **Type** double · **Dimensions** [number of points, 3] · **Format** json

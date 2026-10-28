@@ -35,4 +35,5 @@ configurations:
           raw_ephys: {}
           picks:
             path: kilosort
-          output: {}  # Defaults to spike_sorting path
+          output:
+            path: alignment_outputs

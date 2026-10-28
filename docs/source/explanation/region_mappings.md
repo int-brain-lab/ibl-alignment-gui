@@ -1,8 +1,8 @@
 (explanation-region-mappings)=
 # Brain region mappings
 
-The right panel of the Histology figure can show the brain regions along the track at three levels
-of detail, chosen from the `Mapping` menu. This page explains what they are and when each is
+The Histology figure can show the brain regions along the track at three levels of detail, chosen
+from the `Set Mapping` menu. This page explains what they are and when each is
 useful.
 
 ## The three mappings

@@ -24,9 +24,11 @@ Choose one of:
 
 **Compute features of the model's vintage**
 
-1. Compute the features again with a version of [`ibleatools`](https://github.com/int-brain-lab/ibleatools) that produces the model's vintage
+1. Compute the features again with a version of
+   [`ibleatools`](https://github.com/int-brain-lab/ibleatools) that produces the model's vintage
    (see {ref}`howto-compute-features`).
-2. Load the new file (see {ref}`howto-give-shanks-features`).
+2. Point the session at the new file, and load the session again (see
+   {ref}`howto-give-shanks-features`).
 
 A model release whose `ephysatlas_model.json` names no `vintage` cannot be run. Use another release.
 

@@ -22,7 +22,7 @@ import numpy as np
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.app.load_worker import TaskCancelledError
-from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal, FeatureLoaderOne
+from ibl_alignment_gui.loaders.data_loader import FeatureLoaderOne
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
@@ -173,13 +173,10 @@ class ModelSourceDialog(QtWidgets.QDialog):
         return (local or self._repo.text().strip() or self._default_repo), revision
 
 
-# The ``features_paths`` key of a features file for every shank (split by channel), as opposed to
-# a ``(shank, config)`` key for one shank's file.
-ALL_SHANKS = 'all shanks'
-
 NO_FEATURES_MESSAGE = (
     'No features found for this probe. '
-    'Set via Plugins -> Channel Prediction -> Load features file...'
+    'Give a features file as the features dataset in the session YAML, or put one with '
+    '"features" in its name in the data folder, then load the session again.'
 )
 
 
@@ -454,52 +451,11 @@ def is_model_loaded(controller: AlignmentGUIController, state_key: str) -> bool:
     return bool(state) and state.get('model') is not None
 
 
-def local_features_path(controller: AlignmentGUIController, items: ShankController) -> Path | None:
-    """Return the features file chosen for this shank and configuration, if any.
-
-    Files chosen with ``Load features file…`` are kept per ``(shank, config)`` in the plugin
-    state's ``features_paths``; the :data:`ALL_SHANKS` key holds one file for every shank, split
-    by channel.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank.
-
-    Returns
-    -------
-    Path or None
-        The shank's own file, else the file for all shanks, else None.
-    """
-    paths = plugin_state(controller).get('features_paths') or {}
-    return paths.get((items.name, items.config), paths.get(ALL_SHANKS))
-
-
-def has_local_features(controller: AlignmentGUIController, items: ShankController) -> bool:
-    """Return whether a features file was chosen for this shank with ``Load features file…``.
-
-    Parameters
-    ----------
-    controller : AlignmentGUIController
-        The main application controller.
-    items : ShankController
-        The shank.
-
-    Returns
-    -------
-    bool
-        True when a local features file overrides this shank's features, else False.
-    """
-    return local_features_path(controller, items) is not None
-
-
 def has_features(controller: AlignmentGUIController) -> bool:
     """Return whether per-channel features are available to run a prediction on.
 
-    True when a features file was chosen for any shank (the offline source) or any loaded shank
-    already holds a non-empty features table (the online source).
+    True when any loaded shank holds a non-empty features table, from the session YAML, the data
+    folder or the ephys-atlas table on Alyx.
 
     Parameters
     ----------
@@ -511,8 +467,6 @@ def has_features(controller: AlignmentGUIController) -> bool:
     bool
         True when features are available for at least one loaded shank, else False.
     """
-    if plugin_state(controller).get('features_paths'):
-        return True
     for shank_dict in controller.model.shanks.values():
         for shank_handler in shank_dict.values():
             raw_data = getattr(shank_handler, 'raw_data', None)
@@ -545,10 +499,8 @@ def _get_features_df(
 ) -> pd.DataFrame | None:
     """Return the per-channel features DataFrame for a shank, or None if unavailable.
 
-    Uses the already-loaded features (online ONE path) when present. Otherwise, in offline/yaml
-    mode where no features loader exists, loads the features file chosen for this shank
-    (:func:`local_features_path`) through the shank (:meth:`ShankHandler.load_ephys_features`),
-    which keeps them for the next prediction.
+    The features are those the shank loaded with the session (from the session YAML, the data
+    folder or the ephys-atlas table on Alyx).
 
     Parameters
     ----------
@@ -564,13 +516,7 @@ def _get_features_df(
     """
     feats = items.model.raw_data.get('features')
     if feats is None or not feats.get('exists', False):
-        features_path = local_features_path(controller, items)
-        if features_path is None:
-            return None
-        # The shank loads the file, split down to its own channels.
-        feats = items.model.load_ephys_features(FeatureLoaderLocal(features_path))
-        if not feats.get('exists', False):
-            return None
+        return None
     return feats['df']
 
 
@@ -585,8 +531,8 @@ def features_for_vintage(
     The GUI loads the latest ephys-atlas feature table, whose feature set can differ from the one
     a model was trained on (columns are renamed or dropped between vintages). When the features
     come from ONE, the table labelled ``vintage`` is loaded instead, and cached on the shank so the
-    feature plots keep the latest table. A local features file (from the session or chosen with
-    ``Load features file…``) is used as is; when it records another feature version than
+    feature plots keep the latest table. A local features file (from the session YAML or the data
+    folder) is used as is; when it records another feature version than
     ``vintage`` (:func:`features_vintage`), a warning is queued in the plugin state
     (``pending_warnings``), which the main thread shows when the prediction ends.
 
@@ -616,11 +562,7 @@ def features_for_vintage(
         If the model's vintage table cannot be loaded, or has no features for this insertion.
     """
     loader = items.model.loaders.get('features')
-    if (
-        has_local_features(controller, items)
-        or not isinstance(loader, FeatureLoaderOne)
-        or loader.feature_version == vintage
-    ):
+    if not isinstance(loader, FeatureLoaderOne) or loader.feature_version == vintage:
         df = _get_features_df(controller, items)
         # The features' version, when they record it. This may run on a background thread, so the
         # message is queued; the main thread shows it when the prediction ends.

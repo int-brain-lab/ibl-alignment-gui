@@ -61,8 +61,9 @@ Original brain regions
 
 Black dotted lines in the left and right panels mark the deepest and the shallowest channel.
 
-The regions in the right panel can be shown with three mappings, chosen from the `Mapping` menu
-(see {ref}`explanation-region-mappings`):
+The regions in all three panels can be shown with three mappings, chosen from the `Set Mapping`
+menu (see {ref}`explanation-region-mappings`). The 3D view and the uploaded results always use
+the Allen regions.
 
 Allen
 : The full Allen atlas hierarchy.

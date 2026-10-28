@@ -96,6 +96,25 @@ class TestPredictionViews(unittest.TestCase):
                 )
                 self.assertEqual(controller.rebuilt, 2)
 
+    def test_no_features_keeps_the_previous_choice(self):
+        """Without features, choosing a prediction warns and changes nothing"""
+        self.controller.loader.ready.return_value = False
+        for option in ('Model', ALL_PREDICTIONS):
+            with self.subTest(option=option):
+                self.controller.plot_prediction_panels(option)
+                self.assertEqual(self.controller.prediction_init, NO_PREDICTION)
+                self.assertEqual(self.controller.rebuilt, 0)
+                self.controller.view.check_menu_option.assert_called_with(
+                    'prediction', NO_PREDICTION
+                )
+        self.controller.loader.plot_predictions.assert_not_called()
+        self.controller.loader.plot_all_predictions.assert_not_called()
+
+    def test_none_needs_no_features(self):
+        """'None' is always allowed, without checking for features"""
+        self.controller.plot_prediction_panels(NO_PREDICTION)
+        self.controller.loader.ready.assert_not_called()
+
     def test_ephys_view_unchanged(self):
         """Choosing a plot of the view already shown does not rebuild the display"""
         self.assertFalse(self.controller._show_ephys_view(feature=False))

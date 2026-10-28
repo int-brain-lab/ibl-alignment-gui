@@ -85,6 +85,21 @@ class ShankHandler:
             self.align_handle.get_scaled_histology()
         )
 
+    def set_mapping(self, mapping: str) -> None:
+        """
+        Show the histology regions in an atlas mapping.
+
+        Parameters
+        ----------
+        mapping : str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'.
+        """
+        self.align_handle.hist_mapping = mapping
+
+    def get_mapping_regions(self, *args, **kwargs) -> tuple:
+        """See :meth:`AlignmentHandler.get_mapping_regions` for details."""
+        return self.align_handle.get_mapping_regions(*args, **kwargs)
+
     def get_reference_histology(self, *args, **kwargs) -> Bunch:
         """See :meth:`AlignmentHandler.get_reference_histology` for details."""
         return self.align_handle.get_reference_histology(*args, **kwargs)

@@ -2,7 +2,7 @@
 # How to give each shank its features file
 
 This guide shows you how to tell the GUI which features file to use for each shank, so the models
-can run.
+can run. The file is given with the session: in the session YAML, or in the data folder.
 
 ## In the session YAML
 
@@ -27,21 +27,22 @@ probes:
 
 This is the best choice for a session you will come back to.
 
-## From the menu
+## In the data folder
 
-1. Open `Plugins → Channel Prediction → Load features file…`.
-2. Choose the files:
+When you open a data folder instead of a YAML, put the features file in that folder, with
+`features` in its name, such as `ephys_atlas_features.pqt`. It is picked up when the folder is
+opened. Keep only one such file in the folder: with several, the GUI cannot tell which to use, so
+it uses none and logs the files it found.
 
-   - With one shank, choose the file.
-   - With several shanks or configurations, there is one row per shank and configuration. Change
-     the rows that need a different file; rows left unchanged keep their current features.
-   - For a probe whose shanks were sorted together, whose one file holds every shank's channels,
-     tick **One file for all shanks (split by channel)** and choose that file.
+## Multi-shank probes
 
-3. Click **OK**. The files are checked before any is used; if one has no features for its shank,
-   or cannot be read, it is reported and nothing changes.
+- Shanks sorted together share one probe entry, and one features file holds all their channels.
+  Give it once; the GUI splits it by channel for each shank.
+- Shanks sorted separately each have their own probe entry, so give each its own `features`
+  dataset.
 
-A file chosen from the menu takes precedence over the YAML, but only until new data is loaded.
+The features are read when the session is loaded. After changing the file, load the session
+again.
 
 ## Related
 

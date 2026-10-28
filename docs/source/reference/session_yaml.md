@@ -86,7 +86,7 @@ with one exception: if `processed_ephys` is not given, the RMS and power spectra
 | `output` | Where the results are written | Required |
 | `raw_ephys` | Raw SpikeGLX recordings and metadata | No raw data snippets are shown |
 | `histology` | Histology volumes | Only the Allen atlas slices are shown |
-| `features` | Per-channel features file | None, unless a file is chosen from the Channel Prediction menu |
+| `features` | Per-channel features file | No channel predictions |
 
 The files expected in each dataset are listed in {ref}`ref-input-datasets` and
 {ref}`ref-output-files`.

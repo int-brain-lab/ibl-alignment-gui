@@ -1057,6 +1057,35 @@ class ProbeHandlerCSV(ProbeHandler):
         return ins[0]
 
 
+def find_features_file(folder: Path) -> Path | None:
+    """
+    Find the per-channel features file in a data folder.
+
+    The file is the one parquet file with ``features`` in its name. With none there are no
+    features; with several it is unclear which to use, so none is used and the files are logged.
+
+    Parameters
+    ----------
+    folder : Path
+        The data folder.
+
+    Returns
+    -------
+    Path or None
+        The features file, or None.
+    """
+    files = sorted({*folder.glob('*features*.pqt'), *folder.glob('*features*.parquet')})
+    if len(files) > 1:
+        logger.warning(
+            'Several features files in %s, so none is used: %s. Keep one, or give it in a '
+            'session yaml.',
+            folder,
+            ', '.join(f.name for f in files),
+        )
+        return None
+    return files[0] if files else None
+
+
 class ProbeHandlerLocal(ProbeHandler):
     """
     Local file system implementation of ProbeHandler.
@@ -1086,6 +1115,7 @@ class ProbeHandlerLocal(ProbeHandler):
             histology=folder_path,
             picks=folder_path,
             output=folder_path,
+            features=find_features_file(folder_path),
         )
 
         # Load in the geometry and find the number of shnaks
@@ -1136,6 +1166,9 @@ class ProbeHandlerLocal(ProbeHandler):
             )
             if self.data_paths.raw_ephys is not None:
                 loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
+            # A features file in the folder holds every shank; the loader splits it per shank
+            if self.data_paths.features is not None:
+                loaders['features'] = FeatureLoaderLocal(self.data_paths.features)
             loaders['plots'] = PlotLoader()
             self.shanks[ishank][self.default_config] = ShankHandler(loaders, ish)
 

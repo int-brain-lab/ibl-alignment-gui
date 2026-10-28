@@ -52,6 +52,8 @@ Drawn on the probe geometry. The channels in the Slice figure are coloured by th
 
 ## Feature Plots
 
+Greyed out when the session has no ephys-atlas features.
+
 | Entry | Shows | Needs |
 |---|---|---|
 | `Ephys Atlas` | Every ephys-atlas feature side by side | Channel Prediction plugin |
@@ -66,25 +68,26 @@ The image in the Slice figure. {kbd}`Alt+4` / {kbd}`Shift+Alt+4` cycle through t
 | `Annotation` | Allen atlas annotation |
 | `Histology red`, `Histology green` | Your histology volumes, when given (see {ref}`ref-input-datasets`) |
 
-## Mapping
-
-The atlas mapping of the brain regions in the right panel of the Histology figure. {kbd}`Alt+M` /
-{kbd}`Shift+Alt+M` cycle through them.
-
-| Entry | Shows |
-|---|---|
-| `Allen`, `Beryl`, `Cosmos` | Atlas regions at three levels of detail (see {ref}`explanation-region-mappings`) |
-
 ## Prediction Plots
 
 The channel predictions of the Channel Prediction plugin, in a panel beside the ephys plots.
-{kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them. Greyed out without the plugin.
+{kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them. Greyed out without the plugin. Without
+features, choosing a prediction shows a warning saying how to load a features file.
 
 | Entry | Shows |
 |---|---|
 | `None` | No prediction panel |
 | Model entries | Predicted regions and auto-alignment (see {ref}`ref-channel-prediction`) |
 | `All predictions (side by side)` | Every prediction, side by side, instead of the image, line and probe plots ({kbd}`Shift+P`) |
+
+## Set Mapping
+
+The atlas mapping of the brain regions in the Histology figure. {kbd}`Alt+M` / {kbd}`Shift+Alt+M`
+cycle through them.
+
+| Entry | Shows |
+|---|---|
+| `Allen`, `Beryl`, `Cosmos` | Atlas regions at three levels of detail (see {ref}`explanation-region-mappings`) |
 
 ## Filter Plots
 

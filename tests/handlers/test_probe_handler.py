@@ -1,9 +1,11 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from ibl_alignment_gui.handlers.probe_handler import ProbeHandlerONE
+from ibl_alignment_gui.handlers.probe_handler import ProbeHandlerONE, find_features_file
 
 
 def make_insertion(subject: str, name: str, pid: str) -> dict:
@@ -74,6 +76,37 @@ class TestResolvePid(unittest.TestCase):
         # Act / Assert
         with self.assertRaises(ValueError):
             self.model.resolve_pid('pid-other')
+
+
+class TestFindFeaturesFile(unittest.TestCase):
+    """A data folder's features file is the one parquet file with 'features' in its name."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp_dir.name)
+        # Other parquet files in the folder are not features files
+        self.folder.joinpath('clusters.metrics.pqt').touch()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_none(self):
+        self.assertIsNone(find_features_file(self.folder))
+
+    def test_one(self):
+        for name in ('ephys_atlas_features_2026_W42.pqt', 'features.parquet'):
+            with self.subTest(name=name):
+                path = self.folder.joinpath(name)
+                path.touch()
+                self.assertEqual(find_features_file(self.folder), path)
+                path.unlink()
+
+    def test_several(self):
+        self.folder.joinpath('features_a.pqt').touch()
+        self.folder.joinpath('features_b.pqt').touch()
+        with self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs:
+            self.assertIsNone(find_features_file(self.folder))
+        self.assertIn('features_a.pqt', logs.output[0])
 
 
 if __name__ == '__main__':

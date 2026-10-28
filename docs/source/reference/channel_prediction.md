@@ -33,28 +33,20 @@ it on are unknown.
 `Load alignment model (Hugging Face)…`
 : The same for the alignment model. Only shown when `torch` is installed.
 
-`Load features file…`
-: Choose the features file for the session. With one shank, a file dialog. With several shanks or
-  configurations, one row per shank and configuration, each starting with the shank's current file.
-  Rows left unchanged keep their current features. Tick `One file for all shanks (split by channel)`
-  for a probe whose shanks were sorted together, whose features file holds every shank. The files
-  are checked before any is used: if one has no features for its shank or cannot be read, it is
-  reported and nothing changes.
-
 `Show auto-alignment results`
 : Reopen the auto-alignment result windows. Greyed out until a shank has been aligned.
 
 ## Features
 
-The models read per-channel features (see {ref}`ref-input-datasets`), from the first of these that
-is available:
+The models read per-channel features (see {ref}`ref-input-datasets`), loaded with the session:
 
-1. a file chosen with `Load features file…`, for the session that is loaded
-2. the `features` dataset of the session YAML
-3. in `alignment-gui-ibl`, the ephys-atlas feature table on Alyx of the vintage the model was
-   trained on
+- from a session YAML, the file given as the `features` dataset
+- from a data folder, the one parquet file in the folder with `features` in its name (`.pqt` or
+  `.parquet`); with several such files, none is used and the GUI logs which it found
+- in `alignment-gui-ibl`, the ephys-atlas feature table on Alyx of the vintage the model was
+  trained on
 
-A file chosen from the menu is cleared when new data is loaded.
+A file holding every shank of a probe sorted together is split by channel for each shank.
 
 The features must be of the model's vintage. Missing columns are reported when the model runs. If
 the Alyx table of the model's vintage has no features for the insertion, the model reports it
@@ -69,8 +61,9 @@ the session's vintage when one exists.
 | `Feature Plots` | `Ephys Atlas`: every feature, normalised across the shank's channels, side by side |
 | `Probe Plots` | `Ephys Atlas - <feature>`: one entry per feature, on the probe geometry |
 
-The prediction entries are offered as soon as a session is loaded. Selecting one whose model has
-not been loaded opens the model's load dialog. A prediction is shown in a panel beside the ephys
+The prediction entries are offered as soon as a session is loaded. Without features, selecting
+one shows a warning saying how to load a features file. Selecting one whose model has not been
+loaded opens the model's load dialog. A prediction is shown in a panel beside the ephys
 plots, placed by depth along the probe (see {ref}`ref-interface-ephys`).
 
 `All predictions (side by side)` shows only the models already loaded, computed for the shanks
@@ -90,13 +83,13 @@ dialog, and opens a result window per shank showing:
 for low, and grey beyond the probe and for channels that could not be aligned.
 
 Each shank is aligned once. Switching between the two entries does not align again or reopen the
-windows. Loading a new model or features file closes the windows and starts again; loading a new
-session closes them.
+windows. Loading a new model closes the windows and starts again; loading a new session closes
+them.
 
 ## Launching with models preset
 
-`examples/launch_with_local_prediction.py` opens a session with the model sources and features
-file already set, so the load dialogs are skipped:
+`examples/launch_with_local_prediction.py` opens a session with the model sources already set, so
+the load dialogs are skipped. The features come from the session YAML:
 
 ```console
 python examples/launch_with_local_prediction.py \
@@ -104,7 +97,6 @@ python examples/launch_with_local_prediction.py \
     --model-dir /path/to/ea-decoder-channel-xgboost/<vintage>
 ```
 
-`--model-dir` can be given once per model, and `--features` sets the features file when the YAML
-has no `features` dataset. The `model_class` in the release's
+`--model-dir` can be given once per model. The `model_class` in the release's
 `ephysatlas_model.json` decides which model it is. Models without a `--model-dir` are downloaded
 from the Hub at their default release.

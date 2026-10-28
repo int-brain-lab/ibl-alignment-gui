@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opening a data folder picks up the per-channel features file in it: the one parquet file with
+  `features` in its name.
 - Documentation reorganised into tutorials, how-to guides, explanation and reference, following
   [Diátaxis](https://diataxis.fr/), and written in Markdown (MyST). New pages include tutorials on
   the sample data, guides for data preparation, session YAMLs, channel prediction and writing
@@ -39,8 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The model predictions are shown in the Ephys figure (Prediction Plots) instead of the reference
   histology panel: they are placed by depth along the probe, like the ephys plots. The Region
-  Plots menu is renamed `Mapping` (`Alt+M` / `Shift+Alt+M`) and keeps the `Allen`, `Beryl` and
-  `Cosmos` mappings, now drawn by the GUI itself rather than the Channel Prediction plugin.
+  Plots menu is renamed `Set Mapping` (`Alt+M` / `Shift+Alt+M`), moves after Prediction Plots,
+  and keeps the `Allen`, `Beryl` and `Cosmos` mappings, now drawn by the GUI itself rather than
+  the Channel Prediction plugin. The chosen mapping applies to all three histology panels (the
+  aligned regions, the scale factors and the original regions); the 3D view and the uploaded
+  results stay in the Allen mapping.
 - The inference model is replaced by two released region decoders, `XGBoost region prediction`
   (`int-brain-lab/ea-decoder-channel-xgboost`) and `ProbeTransformer region prediction`
   (`int-brain-lab/ea-decoder-channel-transformer`, needs torch), both loaded with
@@ -60,8 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A model whose release names no feature vintage (`vintage` in its `ephysatlas_model.json`) is
   refused, rather than run on the GUI's features (region decoders) or on the table named after its
   release tag (auto-alignment).
-- A features file chosen with `Load features file…` is used by both models, also for an IBL
-  insertion (auto-alignment previously used the model's feature release instead).
 - An unexpected error while computing a region prediction is reported in the plot's warning and
   its traceback logged, instead of escaping (which could close the GUI). A feature table that
   cannot be loaded for the model's vintage is reported as such.
@@ -78,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opens its load dialog.
 
 ### Removed
+- `Plugins -> Channel Prediction -> Load features file…`. The features come with the session: the
+  YAML's `features` dataset, a features file in the data folder, or the Alyx table online.
 - The `Inference Model` / `Inference Cumulative` region entries and `Load inference model…`, the
   S3 inference models and local models in the old `folds/FOLD0X/meta.yaml` layout (these no longer
   load with the current ibleatools).

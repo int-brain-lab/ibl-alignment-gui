@@ -5,23 +5,20 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 from qtpy import QtWidgets
 
 from ibl_alignment_gui.loaders.data_loader import FeatureLoaderLocal, FeatureLoaderOne
-from ibl_alignment_gui.plugins.ephys_atlas import _common
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
-    ALL_SHANKS,
     PLUGIN_KEY,
     PredictionError,
     _get_features_df,
     features_for_vintage,
     features_vintage,
     get_region_boundaries,
-    local_features_path,
     missing_features_error,
     model_vintage,
 )
@@ -182,33 +179,9 @@ class TestFeaturesForVintage(unittest.TestCase):
                 self.assertNotIn('pending_warnings', controller.plugins[PLUGIN_KEY])
 
 
-class TestLocalFeaturesPath(unittest.TestCase):
-    """The features file chosen for a shank and configuration."""
-
-    def shank(self, name='a', config='default') -> SimpleNamespace:
-        return SimpleNamespace(name=name, config=config)
-
-    def controller(self, paths) -> SimpleNamespace:
-        return SimpleNamespace(plugins={PLUGIN_KEY: Bunch(features_paths=paths)})
-
-    def test_own_file_then_all_then_none(self):
-        """A shank's own file comes first, then the file for all shanks, then none"""
-        own, everyone = Path('own.pqt'), Path('all.pqt')
-        controller = self.controller({('a', 'default'): own, ALL_SHANKS: everyone})
-        self.assertEqual(local_features_path(controller, self.shank('a')), own)
-        self.assertEqual(local_features_path(controller, self.shank('b')), everyone)
-        self.assertIsNone(local_features_path(self.controller(None), self.shank('a')))
-
-    def test_per_configuration(self):
-        """A file chosen for one configuration does not apply to the shank's other one"""
-        controller = self.controller({('a', 'dense'): Path('dense.pqt')})
-        self.assertEqual(
-            local_features_path(controller, self.shank('a', 'dense')), Path('dense.pqt')
-        )
-        self.assertIsNone(local_features_path(controller, self.shank('a', 'sparse')))
-
-    def test_shank_without_file_uses_vintage_table(self):
-        """A shank without its own file gets the model's vintage table, not its GUI features"""
+class TestVintageTable(unittest.TestCase):
+    def test_online_features_use_the_vintage_table(self):
+        """Features from Alyx are replaced by the model's vintage table, not the GUI's features"""
         loader = FeatureLoaderOne.__new__(FeatureLoaderOne)
         loader.feature_version = '2026_W42'
         loader.pid = 'pid'
@@ -222,27 +195,24 @@ class TestLocalFeaturesPath(unittest.TestCase):
                 raw_data={'features': Bunch(exists=True, df='GUI features')},
             ),
         )
-        # Another shank has a file of its own.
-        controller = self.controller({('a', 'default'): Path('own.pqt')})
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
         table = Bunch(exists=True, df='W39 features')
         with patch.object(FeatureLoaderOne, 'load_features', return_value=table):
             self.assertEqual(features_for_vintage(controller, items, '2026_W39'), 'W39 features')
 
 
 class TestGetFeaturesDf(unittest.TestCase):
-    def test_features_file_loaded_through_shank(self):
-        """Without features, the shank loads the plugin's features file itself"""
-        handler = MagicMock(raw_data={'features': Bunch(exists=False)})
-        handler.load_ephys_features.return_value = Bunch(exists=True, df='features')
-        items = SimpleNamespace(name='probe00', config='default', model=handler)
-        path = Path('features.pqt')
-        controller = SimpleNamespace(
-            plugins={PLUGIN_KEY: Bunch(features_paths={ALL_SHANKS: path})}
-        )
-        with patch.object(_common, 'FeatureLoaderLocal') as loader:
-            self.assertEqual(_get_features_df(controller, items), 'features')
-        loader.assert_called_once_with(path)
-        handler.load_ephys_features.assert_called_once_with(loader.return_value)
+    def test_the_shank_features(self):
+        """The features are those the shank loaded with the session, or None without any"""
+        controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
+        for features, expected in [
+            (Bunch(exists=True, df='features'), 'features'),
+            (Bunch(exists=False), None),
+            (None, None),
+        ]:
+            with self.subTest(features=features):
+                items = SimpleNamespace(model=SimpleNamespace(raw_data={'features': features}))
+                self.assertEqual(_get_features_df(controller, items), expected)
 
 
 class TestModelVintage(unittest.TestCase):

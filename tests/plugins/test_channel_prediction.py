@@ -6,7 +6,6 @@ import subprocess
 import sys
 import threading
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +15,6 @@ from qtpy import QtTest, QtWidgets
 from ibl_alignment_gui.plugins import channel_prediction as cp
 from ibl_alignment_gui.plugins.ephys_atlas import _common, inference, spatial_encoder
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
-    ALL_SHANKS,
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
     PLUGIN_KEY,
@@ -63,6 +61,27 @@ def _fake_controller() -> SimpleNamespace:
 
 
 DECODER = 'XGBoost region prediction'
+
+
+class TestReady(unittest.TestCase):
+    """ready() allows a prediction only with features, and otherwise says how to load them."""
+
+    def setUp(self):
+        self.controller = _fake_controller()
+        self.controller.view = None
+        self.loader = cp.ChannelPrediction(self.controller)
+        self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
+
+    def test_with_features(self):
+        with patch.object(cp, 'has_features', return_value=True):
+            self.assertTrue(self.loader.ready())
+        self.warning.assert_not_called()
+
+    def test_without_features(self):
+        with patch.object(cp, 'has_features', return_value=False):
+            self.assertFalse(self.loader.ready())
+        self.warning.assert_called_once()
+        self.assertEqual(self.warning.call_args.args[2], cp.NO_FEATURES_MESSAGE)
 
 
 class TestPlotRegionsModelLookup(unittest.TestCase):
@@ -515,244 +534,22 @@ class TestModelRegistry(unittest.TestCase):
         return [action.text() for action in menu.actions()]
 
     def test_menu_with_torch(self):
-        """With torch, one load item per model, the features file and the results item"""
+        """With torch, one load item per model and the results item"""
         self.assertEqual(
             self.menu(torch=True),
             [
                 'Load XGBoost region prediction model (Hugging Face)…',
                 'Load ProbeTransformer region prediction model (Hugging Face)…',
                 'Load alignment model (Hugging Face)…',
-                'Load features file…',
                 'Show auto-alignment results',
             ],
         )
 
     def test_menu_without_torch(self):
-        """Without torch, only the XGBoost load item and the features file"""
+        """Without torch, only the XGBoost load item"""
         self.assertEqual(
-            self.menu(torch=False),
-            ['Load XGBoost region prediction model (Hugging Face)…', 'Load features file…'],
+            self.menu(torch=False), ['Load XGBoost region prediction model (Hugging Face)…']
         )
-
-    def test_invalidate_loaded_models(self):
-        """Only the loaded models have their predictions cleared"""
-        loaded = (spatial_encoder.ENCODER_SPEC.key,)
-        controller = SimpleNamespace(
-            plugins={
-                PLUGIN_KEY: Bunch(
-                    {spec.key: dict(model=object()) for spec in cp.MODELS if spec.key in loaded}
-                )
-            }
-        )
-        specs = [dataclasses.replace(spec, invalidate=MagicMock()) for spec in cp.MODELS]
-        with patch.object(cp, 'MODELS', tuple(specs)):
-            cp._invalidate_loaded_models(controller)
-        for spec in specs:
-            if spec.key in loaded:
-                spec.invalidate.assert_called_once_with(controller)
-            else:
-                spec.invalidate.assert_not_called()
-
-
-def _handler(loaded: bool = True, yaml_file: str | None = None) -> MagicMock:
-    """A shank handler, with its data loaded or not, and a features file from the session YAML."""
-    handler = MagicMock(data_loaded=loaded, shank_idx=0)
-    features = cp.FeatureLoaderLocal(yaml_file) if yaml_file else None
-    handler.loaders = {'features': features, 'geom': MagicMock()}
-    return handler
-
-
-class TestSetLocalFeatures(unittest.TestCase):
-    """ "Load features file…": choosing, checking and applying features files per shank."""
-
-    @classmethod
-    def setUpClass(cls):
-        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
-    def setUp(self):
-        self.invalidate = self.enterContext(patch.object(cp, '_invalidate_loaded_models'))
-        self.warning = self.enterContext(patch.object(cp.QtWidgets.QMessageBox, 'warning'))
-
-        # Every file has features, except one named "bad"; no file is read.
-        def load_features(loader, shank_sites=None):
-            return Bunch(exists=loader.features_path.name != 'bad')
-
-        self.enterContext(
-            patch.object(
-                cp.FeatureLoaderLocal, 'load_features', autospec=True, side_effect=load_features
-            )
-        )
-
-    def controller(self, shanks: dict) -> SimpleNamespace:
-        return SimpleNamespace(
-            view=None, plugins={PLUGIN_KEY: Bunch()}, model=SimpleNamespace(shanks=shanks)
-        )
-
-    def choose(self, chosen: dict | None):
-        """Patch the per-shank dialog to return ``chosen`` on OK, or to be cancelled (None)."""
-        dialog = MagicMock()
-        dialog.exec.return_value = (
-            QtWidgets.QDialog.Rejected if chosen is None else QtWidgets.QDialog.Accepted
-        )
-        dialog.chosen.return_value = chosen or {}
-        return patch.object(cp, 'FeaturesFilesDialog', return_value=dialog)
-
-    def loaded_file(self, handler) -> Path | None:
-        calls = handler.load_ephys_features.call_args_list
-        return calls[-1].args[0].features_path if calls else None
-
-    def paths(self, controller) -> dict:
-        return controller.plugins[PLUGIN_KEY]['features_paths']
-
-    def test_single_shank_plain_dialog(self):
-        """One shank and one configuration: a plain file dialog, used for that shank"""
-        handler = _handler()
-        controller = self.controller({'a': {'default': handler}})
-        with (
-            patch.object(cp.QtWidgets.QFileDialog, 'getOpenFileName', return_value=('/f.pqt', '')),
-            patch.object(cp, 'FeaturesFilesDialog') as dialog,
-        ):
-            cp._set_local_features(controller)
-        dialog.assert_not_called()
-        self.assertEqual(self.paths(controller), {ALL_SHANKS: Path('/f.pqt')})
-        self.assertEqual(self.loaded_file(handler), Path('/f.pqt'))
-        self.invalidate.assert_called_once_with(controller)
-
-    def test_one_file_for_all_shanks(self):
-        """One file for all shanks: loaded by the shanks whose data is loaded, not the others"""
-        loaded, not_loaded = _handler(), _handler(loaded=False)
-        controller = self.controller({'a': {'default': loaded}, 'b': {'default': not_loaded}})
-        with self.choose({ALL_SHANKS: Path('/f.pqt')}):
-            cp._set_local_features(controller)
-        self.assertEqual(self.loaded_file(loaded), Path('/f.pqt'))
-        not_loaded.load_ephys_features.assert_not_called()
-        self.assertEqual(self.paths(controller), {ALL_SHANKS: Path('/f.pqt')})
-        self.invalidate.assert_called_once_with(controller)
-
-    def test_file_per_shank(self):
-        """Each shank loads its own file"""
-        a, b = _handler(), _handler()
-        controller = self.controller({'a': {'default': a}, 'b': {'default': b}})
-        chosen = {('a', 'default'): Path('/a.pqt'), ('b', 'default'): Path('/b.pqt')}
-        with self.choose(chosen):
-            cp._set_local_features(controller)
-        self.assertEqual(
-            (self.loaded_file(a), self.loaded_file(b)), (Path('/a.pqt'), Path('/b.pqt'))
-        )
-        self.assertEqual(self.paths(controller), chosen)
-
-    def test_file_per_configuration(self):
-        """A file for one configuration leaves the shank's other configuration as it is"""
-        dense, sparse = _handler(), _handler()
-        controller = self.controller({'a': {'dense': dense, 'sparse': sparse}})
-        with self.choose({('a', 'dense'): Path('/dense.pqt')}):
-            cp._set_local_features(controller)
-        self.assertEqual(self.loaded_file(dense), Path('/dense.pqt'))
-        sparse.load_ephys_features.assert_not_called()
-
-    def test_file_kept_for_other_shanks(self):
-        """Choosing a file for one shank keeps the files chosen before for the others"""
-        a, b = _handler(), _handler()
-        controller = self.controller({'a': {'default': a}, 'b': {'default': b}})
-        controller.plugins[PLUGIN_KEY]['features_paths'] = {('b', 'default'): Path('/b.pqt')}
-        with self.choose({('a', 'default'): Path('/a.pqt')}):
-            cp._set_local_features(controller)
-        b.load_ephys_features.assert_not_called()
-        self.assertEqual(
-            self.paths(controller),
-            {('a', 'default'): Path('/a.pqt'), ('b', 'default'): Path('/b.pqt')},
-        )
-
-    def test_invalid_file_applies_nothing(self):
-        """A file without features for its shank: a warning naming it, and nothing changes"""
-        a, b = _handler(), _handler()
-        controller = self.controller({'a': {'default': a}, 'b': {'default': b}})
-        with self.choose({('a', 'default'): Path('/a.pqt'), ('b', 'default'): Path('/bad')}):
-            cp._set_local_features(controller)
-        self.warning.assert_called_once()
-        self.assertIn('b (default)', self.warning.call_args.args[2])
-        a.load_ephys_features.assert_not_called()
-        self.assertNotIn('features_paths', controller.plugins[PLUGIN_KEY])
-        self.invalidate.assert_not_called()
-
-    def test_unreadable_file_reported(self):
-        """A file that cannot be read is reported like one without features, and nothing changes"""
-        a, b = _handler(), _handler()
-        controller = self.controller({'a': {'default': a}, 'b': {'default': b}})
-        with (
-            self.choose({('a', 'default'): Path('/notes.txt')}),
-            patch.object(
-                cp.FeatureLoaderLocal, 'load_features', side_effect=OSError('not parquet')
-            ),
-        ):
-            cp._set_local_features(controller)
-        self.warning.assert_called_once()
-        self.assertIn(
-            f'a (default): {Path("/notes.txt")} could not be read', self.warning.call_args.args[2]
-        )
-        self.assertNotIn('features_paths', controller.plugins[PLUGIN_KEY])
-
-    def test_cancel_changes_nothing(self):
-        """Cancelling the dialog changes nothing"""
-        a, b = _handler(), _handler()
-        controller = self.controller({'a': {'default': a}, 'b': {'default': b}})
-        with self.choose(None):
-            cp._set_local_features(controller)
-        a.load_ephys_features.assert_not_called()
-        self.assertNotIn('features_paths', controller.plugins[PLUGIN_KEY])
-        self.invalidate.assert_not_called()
-
-    def test_current_file(self):
-        """A row opens with the file chosen before, else the file for all, else the YAML's file"""
-        handler = _handler(yaml_file='/yaml.pqt')
-        controller = self.controller({})
-        key = ('a', 'default')
-        self.assertEqual(cp._current_features_file(controller, key, handler), Path('/yaml.pqt'))
-        controller.plugins[PLUGIN_KEY]['features_paths'] = {ALL_SHANKS: Path('/all.pqt')}
-        self.assertEqual(cp._current_features_file(controller, key, handler), Path('/all.pqt'))
-        controller.plugins[PLUGIN_KEY]['features_paths'][key] = Path('/own.pqt')
-        self.assertEqual(cp._current_features_file(controller, key, handler), Path('/own.pqt'))
-
-
-class TestFeaturesFilesDialog(unittest.TestCase):
-    """The per-shank dialog: which rows it returns."""
-
-    @classmethod
-    def setUpClass(cls):
-        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
-    def setUp(self):
-        rows = [
-            (('a', 'default'), Path('/a.pqt')),
-            (('b', 'default'), Path('/b.pqt')),
-            (('c', 'default'), None),
-        ]
-        self.dialog = cp.FeaturesFilesDialog(None, rows)
-        self.addCleanup(self.dialog.deleteLater)
-
-    def field(self, key) -> QtWidgets.QLineEdit:
-        return self.dialog._fields[key]
-
-    def test_opens_with_current_files(self):
-        """Each row opens with the shank's current file"""
-        self.assertEqual(self.field(('a', 'default')).text(), str(Path('/a.pqt')))
-        self.assertEqual(self.field(('c', 'default')).text(), '')
-
-    def test_only_changed_rows(self):
-        """Only changed rows are returned; rows left alone or emptied keep the current file"""
-        self.field(('a', 'default')).setText('/new.pqt')
-        self.field(('b', 'default')).setText('')
-        self.assertEqual(self.dialog.chosen(), {('a', 'default'): Path('/new.pqt')})
-
-    def test_one_file_for_all(self):
-        """With the box ticked, its one file is returned for all shanks"""
-        self.dialog._all.setChecked(True)
-        self.dialog._all_field.setText('/all.pqt')
-        self.assertEqual(self.dialog.chosen(), {ALL_SHANKS: Path('/all.pqt')})
-        self.dialog._all_field.setText('')
-        self.assertEqual(self.dialog.chosen(), {})
 
 
 class TestLazyImports(unittest.TestCase):

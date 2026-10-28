@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The atlas mappings offered in the Mapping menu, drawn on the reference histology panels.
+# The atlas mappings offered in the Set Mapping menu, drawn on the reference histology panels.
 REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
 # The Prediction Plots option that hides the prediction panels.
 NO_PREDICTION = 'None'
@@ -371,6 +371,8 @@ class AlignmentGUIController:
         self.feature_init = self.view.populate_menu_tab(
             'feature', self.plot_feature_panels, self.model.feature_keys
         )
+        # Without features the menu has no entries, so grey it out
+        self.view.set_menu_enabled('feature', bool(self.model.feature_keys))
         self.slice_init = self.view.populate_menu_tab(
             'slice', self.plot_slice_panels, self.model.slice_keys
         )
@@ -509,9 +511,34 @@ class AlignmentGUIController:
             )
             return f'{mapping} regions could not be found: {type(exc).__name__}: {exc}'
 
+    @shank_loop
+    def set_mapping(self, items: ShankController, mapping: str = 'Allen', **kwargs) -> str | None:
+        """
+        Set the atlas mapping the histology regions are shown in, per shank and config.
+
+        Parameters
+        ----------
+        mapping: str
+            The atlas mapping of the regions, e.g. 'Allen', 'Beryl' or 'Cosmos'
+
+        Returns
+        -------
+        str or None
+            The error message if the regions could not be found, else None.
+        """
+        try:
+            items.model.set_mapping(mapping)
+            items.model.get_mapping_regions(mapping)
+        except Exception as exc:
+            logger.exception(
+                '%s regions failed on shank %s (%s)', mapping, kwargs.get('shank'), items.config
+            )
+            items.model.set_mapping('Allen')
+            return f'{mapping} regions could not be found: {type(exc).__name__}: {exc}'
+
     def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
         """
-        Plot the reference histology panels with the atlas mapping chosen in the Mapping menu.
+        Plot the histology panels with the atlas mapping chosen in the Set Mapping menu.
 
         Parameters
         ----------
@@ -521,7 +548,12 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         self.region_init = plot_key
-        errors = self.plot_histology_ref_panels(mapping=plot_key)
+        # The scaled histology and its scale factors are shown in the mapping too
+        errors = self.set_mapping(mapping=plot_key)
+        self.get_scaled_histology()
+        self.plot_histology_panels()
+        self.plot_scale_factor_panels()
+        errors += self.plot_histology_ref_panels(mapping=plot_key)
         messages = list(dict.fromkeys(error for error in errors if error))
         if messages:
             QtWidgets.QMessageBox.warning(self.view, plot_key, '\n\n'.join(messages))
@@ -577,6 +609,10 @@ class AlignmentGUIController:
             Whether the plot can be generated without histology data
         """
         loader = self.plugins['Channel Prediction']['loader']
+        if plot_key != NO_PREDICTION and not loader.ready():
+            # No features to predict on: the plugin has warned, so keep the previous choice
+            self.view.check_menu_option('prediction', self.prediction_init or NO_PREDICTION)
+            return
         shown = self.show_prediction_panel
         self.prediction_init = plot_key
 

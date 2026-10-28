@@ -1235,12 +1235,12 @@ class MenuWidget(QtWidgets.QMenuBar):
             'probe',
             'feature',
             'slice',
-            'region',
             'prediction',
+            'region',
             'filter',
         ]:
             # The region menu chooses the atlas mapping, so it is titled for that
-            title = 'Mapping' if group == 'region' else f'{group.capitalize()} Plots'
+            title = 'Set Mapping' if group == 'region' else f'{group.capitalize()} Plots'
             self.tabs[group]['menu'] = self.addMenu(title)
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)

@@ -527,7 +527,10 @@ def data_to_colors(data: list | np.ndarray, cmap: str, vmin: float, vmax: float)
 @shank_loop
 def get_regions(_, items: 'ShankController', **kwargs):
     """
-    Get unique brain regions that the shank passes through.
+    Get unique brain regions that the shank passes through, in the Allen mapping.
+
+    The regions come from the track rather than the histology figure, so they do not change with
+    the mapping chosen in the Set Mapping menu.
 
     Parameters
     ----------
@@ -539,7 +542,7 @@ def get_regions(_, items: 'ShankController', **kwargs):
     np.ndarray
         An array of unique region names.
     """
-    return np.unique(items.model.hist_data['axis_label'][:, 1])
+    return np.unique(items.model.align_handle.ephysalign.region_label[:, 1])
 
 
 @shank_loop

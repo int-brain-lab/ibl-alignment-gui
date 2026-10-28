@@ -175,12 +175,14 @@ Read from the `picks` folder.
 
 ## Electrophysiology features
 
-The path to a single file, given by the `features` key. Optional, and only used by the Channel
-Prediction plugin (see {ref}`ref-channel-prediction`).
+The path to a single file, given by the `features` key. When a data folder is opened instead of a
+YAML file, the one parquet file in the folder with `features` in its name is used. Optional, and
+only used by the Channel Prediction plugin (see {ref}`ref-channel-prediction`).
 
 `features`
 : **Format** parquet · **Rows** one per channel
 
-  Per-channel electrophysiology features computed with [`ibleatools`](https://github.com/int-brain-lab/ibleatools). A `channel` column holds the
+  Per-channel electrophysiology features computed with
+  [`ibleatools`](https://github.com/int-brain-lab/ibleatools). A `channel` column holds the
   raw-data channel index. For a probe with more than one shank, one file can hold every shank's
   channels: the rows are split per shank by matching `channel` against `channels.rawInd`.

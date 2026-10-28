@@ -1,16 +1,17 @@
 """Launch the alignment GUI with a local region-prediction model pre-wired.
 
 Convenience launcher that opens the IBL alignment GUI on a local (yaml) session and pre-populates
-the *Channel Prediction* plugin so that a locally-stored region-prediction model + per-channel
-features parquet are used without navigating the file dialogs every time.
+the *Channel Prediction* plugin so that locally-stored region-prediction models are used without
+navigating the model dialogs every time. The per-channel features come from the session, as the
+``features`` dataset of the YAML.
 
 This is a thin wrapper around :class:`AlignmentGUIController` that does **not** modify any GUI code.
 It simply:
 
 1. Builds the controller in offline mode (optionally loading a YAML session config via ``--yaml``).
 2. Pre-sets the *Channel Prediction* plugin's model sources (the local releases given with
-   ``--model-dir``, otherwise each model's default release on the Hugging Face Hub) and
-   ``features_paths`` so the dialogs are skipped and the models run straight away.
+   ``--model-dir``, otherwise each model's default release on the Hugging Face Hub) so the
+   dialogs are skipped and the models run straight away.
 3. Shows the window and enters the Qt event loop.
 
 After the GUI opens (the session auto-loads when ``--yaml`` is given), click
@@ -47,11 +48,9 @@ from qtpy import QtWidgets
 
 from ibl_alignment_gui.app.controllers.app_controller import AlignmentGUIController
 from ibl_alignment_gui.plugins.channel_prediction import MODELS, PLUGIN_NAME, available_models
-from ibl_alignment_gui.plugins.ephys_atlas._common import ALL_SHANKS
 
 # Model locations are machine-specific, so they are passed on the command line rather than
-# defaulted here. Features normally live in the session YAML, so --features is only an override
-# for YAMLs that do not specify a `features` dataset.
+# defaulted here. The features come from the session YAML's `features` dataset.
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -59,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 # %% CLI parsing
 def parse_args() -> argparse.Namespace:
-    """Parse CLI overrides for the session yaml, model dir, and features path."""
+    """Parse CLI overrides for the session yaml and model dirs."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         '--yaml', '-y', type=Path, default=None,
@@ -69,10 +68,6 @@ def parse_args() -> argparse.Namespace:
         help='Local release directory of a model (containing ephysatlas_model.json); repeat it '
              'for several models. Which model it is comes from the manifest model_class. '
              'Default: the Hugging Face Hub releases of the region decoders.')
-    parser.add_argument(
-        '--features', type=Path, default=None,
-        help='Optional per-channel features parquet override (only needed if the YAML has no '
-             '`features` dataset).')
     return parser.parse_args()
 
 
@@ -116,20 +111,11 @@ def model_sources(model_dirs: list[Path]) -> dict[str, str]:
     return sources
 
 
-def validate_features(features_path: Path | None) -> None:
-    """Sanity-check the features override, if given, before launching."""
-    if features_path is not None and not features_path.is_file():
-        raise SystemExit(f'Features file not found:\n  {features_path}')
-    if features_path is not None:
-        logger.info('Features file: %s (override)', features_path)
-
-
 # %% Main entry point
 def main() -> None:
     """Build the controller, pre-fill the plugin paths, and run the Qt event loop."""
     args = parse_args()
     sources = model_sources(args.model_dir)
-    validate_features(args.features)
 
     # Qt application — must be created before any widgets.
     app = QtWidgets.QApplication([])
@@ -142,8 +128,8 @@ def main() -> None:
     )
 
     # The Channel Prediction plugin registers during the controller's __init__, seeding its state
-    # keys with None. Pre-set the model sources (and a features override if given) so the file
-    # dialogs are skipped on the first click. Features normally come from the session YAML.
+    # keys with None. Pre-set the model sources so the model dialogs are skipped on the first
+    # click. The features come from the session YAML.
     plugin_state = controller.plugins[PLUGIN_NAME]
 
     # Every model offered (those needing torch only with torch): its local release when given,
@@ -152,8 +138,6 @@ def main() -> None:
         repo, revision = spec.default_source()
         plugin_state[spec.key] = {'source': (sources.get(spec.key, repo), revision), 'model': None}
         logger.info('Model:         %s -> %s@%s', spec.key, sources.get(spec.key, repo), revision)
-    if args.features is not None:
-        plugin_state['features_paths'] = {ALL_SHANKS: args.features}  # one file for all shanks
     logger.info(
         'Pre-populated %r plugin. Pick a model option in Prediction Plots to run it.', PLUGIN_NAME)
 

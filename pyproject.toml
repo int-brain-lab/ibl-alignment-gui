@@ -42,7 +42,7 @@ ibl = ["ibllib"]
 # Allen/Code Ocean (anatomical) mode: read/write alignments to the Allen DocDB and warp channel
 # locations into the Allen CCF. Not required for the local anatomical workflow.
 allen = [
-  "aind-data-schema<2.0",
+  "aind-data-schema<3.0",
   "aind-data-access-api",
   "aind-data-schema-models",
   "aind-qcportal-schema",
@@ -77,7 +77,7 @@ doc = [
   "sphinx-autodoc-typehints>=3.0.1",
   "sphinx-copybutton>=0.5.2",
   "sphinx-rtd-theme>=3.0.2",
-  "sphinx<=8.2.3",
+  "sphinx<=9.1.1",
   "sphinx-jsonschema>=1.19.1",
   "sphinx-design>=0.6.1",
   "sphinx-reredirects>=0.1.5",

@@ -28,6 +28,19 @@ class TestSetMapping(unittest.TestCase):
         )
         controller.align_reference_lines.assert_called_once()
 
+    def test_setting_up_the_display_leaves_the_reference_lines(self):
+        """While the display is set up, the reference lines are added by the setup, not here"""
+        controller = MagicMock()
+        controller.set_mapping.return_value = [None]
+        controller.plot_histology_ref_panels.return_value = [None]
+
+        AlignmentGUIController.plot_region_ref_panels(controller, 'Allen', redraw_lines=False)
+
+        controller.plot_histology_panels.assert_called_once()
+        controller.remove_reference_lines_from_display.assert_not_called()
+        controller.add_reference_lines_to_display.assert_not_called()
+        controller.align_reference_lines.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

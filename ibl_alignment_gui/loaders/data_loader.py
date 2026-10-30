@@ -398,7 +398,7 @@ class DataLoader(ABC):
         clusters['exists'] = exists
 
         spike_idx, ib = ismember(spikes['clusters'], clusters['metrics'].index)
-        clusters['metrics'].reset_index(drop=True, inplace=True)
+        clusters['metrics'] = clusters['metrics'].reset_index(drop=True)
         exists = spikes.pop('exists')
         spikes = alfio.AlfBunch({k: v[spike_idx] for k, v in spikes.items()})
         spikes['exists'] = exists

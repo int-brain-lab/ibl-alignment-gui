@@ -540,7 +540,9 @@ class AlignmentGUIController:
             items.model.set_mapping('Allen')
             return f'{mapping} regions could not be found: {type(exc).__name__}: {exc}'
 
-    def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
+    def plot_region_ref_panels(
+        self, plot_key: str, data_only: bool = True, redraw_lines: bool = True
+    ) -> None:
         """
         Plot the histology panels with the atlas mapping chosen in the Set Mapping menu.
 
@@ -550,6 +552,9 @@ class AlignmentGUIController:
             The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'
         data_only: bool
             Whether the plot can be generated without histology data
+        redraw_lines: bool
+            Whether to add the reference lines back after the histology is redrawn. False when
+            the display is being set up, which adds them itself.
         """
         self.region_init = plot_key
         # The scaled histology and its scale factors are shown in the mapping too
@@ -557,10 +562,11 @@ class AlignmentGUIController:
         self.get_scaled_histology()
         self.plot_histology_panels()
         self.plot_scale_factor_panels()
-        # Redrawing the histology clears its figure, so the reference lines are added back
-        self.remove_reference_lines_from_display()
-        self.add_reference_lines_to_display()
-        self.align_reference_lines()
+        if redraw_lines:
+            # Redrawing the histology clears its figure, so the reference lines are added back
+            self.remove_reference_lines_from_display()
+            self.add_reference_lines_to_display()
+            self.align_reference_lines()
         errors += self.plot_histology_ref_panels(mapping=plot_key)
         messages = list(dict.fromkeys(error for error in errors if error))
         if messages:
@@ -1556,10 +1562,9 @@ class AlignmentGUIController:
 
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
-        self.get_scaled_histology()
-        self.view.trigger_menu_option('region', self.region_init)
-        self.plot_histology_panels()
-        self.plot_scale_factor_panels()
+        # Draws the histology in the chosen mapping; the reference lines are added below
+        self.view.check_menu_option('region', self.region_init)
+        self.plot_region_ref_panels(self.region_init, redraw_lines=False)
         self.show_labels = False
         self.toggle_labels()
         self.update_string()

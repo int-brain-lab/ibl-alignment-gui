@@ -217,16 +217,20 @@ def load_alignment_yaml(
     Notes
     -----
     - If no 'configurations' section exists, creates a 'default' configuration
-    - Falls back to the spike_sorting path if raw_ephys is not specified
-    - Falls back to the raw_ephys path if processed_ephys is not specified
-    - Falls back to the spike_sorting path, and then the picks path, if output is not specified
+    - Falls back to the spike_sorting path if picks is not specified
+    - Falls back to the raw_ephys path, and then the spike_sorting path, if processed_ephys is not
+      specified
+    - Never guesses raw_ephys or output: output must always be given, and raw_ephys must be given
+      when there is no spike_sorting, as its .ap.meta file is then the only probe geometry
+    - Needs at least one of spike_sorting and processed_ephys
 
     Raises
     ------
     FileNotFoundError
         If the yaml file does not exist.
     ValueError
-        If the yaml file is empty or does not contain a mapping.
+        If the yaml file is empty or does not contain a mapping, a probe is missing required
+        datasets, or the configurations do not contain the same probes.
     """
     yaml_file = Path(yaml_file)
 

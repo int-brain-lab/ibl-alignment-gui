@@ -38,7 +38,7 @@ YAML instead of being opened as one folder. Start with the YAML for the dense re
 2. Change the `path` on the first line to the folder you extracted Sample data 2 into:
 
    ```yaml
-   path: /home/user/Downloads/sample_data_2      # <- change this
+   path: /path/to/ephys_alignment_sample_data/sample_data_2      # <- change this
 
    probes:
 
@@ -64,7 +64,7 @@ YAML instead of being opened as one folder. Start with the YAML for the dense re
 4. Start the GUI with the YAML:
 
    ```console
-   alignment-gui -y /home/user/Downloads/sample_data_2/sample_data_2_dense.yaml
+   alignment-gui -y /path/to/ephys_alignment_sample_data/sample_data_2/sample_data_2_dense.yaml
    ```
 
 The data loads with the shanks side by side in a grid, each titled with its name. The title of
@@ -107,7 +107,7 @@ aligned together with the dense recording. The GUI calls each recording a config
    `configurations`, each with its own `probes`:
 
    ```yaml
-   path: /home/user/Downloads/sample_data_2      # <- change this
+   path: /path/to/ephys_alignment_sample_data/sample_data_2      # <- change this
 
    configurations:
 
@@ -155,7 +155,7 @@ aligned together with the dense recording. The GUI calls each recording a config
 4. Start the GUI with it:
 
    ```console
-   alignment-gui -y /home/user/Downloads/sample_data_2/sample_data_2_dense_sparse.yaml
+   alignment-gui -y /path/to/ephys_alignment_sample_data/sample_data_2/sample_data_2_dense_sparse.yaml
    ```
 
 A configuration dropdown appears in the top right corner, after the alignment dropdown. The GUI

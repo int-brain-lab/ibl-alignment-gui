@@ -869,7 +869,7 @@ class PlotLoader:
             scale=np.array([xscale, yscale]),
             levels=levels,
             default_levels=np.copy(levels),
-            offset=np.array([0, self.chn_min]),
+            offset=np.array([self.times[0], self.chn_min]),
             xrange=np.array([self.times[0], self.times[-1]]),
             xaxis='Time (s)',
             cmap='binary',
@@ -989,7 +989,8 @@ class PlotLoader:
             scale=np.array([xscale, yscale]),
             levels=levels,
             default_levels=np.copy(levels),
-            offset=np.array([0, self.chn_min]),
+            # The recording need not start at 0 s, so the image is placed at its first timestamp
+            offset=np.array([timestamps[0], self.chn_min]),
             cmap=cmap,
             xrange=np.array([timestamps[0], timestamps[-1]]),
             xaxis=self.data[alf_object]['xaxis'],

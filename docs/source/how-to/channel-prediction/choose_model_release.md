@@ -22,7 +22,7 @@ disk.
 
 4. Select the model's entry in `Prediction Plots` to run it.
 
-Loading a model clears its previous predictions and closes any auto-alignment result windows.
+Loading a model clears its previous predictions and closes any of its result windows.
 
 The release must be trained on the vintage of your features (see
 {ref}`howto-fix-vintage-mismatch`).

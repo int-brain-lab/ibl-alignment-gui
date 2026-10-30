@@ -38,7 +38,7 @@ YAML instead of being opened as one folder. Start with the YAML for the dense re
 2. Change the `path` on the first line to the folder you extracted Sample data 2 into:
 
    ```yaml
-   path: /home/user/Downloads/sample_data2      # <- change this
+   path: /home/user/Downloads/sample_data_2      # <- change this
 
    probes:
 
@@ -57,18 +57,18 @@ YAML instead of being opened as one folder. Start with the YAML for the dense re
        ...
    ```
 
-   Every other path in the file is relative to this one. The entries for `probe01b`, `probe01c`
-   and `probe01d` follow the same pattern.
+   Every other path in the file is relative to this one and so can be left as is. The entries for
+   `probe01b`, `probe01c` and `probe01d` follow the same pattern.
 
 3. Save the file.
 4. Start the GUI with the YAML:
 
    ```console
-   alignment-gui -y /home/user/Downloads/sample_data2/sample_data_2_dense.yaml
+   alignment-gui -y /home/user/Downloads/sample_data_2/sample_data_2_dense.yaml
    ```
 
-The data loads with the shanks side by side in a grid, each titled with its name. The titles of
-the active shank are red.
+The data loads with the shanks side by side in a grid, each titled with its name. The title of
+the active shank is red.
 
 ```{image} ../_static/tutorials/02_two_configurations/dense_grids.png
 :alt: The four shanks of the dense recording side by side in the grid layout
@@ -77,7 +77,7 @@ the active shank are red.
 
 ## 2. Switch between the grid and the tabs
 
-1. Press {kbd}`Right` and {kbd}`Left` to step through the shanks. The red titles move to show
+1. Press {kbd}`Right` and {kbd}`Left` to step through the shanks. The red title moves to show
    which shank is active.
 2. Press {kbd}`T`. The layout changes to one tab per shank, and only the active shank is shown.
 3. Press {kbd}`Right` and {kbd}`Left` again: each press moves to the next tab.
@@ -107,7 +107,7 @@ aligned together with the dense recording. The GUI calls each recording a config
    `configurations`, each with its own `probes`:
 
    ```yaml
-   path: /home/user/Downloads/sample_data2      # <- change this
+   path: /home/user/Downloads/sample_data_2      # <- change this
 
    configurations:
 
@@ -155,7 +155,7 @@ aligned together with the dense recording. The GUI calls each recording a config
 4. Start the GUI with it:
 
    ```console
-   alignment-gui -y /home/user/Downloads/sample_data2/sample_data_2_dense_sparse.yaml
+   alignment-gui -y /home/user/Downloads/sample_data_2/sample_data_2_dense_sparse.yaml
    ```
 
 A configuration dropdown appears in the top right corner, after the alignment dropdown. The GUI
@@ -165,8 +165,8 @@ opens on the first configuration in the YAML, `dense`.
 
 1. Open the configuration dropdown and choose `sparse`. The sparse recording is shown on its own,
    with the channels of each shank spread along almost 3 mm.
-2. Press {kbd}`Alt+1` until the image plot shows `Firing Rate`. On every shank the firing stops
-   at about 2000 µm: below it the probe is in the thalamus, and above it there are few units.
+2. Select `Firing Rate` from the `Image Plots` menu. On every shank the firing stops at about
+   2000 µm: this probably indicates the boundary between the thalamus and the hippocampus.
 
 ```{image} ../_static/tutorials/02_two_configurations/sparse.png
 :alt: The sparse recording of the four shanks, with the firing stopping at about 2000 µm on each
@@ -207,7 +207,7 @@ Look at the Fit figure. In the grid layout it shows the fit of every shank.
 
 The fits of the four shanks should be offset by similar amounts. The shanks are fixed to the same
 base, so they are inserted together and cannot move along the track independently of each other.
-A shank whose fit is offset very differently from the others may be matched to the wrong boundary:
+A shank whose fit is offset very differently from the others may be matched to a wrong boundary:
 check its reference lines against those of its neighbours.
 
 ## 9. See the alignment in both recordings

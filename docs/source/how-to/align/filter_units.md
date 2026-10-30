@@ -32,3 +32,4 @@ If the column a filter needs is missing, a warning is logged and every unit is s
 ## Related
 
 - {ref}`ref-input-datasets`: `clusters.metrics`
+- {ref}`howto-add-unit-filter`: add your own entry to the `Filter Plots` menu

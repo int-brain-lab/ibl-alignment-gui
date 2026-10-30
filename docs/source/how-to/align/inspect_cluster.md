@@ -19,4 +19,4 @@ a unit at a candidate landmark is real.
 
 ## Related
 
-- {ref}`ref-plugins`: Cluster Features
+- {ref}`ref-plugins`: cluster features

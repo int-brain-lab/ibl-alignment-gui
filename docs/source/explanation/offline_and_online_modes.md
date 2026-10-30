@@ -18,8 +18,8 @@ piece of data comes from and where the results go:
 | Traced trajectory | `xyz_picks.json` on disk | The insertion's trajectory in Alyx |
 | Previous alignments | `prev_alignments.json` | Stored with the insertion in Alyx |
 | Uploading | Writes JSON files to the output folder | Saves to Alyx, with a quality assessment |
-| Channel Prediction features | A features file | The ephys-atlas feature table on Alyx |
-| Extra plots and plugins | | Passive stimulus responses, receptive field maps, Ephys Features |
+| Channel prediction features | A features file | The ephys-atlas feature table on Alyx |
+| Extra plots and plugins | | Passive stimulus responses, receptive field maps, ephys features |
 
 Offline mode needs nothing beyond the base install. Online mode needs the `ibl` extra and an Alyx
 account.

@@ -1,10 +1,10 @@
 (tutorial-channel-prediction)=
 # Predicting brain regions from the electrophysiology
 
-In this tutorial you will use the Channel Prediction plugin on the probe from
-{ref}`tutorial-first-alignment`. You will compare the regions a model predicts from the
-electrophysiology with the histology, run the automatic alignment, and use what the models show
-to place your own reference lines.
+In this tutorial you will use three different channel prediction models on the probe from
+{ref}`tutorial-first-alignment`, to predict the brain region of each channel from the
+electrophysiology. You will compare their predictions with the histology and with each other, and
+use them to place your own reference lines.
 
 ```{image} ../_static/tutorials/03_prediction/result.png
 :alt: The GUI with a region prediction shown in a panel beside the ephys plots
@@ -17,10 +17,10 @@ The models are downloaded the first time you use them, which can take a few minu
 
 - Complete {ref}`tutorial-first-alignment`.
 - Install the `ephysatlas` extra (see {ref}`howto-install-extras`). It also installs `torch`,
-  which the auto-alignment model needs.
+  which the alignment model needs.
 - Find the `sample_data_1_prediction` folder in the
   [sample data](https://ibl.flatironinstitute.org/public/ephys_alignment_sample_data.zip) you
-  extracted for {ref}`tutorial-first-alignment`, next to the `sample_data1` folder. It holds:
+  extracted for {ref}`tutorial-first-alignment`, next to the `sample_data_1` folder. It holds:
 
   - `ephys_atlas_features_2026_W42.pqt`: the electrophysiology features of every channel of
     Sample data 1, computed from the raw data with
@@ -33,8 +33,8 @@ The models are downloaded the first time you use them, which can take a few minu
 2. Open the `Plugins` menu. It has a `Channel Prediction` entry, greyed out until you load a
    session with features in the next step.
 
-If it does not, the `ephysatlas` extra is not installed in the environment you started the GUI
-from.
+If you do not see `Channel Prediction` as an option, the `ephysatlas` extra is not installed in
+the environment you started the GUI from.
 
 ## 2. Load the data with its features
 
@@ -51,22 +51,22 @@ The features are given to the GUI in a session YAML, alongside the data you open
        datasets:
          # The recording, histology and alignments of Sample data 1
          spike_sorting:
-           path: sample_data1
+           path: sample_data_1
          histology:
-           path: sample_data1
+           path: sample_data_1
          output:
-           path: sample_data1
+           path: sample_data_1
          # The features the models run on
          features:
            path: sample_data_1_prediction/ephys_atlas_features_2026_W42.pqt
    ```
 
-2. Set `path` to the full path of the folder that holds `sample_data1` and
+2. Set `path` to the full path of the folder that holds `sample_data_1` and
    `sample_data_1_prediction`, and save the file.
 
-   The other paths are relative to it. The spike sorting and histology come from `sample_data1`,
+   The other paths are relative to it. The spike sorting and histology come from `sample_data_1`,
    and the trajectory and the RMS and power spectra are read from there too, because they are
-   saved beside the spike sorting. The results are written to `sample_data1` as well, so you carry
+   saved beside the spike sorting. The results are written to `sample_data_1` as well, so you carry
    on from your alignment in {ref}`tutorial-first-alignment`. Only the features come from
    `sample_data_1_prediction`.
 
@@ -75,8 +75,7 @@ The features are given to the GUI in a session YAML, alongside the data you open
 
 The data loads as before, and your alignment from {ref}`tutorial-first-alignment` is selected in
 the alignment dropdown. With the features loaded, the `Feature Plots` and `Prediction Plots` menus
-and `Plugins → Channel Prediction` are now available. Before, they were greyed out: hovering over
-one says why.
+and `Plugins → Channel Prediction` are now available.
 
 ```{image} ../_static/tutorials/03_prediction/loaded.png
 :alt: Sample data 1 loaded from sample_data_1_prediction.yaml, with the Prediction Plots menu open
@@ -101,7 +100,10 @@ These are the numbers the models work from: the same kinds of signal you looked 
 {ref}`tutorial-first-alignment`, computed for every channel. Choose any image plot to go back to
 the ephys plots.
 
-## 4. Predict the regions
+## 4. Predict the regions with the region decoders
+
+The first two models are region decoders: they predict the region of each channel directly from
+its electrophysiology features.
 
 1. Choose `original` from the alignment dropdown, so the histology shows the track before any
    alignment.
@@ -123,12 +125,12 @@ from the electrophysiology alone. Each predicted region is labelled with its acr
 ```
 
 4. Compare the prediction with the regions in the Histology figure. The model predicts at a
-   coarser level than the histology shows, so press {kbd}`Alt+M` until the histology is shown in
-   `Cosmos`, with fewer, larger regions, to compare them. Press {kbd}`Alt+M` until it is back to
-   `Allen` before you go on.
-5. Choose `XGBoost region prediction (cumulative)`. Each channel now shows the probability of
-   every region, stacked. Where one colour fills the width, the model is confident; where several
-   share it, it is unsure.
+   coarser level than the histology shows, so select `Cosmos` from the `Set Mapping` menu, or
+   press {kbd}`Alt+M` until it is selected, to show the histology with fewer, larger regions.
+   Select `Allen` again before you go on.
+5. Choose `XGBoost region prediction (cumulative)`. For each channel, it now shows the
+   probability that the channel lies in each region, stacked side by side. Where one colour fills
+   the width, the model is confident; where several share it, it is unsure.
 
 ```{image} ../_static/tutorials/03_prediction/decoder_cumulative.png
 :alt: The cumulative XGBoost region prediction, with the probabilities of the regions stacked along the probe
@@ -138,7 +140,11 @@ from the electrophysiology alone. Each predicted region is labelled with its acr
 6. Choose `ProbeTransformer region prediction`, and load it in the same way. It is a second model,
    trained on the same features. You will compare the two in step 6.
 
-## 5. Run the automatic alignment
+## 5. Predict the regions with the alignment model
+
+The third model works differently. It predicts the features expected at every point along the
+histology track, and aligns the recorded features to them. Each channel then takes the atlas
+region of the point on the track where it was placed.
 
 1. Choose `Auto-alignment` from the `Prediction Plots` menu, and click **OK** in the model's
    dialog.
@@ -158,7 +164,7 @@ The result window shows how the model matched the recording to the track:
   features
 
 3. Close the result window. Back in the main window, the prediction panel shows the atlas region
-   of each channel where the automatic alignment placed it on the track.
+   of each channel where the alignment model placed it on the track.
 
 ```{image} ../_static/tutorials/03_prediction/auto_align_prediction.png
 :alt: The Auto-alignment panel, with the atlas regions where the alignment placed each channel
@@ -179,7 +185,7 @@ results`.
 ## 6. Compare all the predictions
 
 1. Press {kbd}`Shift+P`. The ephys plots are replaced by every prediction side by side: the two
-   region decoders, each with its cumulative probabilities, and the auto-alignment with its
+   region decoders, each with its cumulative probabilities, and the alignment model with its
    confidence.
 
 ```{image} ../_static/tutorials/03_prediction/all_predictions.png
@@ -187,7 +193,7 @@ results`.
 :align: center
 ```
 
-2. Compare the models. Boundaries that the models agree on, and that the auto-alignment is
+2. Compare the models. Boundaries that the models agree on, and that the alignment model is
    confident about, are the ones to trust most.
 
 ## 7. Use the predictions in your own alignment
@@ -215,9 +221,9 @@ you can place the lines in the all predictions view.
 You have:
 
 - loaded a session and its features from a session YAML
-- predicted regions from the electrophysiology and compared them with the histology
+- predicted regions from the electrophysiology with three models, and compared them with the
+  histology
 - read the confidence of a prediction
-- run the automatic alignment
 - compared all the predictions side by side, and placed reference lines where they agree
 
 ## Next steps

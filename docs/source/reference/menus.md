@@ -22,7 +22,6 @@ through them.
 | `rms LF` | LF band RMS over time and depth | `_iblqc_ephysTimeRmsLF` |
 | `LF spectrum` | LF power by frequency and depth | `_iblqc_ephysSpectralDensityLF` |
 | `Raw ap snippet <n>`, `Raw lf snippet <n>` | Short snippets of the raw data | Raw AP or LF data |
-| One entry per passive stimulus | Responses to passive stimuli | Passive stimulus data (IBL sessions) and the `ibl` extra |
 
 Clicking a cluster in a cluster plot opens its waveform (see {ref}`ref-plugins`).
 
@@ -48,7 +47,6 @@ Drawn on the probe geometry. The channels in the Slice figure are coloured by th
 |---|---|---|
 | `rms AP`, `rms LF` | Mean RMS per channel | `_iblqc_ephysTimeRms*` |
 | `0 - 4 Hz`, `4 - 10 Hz`, `10 - 30 Hz`, `30 - 80 Hz`, `80 - 200 Hz` | LF power per channel in each band | `_iblqc_ephysSpectralDensityLF` |
-| `RF Map - on`, `RF Map - off` | Receptive field maps | Receptive field mapping data (IBL sessions) and the `ibl` extra |
 | `Ephys Atlas - <feature>` | One ephys-atlas feature per channel | The `ephysatlas` extra and a features file |
 
 ## Feature Plots
@@ -71,7 +69,7 @@ The image in the Slice figure. {kbd}`Alt+4` / {kbd}`Shift+Alt+4` cycle through t
 
 ## Prediction Plots
 
-The channel predictions of the Channel Prediction plugin, in a panel beside the ephys plots.
+The predictions of the channel prediction models, in a panel beside the ephys plots.
 {kbd}`Alt+5` / {kbd}`Shift+Alt+5` cycle through them. Only shown with the `ephysatlas` extra.
 Greyed out when the session has no ephys-atlas features.
 

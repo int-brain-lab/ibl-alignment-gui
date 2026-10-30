@@ -28,7 +28,7 @@ Internally the GUI works in metres; files use µm.
 The Allen CCF is a 3D reference brain. Its coordinates are measured from the front, top, left
 corner of the atlas volume, with axes in the order anterior–posterior, dorsal–ventral,
 medial–lateral, each positive towards posterior, ventral and right. Tools that register histology
-to the Allen atlas, such as brainreg, usually give positions in this frame.
+to the Allen atlas usually give positions in this frame.
 
 ## Bregma in the CCF
 

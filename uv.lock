@@ -1396,7 +1396,7 @@ wheels = [
 
 [[package]]
 name = "ibl-alignment-gui"
-version = "1.0.0"
+version = "0.1.0a2"
 source = { editable = "." }
 dependencies = [
     { name = "ibl-datoviz" },

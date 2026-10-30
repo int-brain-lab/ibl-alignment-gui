@@ -6,15 +6,15 @@ write your own, see {ref}`howto-extend`.
 
 | Plugin | Opened from | Available in |
 |---|---|---|
-| Cluster Features | Clicking a cluster in an image plot | All modes |
-| Range Controller | `Plugins → Range Controller` | All modes |
+| Cluster features | Clicking a cluster in an image plot | All modes |
+| Range controller | `Plugins → Range Controller` | All modes |
 | 3D features | `Plugins → 3D features` | All modes |
-| Channel Prediction | `Plugins → Channel Prediction` | All modes, with the `ephysatlas` extra and a session with features |
-| Ephys Features | `Plugins → Ephys Features` | `alignment-gui-ibl` only |
+| Channel prediction | `Plugins → Channel Prediction` | All modes, with the `ephysatlas` extra and a session with features |
+| Ephys features | `Plugins → Ephys Features` | `alignment-gui-ibl` only |
 | Upload dialog | Uploading with more than one shank | All modes |
 | QC dialog | Uploading | `alignment-gui-ibl` only |
 
-## Cluster Features
+## Cluster features
 
 Shows the autocorrelogram and template waveform of a single cluster. Click a cluster in an image
 plot that shows cluster-level data to open a window for it.
@@ -22,7 +22,7 @@ plot that shows cluster-level data to open a window for it.
 `Plugins → Cluster Features` has entries to minimise or show ({kbd}`M`) and to close
 ({kbd}`Alt+X`) all the cluster windows.
 
-## Range Controller
+## Range controller
 
 Sets the range of each plot type with a pair of sliders:
 
@@ -53,12 +53,12 @@ Shows the probe trajectory in a 3D brain.
 | **Show regions** | Show or hide the brain regions |
 | **Show picks** | Show or hide the traced trajectory points |
 
-## Channel Prediction
+## Channel prediction
 
 Predicts the brain region of each channel from its electrophysiology features, and aligns the
 probe automatically. See {ref}`ref-channel-prediction`.
 
-## Ephys Features
+## Ephys features
 
 Compares the probe with other insertions in the IBL ephys atlas. Choose a brain region from those
 along the probe, and a feature: the feature is shown along every insertion that passes through

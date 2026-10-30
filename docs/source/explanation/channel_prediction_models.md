@@ -1,7 +1,7 @@
 (explanation-channel-prediction-models)=
 # The channel prediction models
 
-The Channel Prediction plugin brings models trained in the IBL Ephys Atlas project into the GUI,
+The channel prediction models are trained in the IBL Ephys Atlas project, and run in the GUI
 through [`ibleatools`](https://github.com/int-brain-lab/ibleatools). They use the electrophysiology
 of each channel to predict where it is: the region decoders without the histology at all, and the
 alignment model by matching the recording to the traced track. This page explains what the models
@@ -17,7 +17,7 @@ signals used by eye to find landmarks, summarised as numbers for every channel.
 The features are computed with `ibleatools`, not by the GUI. A released set of feature definitions
 is called a vintage, labelled by year and week, such as `2026_W26`. A model is trained on the
 features of one vintage, and can only be run on features of that vintage: a different vintage may
-lack columns the model needs, or compute them differently. This is why the plugin checks the
+lack columns the model needs, or compute them differently. This is why the GUI checks the
 vintage of the features against the model, and refuses rather than running on mismatched features.
 
 ## Region decoders

@@ -29,7 +29,7 @@ running the region prediction models.
 :link: explanation/index
 :link-type: doc
 
-How alignment works, which landmarks to trust, coordinate systems and the prediction models.
+How alignment works, coordinate systems and the prediction models.
 :::
 
 :::{grid-item-card} Reference

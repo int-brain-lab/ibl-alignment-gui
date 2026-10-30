@@ -9,7 +9,7 @@ range.
 1. Open `Plugins → Range Controller`.
 
    ```{image} ../../_static/how_to/align/range_controller.png
-   :alt: The Range Controller window, with minimum and maximum sliders and values for the image, line and probe plots
+   :alt: The range controller window, with minimum and maximum sliders and values for the image, line and probe plots
    :align: center
    ```
 
@@ -26,4 +26,4 @@ range.
 
 ## Related
 
-- {ref}`ref-plugins`: Range Controller
+- {ref}`ref-plugins`: range controller

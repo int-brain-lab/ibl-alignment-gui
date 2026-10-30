@@ -69,10 +69,6 @@ SpikeInterface writes the files the GUI reads with `export_to_ibl_gui`.
 
    analyzer = si.load_sorting_analyzer(analyzer_folder)
 
-   # If the recording has moved since it was sorted, attach it again
-   if not analyzer.has_recording():
-       analyzer.set_temporary_recording(se.read_spikeglx(spikeglx_folder, stream_name='imec0.ap'))
-
    # The exporter needs the templates, amplitudes and quality metrics; compute any that are missing
    for extension in ['random_spikes', 'waveforms', 'templates', 'noise_levels',
                      'spike_amplitudes', 'quality_metrics']:
@@ -86,8 +82,7 @@ SpikeInterface writes the files the GUI reads with `export_to_ibl_gui`.
    ```
 
    If your recording is not from SpikeGLX, read it with the matching SpikeInterface extractor
-   instead. The AP band RMS is only exported when the analyzer still finds its own recording, not
-   one attached again with `set_temporary_recording`.
+   instead.
 
 2. Run it:
 
@@ -215,13 +210,6 @@ it, the GUI also shows snippets of the raw signal. Every key is described in
      `convert_track.py` printed
    - `Slice Plots` lists `Histology red` and `Histology green`, and with either of them chosen
      ({kbd}`Alt+4`) the Slice figure shows your histology with the track drawn on it
-
-:::{admonition} TODO
-:class: warning
-
-Screenshot of the session open in the GUI, with the histology shown in the Slice figure.
-`_static/tutorials/04_preparing_your_data/session.png`
-:::
 
 Your data is now ready to align, in the same way as in {ref}`tutorial-first-alignment`.
 

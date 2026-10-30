@@ -9,7 +9,7 @@ need an extra for:
 : Converting kilosort output, and the IBL online mode.
 
 `ephysatlas`
-: The Channel Prediction plugin. It also installs everything `ibl` does.
+: The channel prediction models. It also installs everything `ibl` does.
 
 What each extra enables is listed in full in {ref}`ref-optional-dependencies`.
 

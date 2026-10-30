@@ -64,8 +64,8 @@ Press each one a few times to see what is available. Three features stand out in
 
 ### Firing rate
 
-Press {kbd}`Alt+1` until the image plot shows `Firing Rate`. At around 1500 µm the pattern of
-firing changes: below it the firing rate is high, and above it there is a quiet stretch with
+Select `Firing Rate` from the `Image Plots` menu. At around 1500 µm the pattern of firing
+changes: below it the firing rate is high, and above it there is a quiet stretch with
 little activity.
 
 ```{image} ../_static/tutorials/01_first_alignment/bearings_firing_rate.png
@@ -75,8 +75,8 @@ little activity.
 
 ### Amplitude
 
-Press {kbd}`Alt+2` until the line plot shows `Amplitude`. It has three distinct peaks: one at
-around 1800 µm, one at around 2600 µm and one at around 3200 µm.
+Select `Amplitude` from the `Line Plots` menu. It has three distinct peaks: one at around
+1800 µm, one at around 2600 µm and one at around 3200 µm.
 
 ```{image} ../_static/tutorials/01_first_alignment/bearings_amplitude.png
 :alt: The Amplitude line plot, with the peaks at about 1800, 2600 and 3200 µm circled
@@ -85,8 +85,8 @@ around 1800 µm, one at around 2600 µm and one at around 3200 µm.
 
 ### LFP power
 
-Press {kbd}`Alt+3` until the probe plot shows `0 - 4 Hz`. Between about 1800 µm and 2400 µm there
-is an area of high LFP power.
+Select `0 - 4 Hz` from the `Probe Plots` menu. Between about 1800 µm and 2400 µm there is an
+area of high LFP power.
 
 ```{image} ../_static/tutorials/01_first_alignment/bearings_lfp.png
 :alt: The 0 - 4 Hz probe plot, with the high LFP power between about 1800 and 2400 µm circled
@@ -100,7 +100,7 @@ image plot, at around 1500 µm. The high firing rate below it is likely to be in
 this change probably marks the top of the thalamus. In the Histology figure, the thalamus is the
 salmon pink area.
 
-1. Press {kbd}`Alt+1` until the image plot shows `Firing Rate`, if it is not still showing.
+1. Select `Firing Rate` from the `Image Plots` menu, if it is not still showing.
 2. Double-click in the Ephys figure at around 1500 µm.
 
    A pair of lines appears: one in the Ephys figure and one in the Histology figure, in the same
@@ -130,15 +130,16 @@ line plot. CA1, in the hippocampus, has a layer of large pyramidal neurons that 
 high amplitude, so this peak is most likely in CA1. A layer inside a region has no boundary to
 line up with, so this time you align to roughly the centre of CA1.
 
-1. Press {kbd}`Alt+2` until the line plot shows `Amplitude`, if it is not still showing.
+1. Select `Amplitude` from the `Line Plots` menu, if it is not still showing.
 2. Double-click in the Ephys figure at around 2600 µm to add a second pair.
 3. Drag the line in the Ephys figure onto the amplitude peak.
 4. Drag the line in the Histology figure to roughly the centre of CA1.
 5. Press {kbd}`Enter` or click `Fit`.
 
 The track between your two lines is now stretched or compressed to fit both. Look at the middle
-panel of the Histology figure: the colour of the scale factor has changed between the lines. Hover
-over it to read the scale factor in the colour bar title.
+panel of the Histology figure: it shows the scale factor between the lines, both by its colour
+and as a value. A scale factor above 1 means the regions there have been stretched to fit the
+electrophysiology, and below 1 that they have been compressed.
 
 ## 5. Add a third pair
 
@@ -195,12 +196,12 @@ The three reference pairs used only two of the plots. Before going further, chec
 features against what you would expect from the regions they now line up with. If they agree, your
 reference lines are probably reasonable. If they don't, look again at the lines you placed.
 
-1. Press {kbd}`Alt+3` until the probe plot shows `0 - 4 Hz`. The area of high LFP power between
-   about 1800 µm and 2400 µm should now line up with the dentate gyrus, which is expected to have
-   high LFP power.
-2. Press {kbd}`Alt+1` until the image plot shows `Firing Rate`. The firing disappears above about
-   3600 µm, which suggests the top of the probe may be outside the brain. In the Histology figure,
-   the top of the probe has been assigned to the void, the black area outside the brain, which is
+1. Select `0 - 4 Hz` from the `Probe Plots` menu. The area of high LFP power between about
+   1800 µm and 2400 µm should now line up with the dentate gyrus, which is expected to have high
+   LFP power.
+2. Select `Firing Rate` from the `Image Plots` menu. The firing disappears above about 3600 µm,
+   which suggests the top of the probe may be outside the brain. In the Histology figure, the top
+   of the probe has been assigned to the void, the black area outside the brain, which is
    consistent with this.
 
 ```{image} ../_static/tutorials/01_first_alignment/check.png

@@ -178,7 +178,7 @@ folder.
 
 The path to a single file, given by the `features` key. When a data folder is opened instead of a
 YAML file, the one parquet file in the folder with `features` in its name is used. Optional, and
-only used by the Channel Prediction plugin (see {ref}`ref-channel-prediction`).
+only used by the channel prediction models (see {ref}`ref-channel-prediction`).
 
 `features`
 : **Format** parquet · **Rows** one per channel

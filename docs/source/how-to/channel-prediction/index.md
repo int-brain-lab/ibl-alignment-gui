@@ -1,13 +1,13 @@
 (howto-channel-prediction)=
 # Channel prediction
 
-These guides show you how to run the region prediction and auto-alignment models of the Channel
-Prediction plugin on your own data. If you haven't used the plugin before, start with the tutorial
+These guides show you how to run the channel prediction models on your own data. If you haven't
+used them before, start with the tutorial
 {ref}`tutorial-channel-prediction`. What the models do is explained in
 {ref}`explanation-channel-prediction-models`, and every menu entry is listed in
 {ref}`ref-channel-prediction`.
 
-The plugin needs the `ephysatlas` extra (see {ref}`howto-install-extras`).
+The models need the `ephysatlas` extra (see {ref}`howto-install-extras`).
 
 The guides cover three kinds of task:
 

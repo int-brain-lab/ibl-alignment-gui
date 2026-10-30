@@ -14,7 +14,7 @@ recommend following them in order, as each one builds on the one before.
   same probe for extra landmarks.
 
 {doc}`03_channel_prediction`
-: Use the Channel Prediction plugin to predict brain regions from the electrophysiology, and to
+: Use three channel prediction models to predict brain regions from the electrophysiology, and to
   suggest where your reference lines should go.
 
 {doc}`04_preparing_your_data`

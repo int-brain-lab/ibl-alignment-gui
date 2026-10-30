@@ -2,7 +2,7 @@
 # How to install the optional extras
 
 This guide shows you how to add the packages needed for converting kilosort output, the IBL online
-mode or the Channel Prediction plugin.
+mode or the channel prediction models.
 
 ## Prerequisites
 

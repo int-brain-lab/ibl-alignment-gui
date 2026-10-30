@@ -33,10 +33,3 @@ switch to Allen to refine the alignment within a structure, for example across c
 Fine Allen regions can be thinner than the spacing between channels, or than the uncertainty in
 the traced track. Matching a feature in the electrophysiology to such a region is less reliable
 than matching it to a large boundary.
-
-## Predicted regions
-
-When the Channel Prediction plugin is used, its predicted regions are added to the same menu and
-can be switched against the histology with the same shortcut. They are predictions from the
-electrophysiology, not from the histology, and are explained in
-{ref}`explanation-channel-prediction-models`.

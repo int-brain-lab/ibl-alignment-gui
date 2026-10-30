@@ -1,7 +1,7 @@
 (ref-channel-prediction)=
-# Channel Prediction plugin
+# Channel prediction plugin
 
-This page lists the models, menu entries and feature files of the Channel Prediction plugin.
+This page lists the models, menu entries and feature files of the channel prediction plugin.
 Requires the `ephysatlas` extra (see {ref}`ref-optional-dependencies`). For how to use it, see
 {ref}`howto-channel-prediction`.
 

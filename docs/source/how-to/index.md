@@ -26,7 +26,7 @@ The guides are grouped by what you're trying to do:
 : Pick up earlier work, recover a lost alignment, and adjust what the plots show while you align.
 
 {doc}`channel-prediction/index`
-: Run the region prediction and auto-alignment models on your own recordings.
+: Run the channel prediction models on your own recordings.
 
 {doc}`ibl-online/index`
 : Align IBL probe insertions directly from the Alyx database.

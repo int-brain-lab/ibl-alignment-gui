@@ -79,9 +79,11 @@ dialog, and opens a result window per shank showing:
 - stripes along the track: the atlas regions, then the confidence and the recorded features where
   the probe was aligned, next to the features the model predicts along the whole track
 
-`Auto-alignment` shows the atlas regions along the track at the probe depths the alignment found.
+`Auto-alignment` shows the atlas region of each channel at the position on the histology track
+where the alignment placed it, so its boundaries follow the alignment's stretching and compression.
 `Auto-alignment (confidence)` shows the alignment confidence along the probe: green for high, red
-for low, and grey beyond the probe and for channels that could not be aligned.
+for low, and grey for channels that could not be aligned. Both cover the probe only, from its tip
+to its top channel.
 
 Each shank is aligned once. Switching between the two entries does not align again or reopen the
 windows. Loading a new model closes the windows and starts again; loading a new session closes

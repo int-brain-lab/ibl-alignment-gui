@@ -9,8 +9,9 @@ recommend following them in order, as each one builds on the one before.
 : Align a single-shank probe from the sample data, from your first reference line to uploading
   the result.
 
-{doc}`02_multi_shank`
-: Align a probe with four shanks from the sample data, using each shank to check the others.
+{doc}`02_two_configurations`
+: Align a four-shank probe, using the shanks to check each other and a second recording of the
+  same probe for extra landmarks.
 
 {doc}`03_channel_prediction`
 : Use the Channel Prediction plugin to predict brain regions from the electrophysiology, and to
@@ -28,7 +29,7 @@ get you there faster.
 :maxdepth: 1
 
 01_first_alignment
-02_multi_shank
+02_two_configurations
 03_channel_prediction
 04_preparing_your_data
 ```

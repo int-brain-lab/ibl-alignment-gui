@@ -21,9 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ephysatlas.alignment` in ibleatools). The released model is loaded with
   `ephysatlas.load_pretrained` from the Hugging Face Hub or a local release
   (`Load alignment model (Hugging Face)…`). Two Prediction Plots entries show the result:
-  `Auto-alignment` (the atlas regions along the track, at the aligned probe depths) and
-  `Auto-alignment (confidence)` (green high, red low). Each shank is aligned once for both, so
-  switching between them does not re-align.
+  `Auto-alignment` (the atlas region of each channel where the alignment placed it on the track)
+  and `Auto-alignment (confidence)` (green high, red low), both along the probe. Each shank is
+  aligned once for both, so switching between them does not re-align.
 - The auto-alignment result window shows the histology track, the planned trajectory and the
   inferred alignment on two slices, the cost matrix with the alignment path, and the recorded vs
   predicted features along the track. It opens once when a shank is aligned;
@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `Feature Plots` and `Prediction Plots` menus and `Plugins -> Channel Prediction` are only
   shown with the `ephysatlas` extra, and are greyed out when the session has no ephys-atlas
   features. Hovering over a greyed-out menu says how to provide a features file.
+- The `Auto-alignment` regions view takes each channel's region at the position the alignment
+  placed it (`AlignmentResult.channel_xyz`), instead of reading the probe depth of every track
+  sample off a straight line fitted through the alignment. Its boundaries now follow the
+  alignment's stretching and compression; the view and the confidence view cover the probe only.
 - The model predictions are shown in the Ephys figure (Prediction Plots) instead of the reference
   histology panel: they are placed by depth along the probe, like the ephys plots. The Region
   Plots menu is renamed `Set Mapping` (`Alt+M` / `Shift+Alt+M`), moves after Prediction Plots,

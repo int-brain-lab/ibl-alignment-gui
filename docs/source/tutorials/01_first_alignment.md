@@ -259,5 +259,6 @@ You have:
 
 ## Next steps
 
-- {ref}`tutorial-multi-shank`: align a probe with four shanks
+- {ref}`tutorial-two-configurations`: align a four-shank probe, with the help of a second
+  recording
 - {ref}`explanation-how-alignment-works`: what the fit does with your reference lines

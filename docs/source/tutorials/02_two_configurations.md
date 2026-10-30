@@ -102,8 +102,7 @@ At the end of the experiment, a short recording of about 5 minutes was also made
 channel map, spanning the whole length of each shank. It is the same probe in the same tissue, so it can be
 aligned together with the dense recording. The GUI calls each recording a configuration.
 
-1. Close the GUI.
-2. Open `sample_data_2_dense_sparse.yaml` in a text editor. It lists both recordings under
+1. Open `sample_data_2_dense_sparse.yaml` in a text editor. It lists both recordings under
    `configurations`, each with its own `probes`:
 
    ```yaml
@@ -151,15 +150,12 @@ aligned together with the dense recording. The GUI calls each recording a config
    same shank. Both configurations use the same traced tracks, in `picks`, since the probe did not
    move. Each has its own `output` folder, so the results of one do not overwrite the other.
 
-3. Change the `path` and save the file.
-4. Start the GUI with it:
+2. Change the `path` and save the file.
+3. In the GUI, click `...`, choose **Open session YAML…**, and choose
+   `sample_data_2_dense_sparse.yaml`.
 
-   ```console
-   alignment-gui -y /path/to/ephys_alignment_sample_data/sample_data_2/sample_data_2_dense_sparse.yaml
-   ```
-
-A configuration dropdown appears in the top right corner, after the alignment dropdown. The GUI
-opens on the first configuration in the YAML, `dense`.
+The data loads, and a configuration dropdown appears in the top right corner, after the alignment
+dropdown. It starts on the first configuration in the YAML, `dense`.
 
 ## 5. Look at the sparse recording
 

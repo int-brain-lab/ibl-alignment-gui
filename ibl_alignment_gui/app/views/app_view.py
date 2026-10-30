@@ -20,15 +20,12 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     ----------
     offline: bool
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
-    config: bool
-        Whether multiple configs are to be used
     allen: bool
         Whether to run the Allen/Code Ocean (anatomical) workflow, which adds a DocDB checkbox
     """
 
-    def __init__(self, offline: bool = False, config: bool = False, allen: bool = False):
+    def __init__(self, offline: bool = False, allen: bool = False):
         super().__init__()
-        self.config = config
         self.allen = allen
 
         self.resize(1600, 800)
@@ -38,7 +35,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         # Create custom widgets that will be added to the main window
         self.button_widgets = custom_widgets.ButtonWidget(parent=self)
         self.selection_widgets = custom_widgets.SelectionWidget(
-            offline=offline, config=self.config, allen=self.allen, parent=self
+            offline=offline, allen=self.allen, parent=self
         )
         self.menu_widgets = custom_widgets.MenuWidget(self)
         self.setMenuBar(self.menu_widgets)
@@ -435,6 +432,27 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     # --------------------------------------------------------------------------------------------
     # Selection widget
     # --------------------------------------------------------------------------------------------
+    def show_config_dropdown(self, configs: list[str] | None) -> None:
+        """
+        Offer the configurations of the loaded session in the configuration dropdown.
+
+        Parameters
+        ----------
+        configs: list of str or None
+            The configurations to offer, or None to hide the dropdown when the session has only
+            one configuration
+        """
+        combobox = self.selection_widgets.dropdowns['config']['combobox']
+        if configs:
+            self.populate_selection_dropdown('config', configs)
+        else:
+            self.clear_selection_dropdown('config')
+        combobox.setVisible(bool(configs))
+        # The menu bar sizes its corner widget only when it is set, so set it again for the
+        # selection widgets to make room for the dropdown rather than squeeze the others
+        self.selection_widgets.adjustSize()
+        self.menu_widgets.setCornerWidget(self.selection_widgets, corner=QtCore.Qt.TopRightCorner)
+
     def set_selection_dropdown(self, name: str, idx: int) -> None:
         """
         Set the dropdown to a given index.

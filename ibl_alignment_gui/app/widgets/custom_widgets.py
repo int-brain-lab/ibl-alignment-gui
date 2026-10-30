@@ -806,9 +806,6 @@ class SelectionWidget(QtWidgets.QWidget):
     ----------
     offline: bool
         Whether to run in offline mode (local file system) or online mode (connection to Alyx)
-    config: bool
-        Whether a config dropdown should be added to allow selection of different probe
-        configurations
     parent: QtWidgets.QMainWindow
         The parent window
 
@@ -816,8 +813,6 @@ class SelectionWidget(QtWidgets.QWidget):
     ----------
     offline: bool
         Offline or online mode
-    config: bool
-        Whether a config dropdown is added
     dropdowns: dict
         A dictionary containing the added dropdowns as Bunch objects.
         Each Bunch has keys 'list' (list of options), 'combobox' (the combobox widget),
@@ -833,14 +828,12 @@ class SelectionWidget(QtWidgets.QWidget):
     def __init__(
         self,
         offline: bool = False,
-        config: bool = False,
         allen: bool = False,
         parent: QtWidgets.QMainWindow | None = None,
     ):
         super().__init__(parent)
 
         self.offline: bool = offline
-        self.config: bool = config
         self.allen: bool = allen
         self.dropdowns: dict[str, Bunch] = defaultdict(Bunch)
         self.buttons: dict[str, Bunch] = defaultdict(Bunch)
@@ -923,8 +916,6 @@ class SelectionWidget(QtWidgets.QWidget):
             layout.addWidget(self.dropdowns['shank']['combobox'])
             layout.addWidget(self.dropdowns['align']['combobox'])
             layout.addWidget(self.buttons['data']['button'])
-            if self.config:
-                layout.addWidget(self.dropdowns['config']['combobox'])
         else:
             layout.addWidget(self.buttons['folder']['line'])
             layout.addWidget(self.buttons['folder']['button'])
@@ -933,8 +924,9 @@ class SelectionWidget(QtWidgets.QWidget):
             if self.allen:
                 layout.addWidget(self.docdb_checkbox)
             layout.addWidget(self.buttons['data']['button'])
-            if self.config:
-                layout.addWidget(self.dropdowns['config']['combobox'])
+        # Shown only while a session with two configurations is loaded
+        layout.addWidget(self.dropdowns['config']['combobox'])
+        self.dropdowns['config']['combobox'].setVisible(False)
 
         self.setLayout(layout)
 

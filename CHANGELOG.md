@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0a2] - 2026-10-30
 
 ### Added
+- After each fit, the depths of the reference line pairs along the probe and along the track, and
+  the offset between them, are printed in the terminal
+  ([#17](https://github.com/int-brain-lab/ibl-alignment-gui/issues/17)).
 - Channel prediction models in a new `Prediction Plots` menu (`Alt+5`), shown in a panel beside
   the ephys plots: two region decoders (XGBoost and ProbeTransformer) and an alignment model that
   aligns the recording to the histology track, with a result window and a confidence view. They
@@ -26,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `spike_sorting`.
 
 ### Fixed
+- The RMS and `Firing Rate` image plots are drawn from the recording's first timestamp rather
+  than from 0 s, so they no longer appear blank when the recording does not start at 0 s
+  ([#15](https://github.com/int-brain-lab/ibl-alignment-gui/issues/15)).
+- The configuration dropdown is offered for every session with two configurations, not only
+  when the GUI is started with one: a two-configuration YAML opened from `...` now shows it,
+  and a single-configuration session hides it.
 - A session YAML with two `configurations` failed to load (`KeyError` on its first probe); both
   configurations and `both` are now offered in the configuration dropdown.
 - A session without spike sorting now opens, with the probe geometry read from the `.ap.meta` file

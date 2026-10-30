@@ -154,9 +154,7 @@ class AlignmentGUIController:
 
         self.model = self._build_model()
 
-        self.view: AlignmentGUIView = AlignmentGUIView(
-            offline=self.offline, config=len(self.model.configs) > 1, allen=self.allen
-        )
+        self.view: AlignmentGUIView = AlignmentGUIView(offline=self.offline, allen=self.allen)
 
         if not offline:
             self.view.populate_selection_dropdown('subject', self.model.get_subjects())
@@ -1548,9 +1546,10 @@ class AlignmentGUIController:
         self.model.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
-        # If multiple configs add the config options
-        if self.view.config:
-            self.view.populate_selection_dropdown('config', self.model.possible_configs)
+        # Offer the configurations when the session has more than one, whichever way it was opened
+        self.view.show_config_dropdown(
+            self.model.possible_configs if len(self.model.configs) > 1 else None
+        )
         # Load in the shank panels and configure figures for initial config
         self.on_config_selected(0, init=True)
         # Execute any plugins linked to the current method

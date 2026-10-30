@@ -746,7 +746,7 @@ class TestGeometryLoaderOne(unittest.TestCase):
 
         self.loader = GeometryLoaderOne(self.insertion, self.mock_one)
 
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.read_meta_data')
+    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.read_meta_data')
     def test_load_meta_data(self, mock_meta):
         """Test the load_meta_data method"""
         mock_meta.return_value = self.mock_data
@@ -756,7 +756,7 @@ class TestGeometryLoaderOne(unittest.TestCase):
                 '_spikeglx.ap.meta'
             )
             data = self.loader.load_meta_data()
-            self.assertTrue(data, self.mock_data)
+            self.assertIs(data, self.mock_data)
 
         with self.subTest('Meta data does not exist'):
             self.mock_one.load_dataset.side_effect = ALFObjectNotFound
@@ -769,7 +769,7 @@ class TestGeometryLoaderOne(unittest.TestCase):
             self.mock_one.load_object.return_value = self.mock_data
             data = self.loader.load_channels()
             self.assertTrue(data.pop('exists'))
-            self.assertTrue(data, self.mock_data)
+            self.assertIs(data, self.mock_data)
 
         with self.subTest('Channels data does not exist'):
             self.mock_one.load_object.side_effect = ALFObjectNotFound
@@ -829,7 +829,7 @@ class TestGeometryLoaderLocal(unittest.TestCase):
             mock_data.return_value = self.mock_data
             data = self.loader.load_channels()
             self.assertTrue(data.pop('exists'))
-            self.assertTrue(data, self.mock_data)
+            self.assertIs(data, self.mock_data)
 
         with self.subTest('Channels data does not exist'):
             mock_data.side_effect = ALFObjectNotFound

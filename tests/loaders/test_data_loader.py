@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
+import one.alf.io as alfio
 from ibl_alignment_gui.loaders import data_loader
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoader,
@@ -200,7 +201,7 @@ class TestDataLoader(unittest.TestCase):
             data = loader.get_rms_data(band)
             self.assertIn('rms', data)
             self.assertIn('timestamps', data)
-            self.assertTrue(data['xaxis'], xlabel)
+            self.assertEqual(data['xaxis'], xlabel)
 
         with self.subTest('AP RMS data with rms attribute'):
             mock_data = Bunch({'rms': np.ones((5, 2)), 'timestamps': np.arange(5), 'exists': True})
@@ -380,21 +381,21 @@ class TestDataLoaderOne(unittest.TestCase):
                 'alf/probe00/pykilosort',
             ]
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00/iblsorter'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00/iblsorter'))
 
         with self.subTest('Spike sorting collection other from one'):
             self.mock_one.list_collections.return_value = ['alf/probe00/test_sorter']
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00'))
 
         with self.subTest('Spike sorting collection specified'):
             loader.spike_collection = 'pykilosort'
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00/pykilosort'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00/pykilosort'))
 
             loader.spike_collection = ''
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00'))
 
     def test_loaders(self):
         """Test the load methods"""
@@ -405,19 +406,19 @@ class TestDataLoaderOne(unittest.TestCase):
 
         data = loader.load_ephys_data('ephysTimeRmsAP')
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data)
 
         data = loader.load_passive_data('passiveRFM')
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data)
 
         data = loader.load_raw_passive_data('RFMapStim')
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data)
 
         data = loader.load_spikes_data('spikes', attributes=['vals1', 'vals2'])
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data)
 
 
 class TestDataLoaderLocal(unittest.TestCase):
@@ -452,19 +453,19 @@ class TestDataLoaderLocal(unittest.TestCase):
 
         data = loader.load_ephys_data('ephysTimeRmsAP')
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data.return_value)
 
         data = loader.load_passive_data('passiveRFM')
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data.return_value)
 
         data = loader.load_raw_passive_data('RFMapStim')
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data.return_value)
 
         data = loader.load_spikes_data('spikes', attributes=['vals1', 'vals2'])
         self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertIs(data, mock_data.return_value)
 
 
 class TestLoadersWithoutDatasets(unittest.TestCase):
@@ -522,7 +523,7 @@ class TestSpikeGLXLoader(unittest.TestCase):
             loader = self._mock_loaders(Bunch(adc=np.ones(10)))
             data = loader.get_meta_data()
             self.assertTrue(data.pop('exists'))
-            self.assertTrue(data, mock_geom.return_value)
+            np.testing.assert_equal(dict(data), dict(mock_geom.return_value))
 
         with self.subTest('Meta data does not exist'):
             loader = self._mock_loaders(None)
@@ -584,7 +585,7 @@ class TestSpikeGLXLoader(unittest.TestCase):
             self.assertTrue(data.pop('exists'))
             for t in mock_times.return_value:
                 np.testing.assert_array_equal(data['images'][t], mock_snippet.return_value[0])
-            self.assertTrue(data['fs'], 30000)
+            self.assertEqual(data['fs'], 30000)
             # Check channel quality metrics
             self.assertIn('dead_channels', data)
             self.assertIn('noisy_channels_coherence', data)
@@ -632,7 +633,7 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
                 '_spikeglx.ap.meta'
             )
             data = self.loader.load_meta_data()
-            self.assertTrue(data, mock_meta.return_value)
+            self.assertIs(data, mock_meta.return_value)
 
         with self.subTest('Meta data does not exist'):
             self.mock_one.load_dataset.side_effect = ALFObjectNotFound
@@ -792,3 +793,213 @@ class TestFeatureLoaderOneTables(unittest.TestCase):
             self.assertRaises(ConnectionError),
         ):
             self.read()
+
+
+def _write_session(root: Path) -> DatasetPaths:
+    """Write a small ALF session to disk and return its dataset paths.
+
+    Four channels, three clusters on channels 0, 2 and 1, and six spikes, two per cluster.
+    Cluster 2 fires below the minimum rate of DataLoader.filter_spikes_by_fr (50 per hour).
+    """
+    paths = DatasetPaths(
+        spike_sorting=root.joinpath('alf', 'probe00'),
+        processed_ephys=root.joinpath('raw_ephys_data', 'probe00'),
+        task=root.joinpath('alf', 'task'),
+        raw_task=root.joinpath('raw_passive_data'),
+    )
+    for folder in (paths.spike_sorting, paths.processed_ephys, paths.task, paths.raw_task):
+        folder.mkdir(parents=True)
+
+    alfio.save_object_npy(
+        paths.spike_sorting,
+        {
+            'clusters': np.array([0, 1, 2, 0, 1, 2], dtype=np.int32),
+            'times': np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
+            'depths': np.array([10, 20, 30, 40, 50, 60], dtype=np.float32),
+            'amps': np.arange(1, 7, dtype=np.float32) * 1e-6,
+        },
+        'spikes',
+    )
+    alfio.save_object_npy(
+        paths.spike_sorting,
+        {
+            'channels': np.array([0, 2, 1]),
+            'peakToTrough': np.array([0.1, 0.2, 0.3]),
+            'waveforms': np.arange(3 * 5 * 4, dtype=np.float32).reshape(3, 5, 4),
+        },
+        'clusters',
+    )
+    pd.DataFrame({'firing_rate': [1.0, 1.0, 0.001], 'label': [1.0, 0.0, 1.0]}).to_parquet(
+        paths.spike_sorting.joinpath('clusters.metrics.pqt')
+    )
+    alfio.save_object_npy(
+        paths.spike_sorting,
+        {
+            'rawInd': np.arange(4),
+            'localCoordinates': np.c_[np.zeros(4), np.arange(4) * 20.0],
+        },
+        'channels',
+    )
+
+    alfio.save_object_npy(
+        paths.processed_ephys,
+        {'rms': np.arange(12.0).reshape(3, 4), 'timestamps': np.array([1.5, 4.5, 7.5])},
+        'ephysTimeRmsAP',
+        namespace='iblqc',
+    )
+    # The LF RMS uses the older attribute name and has no timestamps
+    alfio.save_object_npy(
+        paths.processed_ephys,
+        {'amps': np.arange(12.0, 24.0).reshape(3, 4)},
+        'ephysTimeRmsLF',
+        namespace='iblqc',
+    )
+    alfio.save_object_npy(
+        paths.processed_ephys,
+        {'power': np.arange(20.0).reshape(5, 4), 'freqs': np.arange(5.0)},
+        'ephysSpectralDensityLF',
+        namespace='iblqc',
+    )
+
+    alfio.save_object_npy(paths.task, {'times': np.array([0.0, 1.0])}, 'passiveRFM')
+    alfio.save_object_npy(paths.task, {'valveOn': np.array([2.0, 3.0])}, 'passiveStims')
+    # Real sessions store these as a .table.csv, but ONE loads tables with a pandas call that
+    # now warns, and warnings are errors in the tests
+    alfio.save_object_npy(
+        paths.task,
+        {
+            'start': np.array([1.0, 2.0, 3.0]),
+            'position': np.array([35, -35, 35]),
+            'contrast': np.array([1.0, 1.0, 0.0]),
+        },
+        'passiveGabor',
+    )
+    np.arange(15 * 15 * 2, dtype=np.uint8).tofile(
+        paths.raw_task.joinpath('_iblrig_RFMapStim.raw.bin')
+    )
+    return paths
+
+
+class TestGetData(unittest.TestCase):
+    """The data get_data returns for a session on disk, read locally or through ONE.
+
+    This is what the plots receive; a refactor of the loaders must keep it.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.paths = _write_session(self.root)
+        self.shank_sites = Bunch(spikes_ind=np.array([0, 1]), raw_ind=np.array([0, 1]))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _expected(self):
+        """Return the get_data result for the shank on channels 0 and 1"""
+        # Spikes of cluster 1 (channel 2) are off the shank; no cluster is rate filtered
+        keep = np.array([0, 2, 3, 5])
+        frames = np.arange(15 * 15 * 2, dtype=np.uint8)
+        return {
+            'spikes': Bunch(
+                clusters=np.array([0, 1, 2, 0, 1, 2], dtype=np.int32)[keep],
+                times=np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])[keep],
+                depths=np.array([10, 20, 30, 40, 50, 60], dtype=np.float32)[keep],
+                amps=(np.arange(1, 7, dtype=np.float32) * 1e-6)[keep],
+                exists=True,
+            ),
+            'clusters': Bunch(
+                channels=np.array([0, 2, 1]),
+                peakToTrough=np.array([0.1, 0.2, 0.3]),
+                waveforms=np.arange(3 * 5 * 4, dtype=np.float32).reshape(3, 5, 4),
+                metrics=pd.DataFrame({'firing_rate': [1.0, 1.0, 0.001], 'label': [1.0, 0.0, 1.0]}),
+                exists=True,
+            ),
+            'channels': Bunch(
+                rawInd=np.arange(4),
+                localCoordinates=np.c_[np.zeros(4), np.arange(4) * 20.0],
+                exists=True,
+            ),
+            'rms_AP': Bunch(
+                rms=np.arange(12.0).reshape(3, 4)[:, [0, 1]],
+                timestamps=np.array([1.5, 4.5, 7.5]),
+                xaxis='Time (s)',
+                exists=True,
+            ),
+            # Without timestamps the amps are renamed and the x axis is in samples
+            'rms_LF': Bunch(
+                rms=np.arange(12.0, 24.0).reshape(3, 4)[:, [0, 1]],
+                timestamps=np.array([0, 3]),
+                xaxis='Time samples',
+                exists=True,
+            ),
+            'psd_LF': Bunch(
+                power=np.arange(20.0).reshape(5, 4)[:, [0, 1]],
+                freqs=np.arange(5.0),
+                exists=True,
+            ),
+            'rf_map': Bunch(
+                times=np.array([0.0, 1.0]),
+                frames=np.transpose(np.reshape(frames, [15, 15, -1], order='F'), [2, 1, 0]),
+                exists=True,
+            ),
+            'pass_stim': Bunch(valveOn=np.array([2.0, 3.0]), exists=True),
+            'gabor': Bunch(leftGabor=np.array([1.0]), rightGabor=np.array([2.0]), exists=True),
+        }
+
+    def assert_data_equal(self, actual, expected):
+        """Assert both hold the same objects, keys, values and dtypes"""
+        self.assertEqual(set(actual.keys()), set(expected.keys()))
+        for name, obj in expected.items():
+            self.assertEqual(set(actual[name].keys()), set(obj.keys()), name)
+            for key, value in obj.items():
+                with self.subTest(name=name, key=key):
+                    if isinstance(value, pd.DataFrame):
+                        pd.testing.assert_frame_equal(actual[name][key], value)
+                    elif isinstance(value, np.ndarray):
+                        np.testing.assert_array_equal(actual[name][key], value)
+                        self.assertEqual(actual[name][key].dtype, value.dtype)
+                    else:
+                        self.assertEqual(actual[name][key], value)
+
+    def _load_object(self, eid, obj, collection=None, attribute=None, **kwargs):
+        """Serve an object from the session on disk, as ONE would"""
+        folders = {
+            'alf/probe00': self.paths.spike_sorting,
+            'raw_ephys_data/probe00': self.paths.processed_ephys,
+        }
+        if collection is not None:
+            folder = folders[Path(collection).as_posix()]
+        elif obj == 'RFMapStim':
+            folder = self.paths.raw_task
+        else:
+            folder = self.paths.task
+        # ONE ignores attribute=None, while alfio would look for an attribute called None
+        kwargs = {'attribute': attribute} if attribute is not None else {}
+        return alfio.load_object(folder, obj, **kwargs)
+
+    def test_local(self):
+        """DataLoaderLocal returns the session's data for the shank"""
+        data = DataLoaderLocal(self.paths).get_data(self.shank_sites)
+        self.assert_data_equal(data, self._expected())
+
+    def test_one(self):
+        """DataLoaderOne returns the same data as DataLoaderLocal"""
+        # DataLoaderOne sets filter=True before DataLoader.__init__ resets it to False, so ONE
+        # sessions are not rate filtered either
+        one = MagicMock()
+        one.load_object.side_effect = self._load_object
+        insertion = {'id': uuid.uuid4(), 'session': uuid.uuid4(), 'name': 'probe00'}
+        loader = DataLoaderOne(insertion, one, session_path=self.root, spike_collection='')
+        self.assert_data_equal(loader.get_data(self.shank_sites), self._expected())
+
+    def test_missing_datasets(self):
+        """Without QC or passive datasets those objects are missing and the rest still loads"""
+        empty = self.root.joinpath('empty')
+        empty.mkdir()
+        paths = DatasetPaths(spike_sorting=self.paths.spike_sorting, processed_ephys=empty)
+        with self.assertLogs('ibl_alignment_gui.loaders.data_loader', level='WARNING'):
+            data = DataLoaderLocal(paths).get_data(self.shank_sites)
+        self.assertTrue(data['spikes']['exists'])
+        for key in ('rms_AP', 'rms_LF', 'psd_LF', 'rf_map', 'pass_stim', 'gabor'):
+            self.assertEqual(data[key], Bunch(exists=False), key)

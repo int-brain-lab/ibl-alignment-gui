@@ -114,6 +114,11 @@ outermost reference lines are scaled by the linear fit. When it is unticked they
 
 With more than one shank in the grid layout, the Fit figure shows the fit of every shank.
 
+After each fit, and after moving through the fits with `Previous` and `Next`, the coordinates of
+the reference line pairs are printed in the terminal, in µm: their depth along the probe (the
+original coordinates), along the track (the new coordinates), and the offset between them. These
+are the points of the Fit figure, more precisely than the figure can show.
+
 ## Buttons
 
 Fit

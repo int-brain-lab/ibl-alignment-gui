@@ -48,6 +48,37 @@ NO_SPIKE_SORTING_HINT = (
 )
 
 
+def format_fit(shank: str, feature: np.ndarray, track: np.ndarray) -> str:
+    """
+    Describe the reference line pairs of a fit, as plotted in the Fit figure.
+
+    Parameters
+    ----------
+    shank: str
+        The name of the shank
+    feature: np.ndarray
+        The fit's positions along the probe, in m, padded with a point at each end
+    track: np.ndarray
+        The matching positions along the histology track, in m, padded in the same way
+
+    Returns
+    -------
+    str
+        A table of the depth of each reference line pair along the probe (the original
+        coordinates) and along the track (the new coordinates), and the offset between them, in
+        µm.
+    """
+    # The first and last points pad the fit beyond the outermost reference lines
+    original, new = np.asarray(feature)[1:-1] * 1e6, np.asarray(track)[1:-1] * 1e6
+    if original.size == 0:
+        return f'{shank}: no reference lines'
+    # The probe and track depths are the Fit figure's original and new coordinates
+    rows = [f'{"probe (original)":>18}{"track (new)":>14}{"offset":>11}']
+    rows += [f'{o:18.2f}{n:14.2f}{n - o:+11.2f}' for o, n in zip(original, new, strict=True)]
+    pairs = 'reference line pair' if original.size == 1 else 'reference line pairs'
+    return f'{shank}: {original.size} {pairs} (um)\n' + '\n'.join(rows)
+
+
 class AlignmentGUIController:
     """
     The main controller class for the alignment GUI application.
@@ -1754,6 +1785,7 @@ class AlignmentGUIController:
         Called when the fit button or Enter is pressed.
         """
         self.apply_fit(self.scale_hist_data, shanks=[self.model.selected_shank])
+        self.log_fit()
 
     def next_button_pressed(self) -> None:
         """
@@ -1764,6 +1796,7 @@ class AlignmentGUIController:
         """
         if self.model.next_idx():
             self.update_plots(shanks=[self.model.selected_shank])
+            self.log_fit()
 
     def prev_button_pressed(self) -> None:
         """
@@ -1773,6 +1806,23 @@ class AlignmentGUIController:
         """
         if self.model.prev_idx():
             self.update_plots(shanks=[self.model.selected_shank])
+            self.log_fit()
+
+    def log_fit(self) -> None:
+        """
+        Log the reference line pairs of the selected shank's fit, with the offset between them.
+
+        Gives the coordinates plotted in the Fit figure more precisely than the figure can show.
+        The configurations of a shank share one alignment, so it is logged once.
+        """
+        shank = self.model.selected_shank
+        model = self.shank_items[shank][self.model.default_config].model
+        logger.info(
+            'Index %d of %d, %s',
+            self.model.current_idx,
+            self.model.total_idx,
+            format_fit(shank, model.feature, model.track),
+        )
 
     def reset_button_pressed(self) -> None:
         """

@@ -806,9 +806,6 @@ class SelectionWidget(QtWidgets.QWidget):
     ----------
     offline: bool
         Whether to run in offline mode (local file system) or online mode (connection to Alyx)
-    config: bool
-        Whether a config dropdown should be added to allow selection of different probe
-        configurations
     parent: QtWidgets.QMainWindow
         The parent window
 
@@ -816,8 +813,6 @@ class SelectionWidget(QtWidgets.QWidget):
     ----------
     offline: bool
         Offline or online mode
-    config: bool
-        Whether a config dropdown is added
     dropdowns: dict
         A dictionary containing the added dropdowns as Bunch objects.
         Each Bunch has keys 'list' (list of options), 'combobox' (the combobox widget),
@@ -833,14 +828,12 @@ class SelectionWidget(QtWidgets.QWidget):
     def __init__(
         self,
         offline: bool = False,
-        config: bool = False,
         allen: bool = False,
         parent: QtWidgets.QMainWindow | None = None,
     ):
         super().__init__(parent)
 
         self.offline: bool = offline
-        self.config: bool = config
         self.allen: bool = allen
         self.dropdowns: dict[str, Bunch] = defaultdict(Bunch)
         self.buttons: dict[str, Bunch] = defaultdict(Bunch)
@@ -923,8 +916,6 @@ class SelectionWidget(QtWidgets.QWidget):
             layout.addWidget(self.dropdowns['shank']['combobox'])
             layout.addWidget(self.dropdowns['align']['combobox'])
             layout.addWidget(self.buttons['data']['button'])
-            if self.config:
-                layout.addWidget(self.dropdowns['config']['combobox'])
         else:
             layout.addWidget(self.buttons['folder']['line'])
             layout.addWidget(self.buttons['folder']['button'])
@@ -933,8 +924,9 @@ class SelectionWidget(QtWidgets.QWidget):
             if self.allen:
                 layout.addWidget(self.docdb_checkbox)
             layout.addWidget(self.buttons['data']['button'])
-            if self.config:
-                layout.addWidget(self.dropdowns['config']['combobox'])
+        # Shown only while a session with two configurations is loaded
+        layout.addWidget(self.dropdowns['config']['combobox'])
+        self.dropdowns['config']['combobox'].setVisible(False)
 
         self.setLayout(layout)
 
@@ -1225,12 +1217,48 @@ class MenuWidget(QtWidgets.QMenuBar):
 
         self.create_tabs()
 
+    def event(self, event: QtCore.QEvent) -> bool:
+        """
+        Show why a menu is greyed out when the mouse rests on it.
+
+        Qt shows no tooltips in a menu bar, so the tooltip of a disabled menu is shown here.
+
+        Parameters
+        ----------
+        event: QtCore.QEvent
+            The event
+
+        Returns
+        -------
+        bool
+            Whether the event was handled
+        """
+        if event.type() == QtCore.QEvent.ToolTip:
+            action = self.actionAt(event.pos())
+            if action is not None and not action.isEnabled() and action.toolTip():
+                QtWidgets.QToolTip.showText(event.globalPos(), action.toolTip(), self)
+            else:
+                QtWidgets.QToolTip.hideText()
+            return True
+        return super().event(event)
+
     def create_tabs(self):
         """Create tabs on the menu bar."""
         # Add tabs for following plot options
         # (these are exclusive, i.e. only one can be selected at a time)
-        for group in ['image', 'line', 'probe', 'feature', 'slice', 'region', 'filter']:
-            self.tabs[group]['menu'] = self.addMenu(f'{group.capitalize()} Plots')
+        for group in [
+            'image',
+            'line',
+            'probe',
+            'feature',
+            'slice',
+            'prediction',
+            'region',
+            'filter',
+        ]:
+            # The region menu chooses the atlas mapping, so it is titled for that
+            title = 'Set Mapping' if group == 'region' else f'{group.capitalize()} Plots'
+            self.tabs[group]['menu'] = self.addMenu(title)
             self.tabs[group]['group'] = QtWidgets.QActionGroup(self.tabs[group]['menu'])
             self.tabs[group]['group'].setExclusive(True)
 
@@ -1466,6 +1494,31 @@ class ConfigWidget(QtWidgets.QWidget):
         """Create and return the electrophysiology figure layout."""
 
     @staticmethod
+    def add_prediction_column(
+        layout: pg.GraphicsLayout, items, col: int, link: pg.PlotItem, stretch: int = 1
+    ) -> None:
+        """
+        Add the prediction figure of a configuration, with its title above, as a layout column.
+
+        Parameters
+        ----------
+        layout: pg.GraphicsLayout
+            The ephys figure layout to add the column to.
+        items: ShankView
+            A ShankView object containing all the figure items for this configuration and shank.
+        col: int
+            The column of the layout.
+        link: pg.PlotItem
+            The ephys figure whose y-axis the prediction figure follows.
+        stretch: int
+            The stretch factor of the column.
+        """
+        items.fig_pred.setYLink(link)
+        layout.addItem(items.fig_pred_label, 0, col)
+        layout.addItem(items.fig_pred, 1, col)
+        layout.layout.setColumnStretchFactor(col, stretch)
+
+    @staticmethod
     def create_hist_figure_layout(items) -> pg.GraphicsLayout:
         """
         Build a histology figure layout for a single configuration.
@@ -1574,6 +1627,8 @@ class SingleConfigFeatureWidget(ConfigWidget):
     ----------
     items: ShankView
         A ShankView object containing all the figure items for this configuration and shank.
+    prediction: bool, optional
+        Whether to show the prediction figure alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1591,8 +1646,11 @@ class SingleConfigFeatureWidget(ConfigWidget):
         The name of the shank, provided by the subclass.
     """
 
-    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+    def __init__(
+        self, items, prediction: bool = False, parent: QtWidgets.QMainWindow | None = None
+    ):
         self.items = items
+        self.prediction: bool = prediction
         self.config: str = items.config
         self.idx: int = items.index
         self.name: str = items.name
@@ -1622,6 +1680,9 @@ class SingleConfigFeatureWidget(ConfigWidget):
         # Add items to layout with positions and spans
         fig_ephys_layout.addItem(items.fig_feature_label, 0, 0)
         fig_ephys_layout.addItem(items.fig_feature, 1, 0)
+        if self.prediction:
+            fig_ephys_layout.layout.setColumnStretchFactor(0, 8)
+            self.add_prediction_column(fig_ephys_layout, items, 1, link=items.fig_feature)
 
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
@@ -1655,6 +1716,8 @@ class SingleConfigWidget(ConfigWidget):
     ----------
     items: ShankView
         A ShankView object containing all the figure items for this configuration and shank.
+    prediction: bool, optional
+        Whether to show the prediction figure alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1672,8 +1735,11 @@ class SingleConfigWidget(ConfigWidget):
         The name of the shank, provided by the subclass.
     """
 
-    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+    def __init__(
+        self, items, prediction: bool = False, parent: QtWidgets.QMainWindow | None = None
+    ):
         self.items = items
+        self.prediction: bool = prediction
         self.config: str = items.config
         self.idx: int = items.index
         self.name: str = items.name
@@ -1714,6 +1780,8 @@ class SingleConfigWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(2, 1)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+        if self.prediction:
+            self.add_prediction_column(fig_ephys_layout, items, 3, link=items.fig_img)
 
         return fig_ephys_layout
 
@@ -1750,6 +1818,8 @@ class DualConfigWidget(ConfigWidget):
     items_non_default: ShankView
         A ShankView object containing all the figure items for the non-default configuration
         and shank
+    prediction: bool, optional
+        Whether to show the prediction figures alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1772,9 +1842,14 @@ class DualConfigWidget(ConfigWidget):
     """
 
     def __init__(
-        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+        self,
+        items_default,
+        items_non_default,
+        prediction: bool = False,
+        parent: QtWidgets.QMainWindow | None = None,
     ):
         self.items_default = items_default
+        self.prediction: bool = prediction
         self.items_non_default = items_non_default
         self.config: str = items_default.config
         self.idx: int = items_default.index
@@ -1851,6 +1926,9 @@ class DualConfigWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(5, 1)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+        if self.prediction:
+            for col, items in enumerate((items_default, items_non_default), 6):
+                self.add_prediction_column(fig_ephys_layout, items, col, link=items.fig_img)
 
         return fig_ephys_layout
 
@@ -1887,6 +1965,8 @@ class DualConfigFeatureWidget(ConfigWidget):
     items_non_default: ShankView
         A ShankView object containing all the figure items for the non-default configuration
         and shank
+    prediction: bool, optional
+        Whether to show the prediction figures alongside the ephys plots
     parent : QWidgets.QMainWindow, optional
         The parent window
 
@@ -1909,9 +1989,14 @@ class DualConfigFeatureWidget(ConfigWidget):
     """
 
     def __init__(
-        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+        self,
+        items_default,
+        items_non_default,
+        prediction: bool = False,
+        parent: QtWidgets.QMainWindow | None = None,
     ):
         self.items_default = items_default
+        self.prediction: bool = prediction
         self.items_non_default = items_non_default
         self.config: str = items_default.config
         self.idx: int = items_default.index
@@ -1964,6 +2049,208 @@ class DualConfigFeatureWidget(ConfigWidget):
         fig_ephys_layout.layout.setColumnStretchFactor(1, 4)
         fig_ephys_layout.layout.setRowStretchFactor(0, 1)
         fig_ephys_layout.layout.setRowStretchFactor(1, 10)
+        if self.prediction:
+            for col, items in enumerate((items_default, items_non_default), 2):
+                self.add_prediction_column(fig_ephys_layout, items, col, link=items.fig_feature)
+
+        return fig_ephys_layout
+
+    def get_layout(self) -> tuple[pg.GraphicsLayout, pg.GraphicsLayout]:
+        """
+        Create the electrophysiology and histogram layouts.
+
+        Returns
+        -------
+        ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        hist_layout: pg.GraphicsLayout
+            The created histology figure layout.
+        """
+        ephys_layout = self.create_ephys_figure_layout(self.items_default, self.items_non_default)
+        hist_layout = self.create_hist_figure_layout(self.items_default)
+
+        return ephys_layout, hist_layout
+
+
+class SingleConfigPredictionWidget(ConfigWidget):
+    """
+    Widget for displaying all channel predictions and histology for a single shank and config.
+
+    The ephys plot shows one figure per channel prediction, side by side.
+
+    Parameters
+    ----------
+    items: ShankView
+        A ShankView object containing all the figure items for this configuration and shank.
+    parent : QWidgets.QMainWindow, optional
+        The parent window
+
+    Attributes
+    ----------
+    items: ShankView
+        A ShankView object containing all the figure items for this configuration and shank.
+    header : QtWidgets.QLabel
+        A label widget for the header, provided by the subclass.
+    config : str
+        The probe configuration name, provided by the subclass.
+    idx : int
+        The index of the shank, provided by the subclass.
+    name : str
+        The name of the shank, provided by the subclass.
+    """
+
+    def __init__(self, items, parent: QtWidgets.QMainWindow | None = None):
+        self.items = items
+        self.config: str = items.config
+        self.idx: int = items.index
+        self.name: str = items.name
+        self.header: QtWidgets.QLabel = items.header
+
+        super().__init__(parent)
+
+    @staticmethod
+    def create_prediction_columns(layout: pg.GraphicsLayout, columns: list) -> None:
+        """
+        Add prediction figures, with their titles above, as layout columns.
+
+        The first figure shows the depth axis, and the others follow its y-axis.
+
+        Parameters
+        ----------
+        layout: pg.GraphicsLayout
+            The ephys figure layout to add the columns to.
+        columns: list of (pg.PlotItem, pg.PlotItem or None)
+            Each column's prediction figure and the title figure above it, or None for no title.
+        """
+        first = columns[0][0]
+        set_axis(first, 'left', label='Distance from probe tip (um)')
+        for col, (fig, label) in enumerate(columns):
+            if fig is not first:
+                fig.setYLink(first)
+            if label is not None:
+                layout.addItem(label, 0, col)
+            layout.addItem(fig, 1, col)
+        layout.layout.setRowStretchFactor(0, 1)
+        layout.layout.setRowStretchFactor(1, 10)
+
+    def create_ephys_figure_layout(self, items) -> pg.GraphicsLayout:
+        """
+        Build an ephys figure layout of all channel predictions for a single configuration.
+
+        Parameters
+        ----------
+        items: ShankView
+            A ShankView object containing all the figure items for this configuration and shank.
+
+        Returns
+        -------
+        fig_ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        """
+        fig_ephys_layout = pg.GraphicsLayout()
+        fig_ephys_layout.setSpacing(0)
+        columns = [(fig, items.pred_labels[fig]) for fig in items.fig_preds.values()]
+        self.create_prediction_columns(fig_ephys_layout, columns)
+        items.use_prediction_coords()
+
+        return fig_ephys_layout
+
+    def get_layout(self) -> tuple[pg.GraphicsLayout, pg.GraphicsLayout]:
+        """
+        Create the electrophysiology and histogram layouts.
+
+        Returns
+        -------
+        ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        hist_layout: pg.GraphicsLayout
+            The created histology figure layout.
+        """
+        ephys_layout = self.create_ephys_figure_layout(self.items)
+        hist_layout = self.create_hist_figure_layout(self.items)
+
+        return ephys_layout, hist_layout
+
+
+class DualConfigPredictionWidget(ConfigWidget):
+    """
+    Widget for displaying all channel predictions and histology for a shank and two configs.
+
+    The histology figure is built from the figure items of the default configuration.
+    The ephys figure shows each channel prediction for the default and non-default
+    configurations side by side, the two configurations of each prediction next to each other.
+
+    Parameters
+    ----------
+    items_default: ShankView
+        A ShankView object containing all the figure items for the default configuration
+        and shank.
+    items_non_default: ShankView
+        A ShankView object containing all the figure items for the non-default configuration
+        and shank
+    parent : QWidgets.QMainWindow, optional
+        The parent window
+
+    Attributes
+    ----------
+    items_default: ShankView
+        A ShankView object containing all the figure items for the default configuration
+        and shank.
+    items_non_default: ShankView
+        A ShankView object containing all the figure items for the non-default configuration
+        and shank
+    header : QtWidgets.QLabel
+        A label widget for the header, provided by the subclass.
+    config : str
+        The probe configuration name, provided by the subclass.
+    idx : int
+        The index of the shank, provided by the subclass.
+    name : str
+        The name of the shank, provided by the subclass.
+    """
+
+    def __init__(
+        self, items_default, items_non_default, parent: QtWidgets.QMainWindow | None = None
+    ):
+        self.items_default = items_default
+        self.items_non_default = items_non_default
+        self.config: str = items_default.config
+        self.idx: int = items_default.index
+        self.name: str = items_default.name
+        self.header: QtWidgets.QLabel = items_default.header
+
+        super().__init__(parent)
+
+    def create_ephys_figure_layout(self, items_default, items_non_default) -> pg.GraphicsLayout:
+        """
+        Build an ephys figure layout of all channel predictions for two configurations.
+
+        Parameters
+        ----------
+        items_default: ShankView
+            A ShankView object containing all the figure items for the default configuration
+            and shank.
+        items_non_default: ShankView
+            A ShankView object containing all the figure items for the non-default configuration
+            and shank
+
+        Returns
+        -------
+        fig_ephys_layout: pg.GraphicsLayout
+            The created ephys figure layout.
+        """
+        fig_ephys_layout = pg.GraphicsLayout()
+        fig_ephys_layout.setSpacing(0)
+        # The default configuration's title spans both configurations of each prediction
+        columns = []
+        for key, fig in items_default.fig_preds.items():
+            columns.append((fig, None))
+            columns.append((items_non_default.fig_preds[key], None))
+        SingleConfigPredictionWidget.create_prediction_columns(fig_ephys_layout, columns)
+        for i, fig in enumerate(items_default.fig_preds.values()):
+            fig_ephys_layout.addItem(items_default.pred_labels[fig], 0, 2 * i, 1, 2)
+        items_default.use_prediction_coords()
+        items_non_default.use_prediction_coords()
 
         return fig_ephys_layout
 

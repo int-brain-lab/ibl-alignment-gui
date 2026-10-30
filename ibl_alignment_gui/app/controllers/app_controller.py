@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
 from ibl_alignment_gui.app.controllers.shank_controller import ShankController
-from ibl_alignment_gui.app.load_worker import Worker
+from ibl_alignment_gui.app.load_worker import TaskProgressDialog, Worker
 from ibl_alignment_gui.app.views.app_view import AlignmentGUIView
 from ibl_alignment_gui.app.widgets.custom_widgets import ColorBar
 from ibl_alignment_gui.handlers.probe_handler import (
@@ -29,6 +29,54 @@ from ibl_alignment_gui.utils.helpers import shank_loop
 from iblutil.util import Bunch
 
 logger = logging.getLogger(__name__)
+
+# The atlas mappings offered in the Set Mapping menu, drawn on the histology panels.
+REGION_MAPPINGS = ['Allen', 'Beryl', 'Cosmos']
+# The Prediction Plots option that hides the prediction panels.
+NO_PREDICTION = 'None'
+# The Prediction Plots option that shows all the predictions side by side, instead of the ephys
+# plots.
+ALL_PREDICTIONS = 'All predictions (side by side)'
+# Why the feature and prediction menus are greyed out, shown when the mouse rests on them
+NO_FEATURES_HINT = (
+    'No ephys-atlas features for this session. Provide a features file: give it as the features '
+    'dataset in the session YAML, or put one with "features" in its name in the data folder.'
+)
+NO_SPIKE_SORTING_HINT = (
+    'No spike sorting for this session, so there are no units to filter. Give a spike_sorting '
+    'dataset in the session YAML.'
+)
+
+
+def format_fit(shank: str, feature: np.ndarray, track: np.ndarray) -> str:
+    """
+    Describe the reference line pairs of a fit, as plotted in the Fit figure.
+
+    Parameters
+    ----------
+    shank: str
+        The name of the shank
+    feature: np.ndarray
+        The fit's positions along the probe, in m, padded with a point at each end
+    track: np.ndarray
+        The matching positions along the histology track, in m, padded in the same way
+
+    Returns
+    -------
+    str
+        A table of the depth of each reference line pair along the probe (the original
+        coordinates) and along the track (the new coordinates), and the offset between them, in
+        µm.
+    """
+    # The first and last points pad the fit beyond the outermost reference lines
+    original, new = np.asarray(feature)[1:-1] * 1e6, np.asarray(track)[1:-1] * 1e6
+    if original.size == 0:
+        return f'{shank}: no reference lines'
+    # The probe and track depths are the Fit figure's original and new coordinates
+    rows = [f'{"probe (original)":>18}{"track (new)":>14}{"offset":>11}']
+    rows += [f'{o:18.2f}{n:14.2f}{n - o:+11.2f}' for o, n in zip(original, new, strict=True)]
+    pairs = 'reference line pair' if original.size == 1 else 'reference line pairs'
+    return f'{shank}: {original.size} {pairs} (um)\n' + '\n'.join(rows)
 
 
 class AlignmentGUIController:
@@ -106,9 +154,7 @@ class AlignmentGUIController:
 
         self.model = self._build_model()
 
-        self.view: AlignmentGUIView = AlignmentGUIView(
-            offline=self.offline, config=len(self.model.configs) > 1, allen=self.allen
-        )
+        self.view: AlignmentGUIView = AlignmentGUIView(offline=self.offline, allen=self.allen)
 
         if not offline:
             self.view.populate_selection_dropdown('subject', self.model.get_subjects())
@@ -143,9 +189,15 @@ class AlignmentGUIController:
         self.slice_init: str | None = None
         self.filter_init: str | None = None
         self.region_init: str | None = None
+        self.prediction_init: str | None = None
+
+        # The channel prediction options offered in Prediction Plots, set by the Channel
+        # Prediction plugin
+        self.prediction_keys: list[str] = []
 
         # The ephys view mode
         self.show_feature = False
+        self.show_predictions = False
 
         # Store the slice figures
         self.slice_figs: Bunch = Bunch()
@@ -156,7 +208,8 @@ class AlignmentGUIController:
         # Background loading thread state
         self._load_thread: QtCore.QThread | None = None
         self._load_worker: Worker | None = None
-        self._load_dialog: QtWidgets.QProgressDialog | None = None
+        self._load_dialog: TaskProgressDialog | None = None
+        self._outcome: tuple[Callable, tuple] | None = None  # the finished task's callback
         self._load_start: float = 0.0
 
         # Setup all callbacks
@@ -164,6 +217,8 @@ class AlignmentGUIController:
 
         # Setup plugins
         Plugins(self)
+        # No session yet, so the feature and prediction menus start greyed out (or hidden)
+        self.update_data_menus()
 
         # With a yaml the session is fully specified up front, so load it immediately.
         if self.yaml is not None:
@@ -280,9 +335,13 @@ class AlignmentGUIController:
                 'shortcut': 'Alt+4',
                 'callback': lambda: self.toggle_plots('slice', 1),
             },
-            'Toggle Region Plots ->': {
-                'shortcut': 'Alt+5',
+            'Toggle Mapping ->': {
+                'shortcut': 'Alt+M',
                 'callback': lambda: self.toggle_plots('region', 1),
+            },
+            'Toggle Prediction Plots ->': {
+                'shortcut': 'Alt+5',
+                'callback': lambda: self.toggle_plots('prediction', 1),
             },
             'Toggle Image Plots <-': {
                 'shortcut': 'Shift+Alt+1',
@@ -300,9 +359,13 @@ class AlignmentGUIController:
                 'shortcut': 'Shift+Alt+4',
                 'callback': lambda: self.toggle_plots('slice', -1),
             },
-            'Toggle Region Plots <-': {
-                'shortcut': 'Shift+Alt+5',
+            'Toggle Mapping <-': {
+                'shortcut': 'Shift+Alt+M',
                 'callback': lambda: self.toggle_plots('region', -1),
+            },
+            'Toggle Prediction Plots <-': {
+                'shortcut': 'Shift+Alt+5',
+                'callback': lambda: self.toggle_plots('prediction', -1),
             },
             # Shortcut to reset axis on figures
             'Reset Axis': {'shortcut': 'Shift+A', 'callback': self.reset_axis_button_pressed},
@@ -314,6 +377,8 @@ class AlignmentGUIController:
             'Hide/Show Channels': {'shortcut': 'Shift+C', 'callback': self.toggle_channels},
             # Shortcut to change toggle between grid and tab view
             'Toggle layout': {'shortcut': 'T', 'callback': self.toggle_layout},
+            # Shortcut to show all the channel predictions side by side
+            'All Predictions': {'shortcut': 'Shift+P', 'callback': self.show_all_predictions},
             # Shortcuts to move between shanks
             'Next shank': {'shortcut': 'Right', 'callback': lambda: self.loop_through_tabs(1)},
             'Previous shank': {'shortcut': 'Left', 'callback': lambda: self.loop_through_tabs(-1)},
@@ -350,10 +415,18 @@ class AlignmentGUIController:
         self.filter_init = self.view.populate_menu_tab(
             'filter', self.filter_unit_pressed, filter_keys
         )
-        region_keys = ['Allen', 'Beryl', 'Cosmos']
         self.region_init = self.view.populate_menu_tab(
-            'region', self.plot_region_ref_panels, region_keys
+            'region', self.plot_region_ref_panels, REGION_MAPPINGS
         )
+        prediction_keys = [NO_PREDICTION, *self.prediction_keys]
+        if self.prediction_keys:
+            prediction_keys.append(ALL_PREDICTIONS)
+        self.prediction_init = self.view.populate_menu_tab(
+            'prediction', self.plot_prediction_panels, prediction_keys
+        )
+        self.update_data_menus()
+        # A new session starts without predictions
+        self.show_predictions = False
 
     # --------------------------------------------------------------------------------------------
     # Plugins
@@ -394,7 +467,7 @@ class AlignmentGUIController:
         for i, shank in enumerate(self.all_shanks):
             for c in self.model.configs:
                 self.shank_items[shank][c] = ShankController(
-                    self.model.shanks[shank][c], shank, i, c
+                    self.model.shanks[shank][c], shank, i, c, prediction_keys=self.prediction_keys
                 )
 
     def init_shanks(self) -> None:
@@ -405,6 +478,8 @@ class AlignmentGUIController:
             self.model.default_config,
             self.model.non_default_config,
             feature_view=self.show_feature,
+            prediction_view=self.show_prediction_panel,
+            all_predictions=self.show_predictions,
         )
         for tab in shank_tabs:
             tab.setup_double_click(self.on_mouse_double_clicked)
@@ -444,17 +519,205 @@ class AlignmentGUIController:
         self.hover_region = items.plot_histology()
 
     @shank_loop
-    def plot_histology_ref_panels(self, items: ShankController, **kwargs) -> None:
-        """Plot histology reference panel per shank and config."""
-        items.plot_histology_ref()
+    def plot_histology_ref_panels(
+        self, items: ShankController, mapping: str = 'Allen', **kwargs
+    ) -> str | None:
+        """
+        Plot histology reference panel per shank and config.
 
-    def plot_region_ref_panels(self, plot_key: str, data_only: bool = True) -> None:
-        """Handle Region Plots menu selection — delegates non-Original keys to the plugin."""
+        Parameters
+        ----------
+        mapping: str
+            The atlas mapping of the regions, e.g. 'Allen', 'Beryl' or 'Cosmos'
+
+        Returns
+        -------
+        str or None
+            The error message if the regions could not be found, else None. Errors are returned
+            rather than shown so that they are reported once for all shanks.
+        """
+        try:
+            items.plot_histology_ref(mapping)
+        except Exception as exc:
+            logger.exception(
+                '%s regions failed on shank %s (%s)', mapping, kwargs.get('shank'), items.config
+            )
+            return f'{mapping} regions could not be found: {type(exc).__name__}: {exc}'
+
+    @shank_loop
+    def set_mapping(self, items: ShankController, mapping: str = 'Allen', **kwargs) -> str | None:
+        """
+        Set the atlas mapping the histology regions are shown in, per shank and config.
+
+        Parameters
+        ----------
+        mapping: str
+            The atlas mapping of the regions, e.g. 'Allen', 'Beryl' or 'Cosmos'
+
+        Returns
+        -------
+        str or None
+            The error message if the regions could not be found, else None.
+        """
+        try:
+            items.model.set_mapping(mapping)
+            items.model.get_mapping_regions(mapping)
+        except Exception as exc:
+            logger.exception(
+                '%s regions failed on shank %s (%s)', mapping, kwargs.get('shank'), items.config
+            )
+            items.model.set_mapping('Allen')
+            return f'{mapping} regions could not be found: {type(exc).__name__}: {exc}'
+
+    def plot_region_ref_panels(
+        self, plot_key: str, data_only: bool = True, redraw_lines: bool = True
+    ) -> None:
+        """
+        Plot the histology panels with the atlas mapping chosen in the Set Mapping menu.
+
+        Parameters
+        ----------
+        plot_key: str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'
+        data_only: bool
+            Whether the plot can be generated without histology data
+        redraw_lines: bool
+            Whether to add the reference lines back after the histology is redrawn. False when
+            the display is being set up, which adds them itself.
+        """
         self.region_init = plot_key
-        if plot_key == 'Allen':
-            self.plot_histology_ref_panels()
+        # The scaled histology and its scale factors are shown in the mapping too
+        errors = self.set_mapping(mapping=plot_key)
+        self.get_scaled_histology()
+        self.plot_histology_panels()
+        self.plot_scale_factor_panels()
+        if redraw_lines:
+            # Redrawing the histology clears its figure, so the reference lines are added back
+            self.remove_reference_lines_from_display()
+            self.add_reference_lines_to_display()
+            self.align_reference_lines()
+        errors += self.plot_histology_ref_panels(mapping=plot_key)
+        messages = list(dict.fromkeys(error for error in errors if error))
+        if messages:
+            QtWidgets.QMessageBox.warning(self.view, plot_key, '\n\n'.join(messages))
+
+    def update_data_menus(self) -> None:
+        """
+        Offer the menus that need particular data only when the session has it.
+
+        The unit filters are greyed out without spike sorting. Without ephysatlas there are no
+        ephys-atlas feature plots or predictions, so their menus are hidden; with it, they are
+        greyed out until a session with features is loaded. A greyed-out menu has a hint saying
+        what is missing.
+        """
+        self.view.set_menu_enabled('filter', self.model.has_spike_sorting, NO_SPIKE_SORTING_HINT)
+        for tab in ('feature', 'prediction'):
+            self.view.set_menu_visible(tab, plot_loader.EPHYS_ATLAS)
+        if not plot_loader.EPHYS_ATLAS:
             return
-        self.plugins['Channel Prediction']['loader'].plot_regions(plot_key, data_only=data_only)
+        self.view.set_menu_enabled('feature', bool(self.model.feature_keys), NO_FEATURES_HINT)
+        self.view.set_menu_enabled(
+            'prediction', bool(self.prediction_keys) and self.model.has_features, NO_FEATURES_HINT
+        )
+
+    @property
+    def show_prediction_panel(self) -> bool:
+        """
+        Return whether the prediction panel is shown alongside the ephys plots.
+
+        Returns
+        -------
+        bool
+            True when a channel prediction is selected in Prediction Plots.
+        """
+        return self.prediction_init not in (None, NO_PREDICTION, ALL_PREDICTIONS)
+
+    @property
+    def show_ephys_plots(self) -> bool:
+        """
+        Return whether the image, line and probe plots are shown.
+
+        Returns
+        -------
+        bool
+            False in the feature view and in the all predictions view.
+        """
+        return not (self.show_feature or self.show_predictions)
+
+    def show_all_predictions(self) -> None:
+        """
+        Show all the channel predictions side by side, instead of the ephys plots.
+
+        Triggered by pressing Shift+P.
+        """
+        if self.loaded and self.prediction_keys:
+            self.view.trigger_menu_option('prediction', ALL_PREDICTIONS)
+
+    def plot_prediction_panels(self, plot_key: str, data_only: bool = True) -> None:
+        """
+        Show the channel prediction chosen in Prediction Plots.
+
+        A single prediction is shown on a panel alongside the ephys plots, added to the display
+        when a prediction is first chosen and removed when 'None' is chosen. 'All predictions'
+        shows every prediction side by side, instead of the ephys plots. The predictions are
+        computed and drawn by the Channel Prediction plugin.
+
+        Parameters
+        ----------
+        plot_key: str
+            The channel prediction option, 'None' to hide the prediction panels or
+            'All predictions (side by side)'
+        data_only: bool
+            Whether the plot can be generated without histology data
+        """
+        loader = self.plugins['Channel Prediction']['loader']
+        if plot_key != NO_PREDICTION and not loader.ready():
+            # No features to predict on: the plugin has warned, so keep the previous choice
+            self.view.check_menu_option('prediction', self.prediction_init or NO_PREDICTION)
+            return
+        shown = self.show_prediction_panel
+        self.prediction_init = plot_key
+
+        if plot_key == ALL_PREDICTIONS:
+            if not self.show_predictions:
+                # Replace the ephys plots; the predictions are drawn once the figures are built
+                self.show_predictions = True
+                self.on_view_changed()
+                return
+            loader.plot_all_predictions()
+            return
+
+        if self.show_predictions or self.show_prediction_panel != shown:
+            # Leave the all predictions view, or add or remove the prediction panels
+            self.show_predictions = False
+            self.on_view_changed()
+            return
+        if self.show_prediction_panel:
+            loader.plot_predictions(plot_key)
+
+    def _show_ephys_view(self, feature: bool) -> bool:
+        """
+        Show the ephys plots or the feature plots, leaving the all predictions view.
+
+        Parameters
+        ----------
+        feature: bool
+            Whether to show the feature plots rather than the image, line and probe plots
+
+        Returns
+        -------
+        bool
+            Whether the display was rebuilt for the view, which also draws its plots
+        """
+        if self.show_feature == feature and not self.show_predictions:
+            return False
+        self.show_feature = feature
+        if self.show_predictions:
+            self.show_predictions = False
+            self.prediction_init = NO_PREDICTION
+            self.view.check_menu_option('prediction', NO_PREDICTION)
+        self.on_view_changed()
+        return True
 
     def plot_scale_factor_panels(self, shanks: list | tuple | None = None) -> None:
         """
@@ -578,9 +841,7 @@ class AlignmentGUIController:
         """
         self.line_init = plot_key
 
-        if self.show_feature:
-            self.show_feature = False
-            self.on_view_changed()
+        if self._show_ephys_view(feature=False):
             return
 
         self._plot_line_panels(plot_key, data_only=data_only, **kwargs)
@@ -616,9 +877,7 @@ class AlignmentGUIController:
         """
         self.feature_init = plot_key
 
-        if not self.show_feature:
-            self.show_feature = True
-            self.on_view_changed()
+        if self._show_ephys_view(feature=True):
             return
 
         self._plot_feature_panels(plot_key, data_only=data_only, **kwargs)
@@ -676,9 +935,7 @@ class AlignmentGUIController:
         # Update which plot was last selected
         setattr(self, init_attr, plot_key)
 
-        if self.show_feature:
-            self.show_feature = False
-            self.on_view_changed()
+        if self._show_ephys_view(feature=False):
             return
 
         if self.model.selected_config == 'both':
@@ -855,12 +1112,16 @@ class AlignmentGUIController:
     def set_ephys_plots(self) -> None:
         """Set the ephys plots to the values stored in the init variables."""
         self.blockPlugins = True
-        if not self.show_feature:
+        if self.show_predictions:
+            self.view.trigger_menu_option('prediction', ALL_PREDICTIONS)
+        elif not self.show_feature:
             self.view.trigger_menu_option('image', self.img_init)
             self.view.trigger_menu_option('line', self.line_init)
             self.view.trigger_menu_option('probe', self.probe_init)
         else:
             self.view.trigger_menu_option('feature', self.feature_init)
+        if self.show_prediction_panel:
+            self.view.trigger_menu_option('prediction', self.prediction_init)
         self.blockPlugins = False
 
     # --------------------------------------------------------------------------------------------
@@ -1105,21 +1366,27 @@ class AlignmentGUIController:
     # --------------------------------------------------------------------------------------------
     # Load data
     # --------------------------------------------------------------------------------------------
-    def _run_in_thread(
+    def run_in_thread(
         self,
         func: Callable,
         *args,
         on_finished: Callable,
         busy_message: str,
         report_progress: bool = False,
+        cancellable: bool = False,
+        on_error: Callable | None = None,
+        on_cancelled: Callable | None = None,
+        title: str = 'Please wait',
         **kwargs,
     ) -> bool:
         """
         Run a slow callable on a background thread, showing a modal progress dialog.
 
-        The callable runs off the GUI thread so the window stays responsive; ``on_finished`` is
-        then called on the main thread with the callable's return value. Any exception is shown in
-        a message box via :meth:`_on_thread_error`. Only one background task runs at a time.
+        The callable runs off the GUI thread so the window stays responsive. Once it has stopped,
+        one callback runs on the main thread: ``on_finished`` with its return value, ``on_error``
+        with the traceback if it raised (by default a message box, :meth:`_on_thread_error`), or
+        ``on_cancelled`` if Cancel stopped it. Only one background task runs at a time; the
+        callback runs once the runner is free, so it may start another.
 
         Parameters
         ----------
@@ -1132,7 +1399,16 @@ class AlignmentGUIController:
         busy_message : str
             Initial message shown in the progress dialog.
         report_progress : bool
-            If True, ``func`` is given a ``progress_callback`` to drive the dialog.
+            If True, ``func`` is given a ``progress_callback`` to drive the dialog; after Cancel,
+            its next call raises :class:`~ibl_alignment_gui.app.load_worker.TaskCancelledError`.
+        cancellable : bool
+            If True, the dialog has a Cancel button (needs ``report_progress``).
+        on_error : Callable or None
+            Called on the main thread with the traceback if ``func`` raises.
+        on_cancelled : Callable or None
+            Called on the main thread, without arguments, if Cancel stopped ``func``.
+        title : str
+            The progress dialog's window title.
         **kwargs : Any
             Keyword arguments forwarded to ``func``.
 
@@ -1144,29 +1420,50 @@ class AlignmentGUIController:
         if self._load_thread is not None:
             return False
 
-        # Progress dialog (no cancel button; starts indeterminate until totals are known)
-        self._load_dialog = QtWidgets.QProgressDialog(busy_message, None, 0, 0, self.view)
-        self._load_dialog.setWindowTitle('Please wait')
-        self._load_dialog.setWindowModality(QtCore.Qt.WindowModal)
-        self._load_dialog.setMinimumDuration(0)
-        self._load_dialog.setValue(0)
+        # Progress dialog (starts indeterminate until totals are known)
+        self._load_dialog = TaskProgressDialog(title, busy_message, cancellable, self.view)
 
         # Worker running the slow callable on a background thread
         self._load_thread = QtCore.QThread()
         self._load_worker = Worker(func, *args, report_progress=report_progress, **kwargs)
         self._load_worker.moveToThread(self._load_thread)
+        # A direct call, from this (the main) thread: the worker's own thread is busy running the
+        # task, so a queued call to its slot would only arrive once the task has ended.
+        self._load_dialog.cancel_requested.connect(
+            self._load_worker.cancel, QtCore.Qt.DirectConnection
+        )
         self._load_thread.started.connect(self._load_worker.run)
         self._load_worker.progress.connect(self._on_thread_progress)
-        self._load_worker.finished.connect(on_finished)
-        self._load_worker.error.connect(self._on_thread_error)
+        # Keep the outcome; its callback runs once the thread has stopped (_cleanup_thread)
+        self._outcome = None
+        self._load_worker.finished.connect(lambda result: self._set_outcome(on_finished, result))
+        self._load_worker.error.connect(
+            lambda message: self._set_outcome(on_error or self._on_thread_error, message)
+        )
+        self._load_worker.cancelled.connect(
+            lambda: self._set_outcome(on_cancelled or (lambda: None))
+        )
         # Stop the thread once the worker is done, then dispose of everything
-        self._load_worker.finished.connect(self._load_thread.quit)
-        self._load_worker.error.connect(self._load_thread.quit)
+        for signal in (
+            self._load_worker.finished,
+            self._load_worker.error,
+            self._load_worker.cancelled,
+        ):
+            signal.connect(self._load_thread.quit)
         self._load_thread.finished.connect(self._cleanup_thread)
 
         self._load_dialog.show()
         self._load_thread.start()
         return True
+
+    @property
+    def task_running(self) -> bool:
+        """Whether a background task is running (only one runs at a time)."""
+        return self._load_thread is not None
+
+    def _set_outcome(self, callback: Callable, *args) -> None:
+        """Keep the callback to run, with its arguments, once the thread has stopped."""
+        self._outcome = (callback, args)
 
     def _on_thread_progress(self, message: str, current: int, total: int) -> None:
         """Update the progress dialog with a message from the background worker."""
@@ -1176,6 +1473,8 @@ class AlignmentGUIController:
         if total > 0:
             self._load_dialog.setMaximum(total)
             self._load_dialog.setValue(current)
+        else:  # a step of unknown length: a busy bar
+            self._load_dialog.setRange(0, 0)
 
     def _on_thread_error(self, message: str) -> None:
         """Report a background task failure (main thread)."""
@@ -1184,23 +1483,29 @@ class AlignmentGUIController:
         )
 
     def _cleanup_thread(self) -> None:
-        """Close the dialog and dispose of the worker and thread once it has stopped."""
-        if self._load_dialog is not None:
-            self._load_dialog.close()
-        if self._load_worker is not None:
-            self._load_worker.deleteLater()
-        if self._load_thread is not None:
-            self._load_thread.deleteLater()
-        self._load_worker = None
-        self._load_thread = None
-        self._load_dialog = None
+        """Dispose of the stopped worker and thread, run the task's callback, close its dialog.
+
+        The callback runs once the runner is free, so it can start another task (e.g. plotting a
+        model's predictions after loading it), and before the dialog closes, so the dialog stays up
+        while the callback assembles the display.
+        """
+        dialog, outcome = self._load_dialog, self._outcome
+        self._load_worker.deleteLater()
+        self._load_thread.deleteLater()
+        self._load_worker = self._load_thread = self._load_dialog = self._outcome = None
+        try:
+            if outcome is not None:
+                callback, args = outcome
+                callback(*args)
+        finally:
+            dialog.finish()
 
     def data_button_pressed(self) -> None:
         """
         Load in all the relevant data and instantiate the GUI display.
 
         Triggered when the data button is pressed. The atlas build, data load and plot build run
-        on a background thread (see :meth:`_run_in_thread` and ``ProbeHandler.load_all``) so the
+        on a background thread (see :meth:`run_in_thread` and ``ProbeHandler.load_all``) so the
         GUI stays responsive and a progress dialog can be shown. The display is assembled in
         :meth:`_on_load_finished` once loading completes.
         """
@@ -1210,7 +1515,7 @@ class AlignmentGUIController:
         # Get the list of shanks
         self.all_shanks = list(self.model.shanks.keys())
 
-        self._run_in_thread(
+        self.run_in_thread(
             self.model.load_all,
             on_finished=self._on_load_finished,
             busy_message='Loading data…',
@@ -1241,9 +1546,10 @@ class AlignmentGUIController:
         self.model.load_plots()
         # Add all the plot options to the menubar
         self.populate_menubar()
-        # If multiple configs add the config options
-        if self.view.config:
-            self.view.populate_selection_dropdown('config', self.model.possible_configs)
+        # Offer the configurations when the session has more than one, whichever way it was opened
+        self.view.show_config_dropdown(
+            self.model.possible_configs if len(self.model.configs) > 1 else None
+        )
         # Load in the shank panels and configure figures for initial config
         self.on_config_selected(0, init=True)
         # Execute any plugins linked to the current method
@@ -1286,10 +1592,9 @@ class AlignmentGUIController:
 
         # Initialise histology plots
         self.view.trigger_menu_option('slice', self.slice_init)
-        self.get_scaled_histology()
-        self.view.trigger_menu_option('region', self.region_init)
-        self.plot_histology_panels()
-        self.plot_scale_factor_panels()
+        # Draws the histology in the chosen mapping; the reference lines are added below
+        self.view.check_menu_option('region', self.region_init)
+        self.plot_region_ref_panels(self.region_init, redraw_lines=False)
         self.show_labels = False
         self.toggle_labels()
         self.update_string()
@@ -1375,7 +1680,7 @@ class AlignmentGUIController:
 
         Saves channel locations and alignments. The per-shank user input (which shanks, QC
         assessment, upload confirmation) is gathered here on the main thread via modal dialogs;
-        the slow saving itself then runs on a background thread (see :meth:`_run_in_thread` and
+        the slow saving itself then runs on a background thread (see :meth:`run_in_thread` and
         ``ProbeHandler.upload_shanks``), with the results reported in :meth:`_on_upload_finished`.
         """
         if self._load_thread is not None:
@@ -1421,7 +1726,7 @@ class AlignmentGUIController:
             return
 
         # Save the approved shanks off the GUI thread.
-        self._run_in_thread(
+        self.run_in_thread(
             self.model.upload_shanks,
             approved,
             on_finished=self._on_upload_finished,
@@ -1479,6 +1784,7 @@ class AlignmentGUIController:
         Called when the fit button or Enter is pressed.
         """
         self.apply_fit(self.scale_hist_data, shanks=[self.model.selected_shank])
+        self.log_fit()
 
     def next_button_pressed(self) -> None:
         """
@@ -1489,6 +1795,7 @@ class AlignmentGUIController:
         """
         if self.model.next_idx():
             self.update_plots(shanks=[self.model.selected_shank])
+            self.log_fit()
 
     def prev_button_pressed(self) -> None:
         """
@@ -1498,6 +1805,23 @@ class AlignmentGUIController:
         """
         if self.model.prev_idx():
             self.update_plots(shanks=[self.model.selected_shank])
+            self.log_fit()
+
+    def log_fit(self) -> None:
+        """
+        Log the reference line pairs of the selected shank's fit, with the offset between them.
+
+        Gives the coordinates plotted in the Fit figure more precisely than the figure can show.
+        The configurations of a shank share one alignment, so it is logged once.
+        """
+        shank = self.model.selected_shank
+        model = self.shank_items[shank][self.model.default_config].model
+        logger.info(
+            'Index %d of %d, %s',
+            self.model.current_idx,
+            self.model.total_idx,
+            format_fit(shank, model.feature, model.track),
+        )
 
     def reset_button_pressed(self) -> None:
         """
@@ -1699,7 +2023,9 @@ class AlignmentGUIController:
         """
         self.set_yaxis_range('fig_hist')
         self.set_yaxis_range('fig_hist_ref')
-        if self.show_feature:
+        if self.show_predictions:
+            self.reset_prediction_axis()
+        elif self.show_feature:
             self.set_yaxis_range('fig_feature')
             self.set_xaxis_range('fig_feature')
         else:
@@ -1710,6 +2036,13 @@ class AlignmentGUIController:
             self.reset_slice_axis(configs=[self.model.default_config])
         else:
             self.reset_slice_axis(configs=[self.model.selected_config])
+
+    @shank_loop
+    def reset_prediction_axis(self, items: ShankController, **kwargs) -> None:
+        """Reset the y-axis of the all predictions view, which all its figures follow."""
+        figs = list(items.view.fig_preds.values())
+        if figs:
+            items.view.set_yaxis_range(figs[0])
 
     @shank_loop
     def reset_slice_axis(self, items: ShankController, **kwargs) -> None:

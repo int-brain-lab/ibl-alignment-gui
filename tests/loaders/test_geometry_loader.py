@@ -596,7 +596,6 @@ class TestGeometryLoader(unittest.TestCase):
     """Test the GeometryLoader class"""
 
     def setUp(self):
-
         self.mock_meta = Bunch(x=np.array([0, 10]), y=np.array([0, 10]), shank=np.array([0, 0]))
         self.mock_channels = Bunch(
             localCoordinates=np.array([[0, 0], [10, 10]]), rawInd=np.array([0, 1])
@@ -836,6 +835,20 @@ class TestGeometryLoaderLocal(unittest.TestCase):
             mock_data.side_effect = ALFObjectNotFound
             data = self.loader.load_channels()
             self.assertIsNone(data)
+
+
+class TestGeometryWithoutSpikeSorting(unittest.TestCase):
+    """Without spike sorting, the geometry comes from the raw data's metadata alone."""
+
+    def test_no_channels(self):
+        loader = GeometryLoaderLocal(DatasetPaths(processed_ephys=Path('/proc')))
+        self.assertIsNone(loader.load_channels())
+
+    def test_no_channels_and_no_metadata(self):
+        loader = GeometryLoaderLocal(DatasetPaths(processed_ephys=Path('/proc')))
+        with self.assertRaises(ValueError) as ctx:
+            loader.get_geometry()
+        self.assertIn('raw_ephys', str(ctx.exception))
 
 
 class TestArrangeChannelsIntoBanks(unittest.TestCase):

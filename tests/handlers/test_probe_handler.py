@@ -1,9 +1,17 @@
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from ibl_alignment_gui.handlers.probe_handler import ProbeHandlerONE
+from ibl_alignment_gui.handlers.probe_handler import (
+    ProbeHandler,
+    ProbeHandlerLocalYaml,
+    ProbeHandlerONE,
+    find_features_file,
+)
 
 
 def make_insertion(subject: str, name: str, pid: str) -> dict:
@@ -74,6 +82,119 @@ class TestResolvePid(unittest.TestCase):
         # Act / Assert
         with self.assertRaises(ValueError):
             self.model.resolve_pid('pid-other')
+
+
+class TestHasFeatures(unittest.TestCase):
+    """The session has features when any loaded shank has them."""
+
+    def handler(self, loaded=True, exists=True):
+        return MagicMock(data_loaded=loaded, raw_data={'features': {'exists': exists}})
+
+    def has_features(self, *handlers):
+        shanks = {f'shank_{i}': {'default': h} for i, h in enumerate(handlers)}
+        return ProbeHandler.has_features.fget(SimpleNamespace(shanks=shanks))
+
+    def test_has_features(self):
+        self.assertTrue(self.has_features(self.handler(exists=False), self.handler()))
+        self.assertFalse(self.has_features(self.handler(exists=False)))
+        self.assertFalse(self.has_features(self.handler(loaded=False)))
+        self.assertFalse(self.has_features())
+
+
+class TestHasSpikeSorting(unittest.TestCase):
+    """The session has spike sorting when any loaded shank has spikes."""
+
+    def has_spike_sorting(self, *exists):
+        shanks = {
+            f'shank_{i}': {
+                'default': MagicMock(data_loaded=True, raw_data={'spikes': {'exists': e}})
+            }
+            for i, e in enumerate(exists)
+        }
+        return ProbeHandler.has_spike_sorting.fget(SimpleNamespace(shanks=shanks))
+
+    def test_has_spike_sorting(self):
+        self.assertTrue(self.has_spike_sorting(False, True))
+        self.assertFalse(self.has_spike_sorting(False))
+        self.assertFalse(self.has_spike_sorting())
+
+
+class TestFindFeaturesFile(unittest.TestCase):
+    """A data folder's features file is the one parquet file with 'features' in its name."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp_dir.name)
+        # Other parquet files in the folder are not features files
+        self.folder.joinpath('clusters.metrics.pqt').touch()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_none(self):
+        self.assertIsNone(find_features_file(self.folder))
+
+    def test_one(self):
+        for name in ('ephys_atlas_features_2026_W42.pqt', 'features.parquet'):
+            with self.subTest(name=name):
+                path = self.folder.joinpath(name)
+                path.touch()
+                self.assertEqual(find_features_file(self.folder), path)
+                path.unlink()
+
+    def test_several(self):
+        self.folder.joinpath('features_a.pqt').touch()
+        self.folder.joinpath('features_b.pqt').touch()
+        with self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs:
+            self.assertIsNone(find_features_file(self.folder))
+        self.assertIn('features_a.pqt', logs.output[0])
+
+
+class TestProbeHandlerLocalYaml(unittest.TestCase):
+    """The configurations of a session yaml are offered by the handler."""
+
+    PROBE = (
+        '      probe_00:\n'
+        '        datasets:\n'
+        '          spike_sorting:\n'
+        '            path: {name}/spike_sorting\n'
+        '          output:\n'
+        '            path: {name}/alignment\n'
+    )
+
+    def setUp(self):
+        # The yaml's root is the temporary folder, so its paths are absolute on every platform
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def write_yaml(self, body: str) -> Path:
+        path = self.root.joinpath('session.yaml')
+        path.write_text(f'path: {self.root.as_posix()}\n\n{body}')
+        return path
+
+    def test_single_config(self):
+        yaml_file = self.write_yaml('probes:\n' + self.PROBE.format(name='single')[2:])
+        model = ProbeHandlerLocalYaml(yaml_file)
+        self.assertEqual(model.configs, ['default'])
+        self.assertEqual(model.possible_configs, ['default'])
+        self.assertEqual(model.selected_config, 'default')
+
+    def test_two_configs(self):
+        yaml_file = self.write_yaml(
+            'configurations:\n'
+            '  dense:\n    probes:\n'
+            + self.PROBE.format(name='dense')
+            + '  sparse:\n    probes:\n'
+            + self.PROBE.format(name='sparse')
+        )
+        model = ProbeHandlerLocalYaml(yaml_file)
+        self.assertEqual(model.configs, ['dense', 'sparse'])
+        self.assertEqual(model.possible_configs, ['dense', 'sparse', 'both'])
+        self.assertEqual(model.default_config, 'dense')
+        self.assertEqual(model.non_default_config, 'sparse')
+        self.assertEqual(model.selected_config, 'dense')
+        self.assertEqual(set(model.data_paths), {'dense', 'sparse'})
 
 
 if __name__ == '__main__':

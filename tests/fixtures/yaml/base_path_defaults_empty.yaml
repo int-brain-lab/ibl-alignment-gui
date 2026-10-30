@@ -3,6 +3,8 @@ path: /mnt/data
 defaults:
   spike_sorting:
     path: pykilosort
+  output:
+    path: /mnt/output
 
 probes:
   probe_00:

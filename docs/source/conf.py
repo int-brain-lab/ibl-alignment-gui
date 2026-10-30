@@ -48,8 +48,38 @@ extensions = [
     'sphinx_togglebutton',
     'sphinx_copybutton',
     'sphinx_design',
+    'sphinx_reredirects',
 ]
 source_suffix = ['.rst', '.md']
+
+# -- MyST (Markdown) settings ------------------------------------------------
+# colon_fence lets sphinx-design cards, tabs and dropdowns be written as ::: blocks.
+myst_enable_extensions = [
+    'attrs_inline',
+    'colon_fence',
+    'deflist',
+    'fieldlist',
+    'substitution',
+]
+myst_heading_anchors = 3
+# Markdown counterpart of |version_code| in rst_prolog, used as {{ version_code }}.
+myst_substitutions = {
+    'version_code': f'`{version}`',
+}
+
+# -- Redirects ---------------------------------------------------------------
+# Old page -> new page, so links to the previous layout keep working.
+redirects = {
+    'getting_started': 'tutorials/01_first_alignment.html',
+    'usage': 'reference/session_yaml.html',
+    'multi_shank': 'how-to/configure/index.html',
+    'data_preparation': 'how-to/prepare-data/index.html',
+    'datasets': 'reference/input_datasets.html',
+    'plugins': 'reference/plugins.html',
+    'shortcuts': 'reference/shortcuts.html',
+    'channel_prediction': 'how-to/channel-prediction/index.html',
+    'developer_guide': 'contributing/developer_guide.html',
+}
 
 
 # Napoleon settings (for your NumPy-style docstrings)
@@ -75,6 +105,7 @@ exclude_patterns = []
 #
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
+html_css_files = ['custom.css']
 html_theme_options = {
     'collapse_navigation': True,
     'sticky_navigation': True,
@@ -97,9 +128,10 @@ autodoc_default_options = {
     'show-inheritance': True,
 }
 
-# The optional Allen/DocDB stack is not installed for the docs build; mocking it lets the
-# backends.allen modules be imported and documented.
+# The optional extras are not installed for the docs build; mocking them lets the modules that
+# import them be imported and documented, and lets the type hints that name them resolve.
 autodoc_mock_imports = [
+    # allen extra: still imported by shared modules, although Allen mode is not documented
     'aind_data_access_api',
     'aind_data_schema',
     'aind_data_schema_models',
@@ -107,16 +139,40 @@ autodoc_mock_imports = [
     'aws_requests_auth',
     'boto3',
     'ants',
+    # ibl extra
+    'brainbox',
+    'ibllib',
+    'phylib',
+    # ephysatlas extra
+    'ephysatlas',
 ]
+
+# Allen/Code Ocean mode is not documented, so its classes and functions in shared modules are
+# left out of the API reference. Its own modules are excluded in custom-module-template.rst.
+_ALLEN_MEMBERS = {
+    'AlignmentLoaderDocDB',
+    'AlignmentUploaderDocDB',
+    'AnatomicalSliceLoader',
+    'ImageSpacePaths',
+    'ProbeHandlerAllenYaml',
+    'build_anatomical_atlas',
+    'has_allen',
+    'launch_app_allen',
+}
+
 
 # Qt signals are class attributes whose docstring comes from PyQt (``pyqtSignal(*types, ...)``),
 # which is not valid reStructuredText. They carry no useful documentation, so skip them.
-def _skip_qt_signals(app, what, name, obj, skip, options):
+# Both checks share one handler: autodoc uses the first handler that returns a value, so a
+# second handler connected to the same event would never be called.
+def _skip_member(app, what, name, obj, skip, options):
     if type(obj).__name__ in ('pyqtSignal', 'pyqtBoundSignal'):
+        return True
+    if name in _ALLEN_MEMBERS:
         return True
     return skip
 
 
 def setup(app):
     """Register the sphinx extension hooks for this project."""
-    app.connect('autodoc-skip-member', _skip_qt_signals)
+    app.connect('autodoc-skip-member', _skip_member)

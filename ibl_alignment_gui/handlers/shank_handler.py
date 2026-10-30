@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from ibl_alignment_gui.handlers.alignment_handler import AlignmentHandler
@@ -8,6 +10,9 @@ from ibl_alignment_gui.loaders.plot_loader import (
     ScatterData,
 )
 from iblutil.util import Bunch
+
+if TYPE_CHECKING:
+    from ibl_alignment_gui.loaders.data_loader import FeatureLoader
 
 
 class ShankHandler:
@@ -79,6 +84,25 @@ class ShankHandler:
         self.hist_data, self.hist_data_ref, self.scale_data = (
             self.align_handle.get_scaled_histology()
         )
+
+    def set_mapping(self, mapping: str) -> None:
+        """
+        Show the histology regions in an atlas mapping.
+
+        Parameters
+        ----------
+        mapping : str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'.
+        """
+        self.align_handle.hist_mapping = mapping
+
+    def get_mapping_regions(self, *args, **kwargs) -> tuple:
+        """See :meth:`AlignmentHandler.get_mapping_regions` for details."""
+        return self.align_handle.get_mapping_regions(*args, **kwargs)
+
+    def get_reference_histology(self, *args, **kwargs) -> Bunch:
+        """See :meth:`AlignmentHandler.get_reference_histology` for details."""
+        return self.align_handle.get_reference_histology(*args, **kwargs)
 
     def feature2track_lin(
         self, depths: np.ndarray, feature: np.ndarray, track: np.ndarray
@@ -303,10 +327,7 @@ class ShankHandler:
         self.raw_data['raw_lf_snippets'] = self.loaders['ephys'].load_lf_snippets()
 
         # Load in the features data
-        if self.loaders.get('features', None) is not None:
-            self.raw_data['features'] = self.loaders['features'].load_features(shank_sites)
-        else:
-            self.raw_data['features'] = Bunch(exists=False)
+        self.load_ephys_features(self.loaders.get('features'))
 
         # Create the plot data using the raw data
         self.loaders['plots'].get_data(self.raw_data, shank_sites)
@@ -337,6 +358,30 @@ class ShankHandler:
             self.loaders['plots'].slice_plots = Bunch()
 
         self.data_loaded = True
+
+    def load_ephys_features(self, loader: 'FeatureLoader | None') -> Bunch:
+        """Load this shank's ephys-atlas features with ``loader`` and keep them.
+
+        A features file may hold every channel of a multi-shank probe; ``loader`` splits it down
+        to this shank's channels.
+
+        Parameters
+        ----------
+        loader : FeatureLoader or None
+            The features to use, e.g. the session's or a features file chosen by the user; None
+            for no features.
+
+        Returns
+        -------
+        Bunch
+            The features, as stored in ``raw_data['features']`` (``exists`` False when none).
+        """
+        if loader is None:
+            self.raw_data['features'] = Bunch(exists=False)
+        else:
+            shank_sites = self.loaders['geom'].get_sites_for_shank(self.shank_idx)
+            self.raw_data['features'] = loader.load_features(shank_sites)
+        return self.raw_data['features']
 
     def load_plots(self):
         """Load all the plot data for the current shank."""

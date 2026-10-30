@@ -19,7 +19,7 @@ class QRangeSlider(QtWidgets.QSlider):
         maximum and minimum, as is a normal slider, but instead of having a
         single slider value, there are 2 slider values.
 
-        This class emits the same signals as the QSlider base class, with the 
+        This class emits the same signals as the QSlider base class, with the
         exception of valueChanged
     """
 

@@ -318,7 +318,7 @@ class AdaptedAxisItem(pg.AxisItem):
 def replace_axis(plot_item: pg.PlotItem, orientation: str = 'left', pos: tuple = (2, 0)) -> None:
     """
     Replace the axis of a PlotItem with an AdaptedAxisItem.
-    
+
     Parameters
     ----------
     plot_item: pg.PlotItem

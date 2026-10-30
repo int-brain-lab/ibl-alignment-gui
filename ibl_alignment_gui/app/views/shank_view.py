@@ -1,4 +1,5 @@
 import random
+import textwrap
 
 import numpy as np
 import pyqtgraph as pg
@@ -27,6 +28,8 @@ class ShankView:
         The index of the shank
     config:
         The config of the shank
+    prediction_keys: list of str, optional
+        The channel prediction options, each shown on its own figure in the all predictions view
     """
 
     COLOURS = ['#cc0000', '#6aa84f', '#1155cc', '#a64d79']
@@ -49,10 +52,16 @@ class ShankView:
                 }
                 """,
     }
+    # Characters per line, and font size, of the title above a prediction figure
+    PRED_TITLE_WIDTH = 24
+    PRED_TITLE_SIZE = '8pt'
 
-    def __init__(self, name: str, index: int, config: str):
+    def __init__(
+        self, name: str, index: int, config: str, prediction_keys: list[str] | tuple = ()
+    ):
         self.name: str = name
         self.index: int = index
+        self.prediction_keys: list[str] = list(prediction_keys)
         self.config: str = config
 
         # Set colour for reference lines and points
@@ -117,6 +126,13 @@ class ShankView:
         self.fig_feature_label: pg.PlotItem | None = None
         self.feature_items: list[pg.ImageItem] = []
 
+        # Plot items for the prediction plots, keyed by their figure
+        self.fig_pred: pg.PlotItem | None = None
+        self.fig_pred_label: pg.PlotItem | None = None
+        self.fig_preds: dict[str, pg.PlotItem] = {}
+        self.pred_labels: dict[pg.PlotItem, pg.PlotItem] = {}
+        self.pred_items: dict[pg.PlotItem, list] = {}
+
         # Plot items for the slice plot
         self.slice_lines: list[pg.PlotCurveItem] = []
         self.slice_plot: pg.ImageItem = None
@@ -153,6 +169,41 @@ class ShankView:
         self.create_histology_plots()
         self.create_slice_items()
         self.create_fit_items()
+
+    @property
+    def feature_figs(self) -> list[pg.PlotItem]:
+        """
+        Return the ephys figures, each of which holds a copy of every feature reference line.
+
+        Returns
+        -------
+        list of pg.PlotItem
+            The ephys figures, in the order of each entry of ``lines_features``.
+        """
+        return [
+            self.fig_img,
+            self.fig_line,
+            self.fig_probe,
+            self.fig_feature,
+            *self.prediction_figs,
+        ]
+
+    @property
+    def prediction_figs(self) -> list[pg.PlotItem]:
+        """
+        Return the figures that show the channel predictions.
+
+        Returns
+        -------
+        list of pg.PlotItem
+            The prediction figures.
+        """
+        return [self.fig_pred, *self.fig_preds.values()]
+
+    def use_prediction_coords(self) -> None:
+        """Map mouse clicks on the ephys area through the first figure of all predictions view."""
+        self.ephys_plot = next(iter(self.fig_preds.values())).getViewBox().childGroup
+        self.y_scale = 1
 
     def init_reference_line_arrays(self) -> None:
         """Initialise arrays used to keep track of reference lines and points."""
@@ -307,6 +358,36 @@ class ShankView:
         self.fig_feature_label = self._create_plot_cb_item(max_height=70)
         set_axis(self.fig_feature_label, 'left', pen='w', label=' ')
 
+        # Channel prediction plot, and one per prediction for the all predictions view
+        self.fig_pred, self.fig_pred_label = self._create_prediction_plot()
+        self.fig_preds = {key: self._create_prediction_plot()[0] for key in self.prediction_keys}
+
+    def _create_prediction_plot(self) -> tuple[pg.PlotItem, pg.PlotItem]:
+        """
+        Create a figure for channel predictions, with its region labels and a title above it.
+
+        Returns
+        -------
+        fig: pg.PlotItem
+            The prediction figure
+        label: pg.PlotItem
+            The figure above it that shows its title
+        """
+        fig = self._create_plot_item(mouse_enabled=(False, True), pen='w')
+        replace_axis(fig, orientation='right', pos=(2, 2))
+        axis = set_axis(fig, 'right', pen=None)
+        axis.setWidth(0)
+        axis.setStyle(tickTextOffset=-60)
+        self.probe_tip_lines.append(fig.addLine(y=self.probe_tip, pen=self.kpen_dot, z=50))
+        self.probe_top_lines.append(fig.addLine(y=self.probe_top, pen=self.kpen_dot, z=50))
+        label = self._create_plot_cb_item(max_height=70)
+        set_axis(label, 'left', pen='w', label=' ')
+
+        self.pred_labels[fig] = label
+        self.pred_items[fig] = []
+
+        return fig, label
+
     def create_histology_plots(self) -> None:
         """Create the plots the histology panels."""
         # Histology plot that updates with alignment
@@ -389,9 +470,12 @@ class ShankView:
     def clear_histology(self, fig: pg.PlotItem):
         """Clear items from the histology plot."""
         fig.clear()
-        self.hist_regions = []
+        if fig is self.fig_hist:
+            self.hist_regions = []
 
-    def plot_histology(self, fig: pg.PlotItem, data: Bunch, ax: str = 'left') -> None:
+    def plot_histology(
+        self, fig: pg.PlotItem, data: Bunch, ax: str = 'left', boundaries: bool = True
+    ) -> None:
         """
         Plot histology regions on the given figure.
 
@@ -406,6 +490,9 @@ class ShankView:
         ax : str, default='left'
             Orientation of the axis on which to add labels. 'left' for the main histology
             figure (fig_hist), and 'right' for the reference figure (fig_hist_ref).
+        boundaries : bool, default=True
+            Draw a white line at each region boundary. Off for continuous values drawn as
+            many short segments (e.g. a colour-coded confidence along the probe).
         """
         self.clear_histology(fig)
 
@@ -416,63 +503,154 @@ class ShankView:
         set_axis(fig, 'bottom', pen='w', label=' ')
 
         # Plot regions and boundaries
-        for colour, region in zip(data.colour, data.region, strict=False):
+        items, regions = self._region_items(data, boundaries=boundaries)
+        for item in items:
+            fig.addItem(item)
+        # Keep track of each histology LinearRegionItem for hover interaction
+        if fig is self.fig_hist:
+            self.hist_regions.extend(regions)
+
+        # Add probe limits as dotted lines
+        fig.addItem(pg.InfiniteLine(pos=self.probe_tip, angle=0, pen=self.kpen_dot))
+        fig.addItem(pg.InfiniteLine(pos=self.probe_top, angle=0, pen=self.kpen_dot))
+
+        self.set_yaxis_range(fig)
+
+    @staticmethod
+    def _region_items(
+        data: Bunch, boundaries: bool = True
+    ) -> tuple[list[pg.GraphicsObject], list[pg.LinearRegionItem]]:
+        """
+        Create the items that draw brain regions along the probe.
+
+        Parameters
+        ----------
+        data : Bunch
+            A Bunch object containing the regions, their axis labels and colours.
+        boundaries : bool, default=True
+            Draw a white line at each region boundary.
+
+        Returns
+        -------
+        items: list of pg.GraphicsObject
+            The region and boundary items, to add to a figure.
+        regions: list of pg.LinearRegionItem
+            The region items, each with the acronym of its region as ``region_name`` when the
+            axis labels name each region.
+        """
+        names = (
+            data.axis_label[:, 1]
+            if len(data.axis_label) == len(data.region)
+            else [None] * len(data.region)
+        )
+        items, regions = [], []
+        for colour, region, name in zip(data.colour, data.region, names, strict=False):
             item = pg.LinearRegionItem(
                 values=region,
                 orientation=pg.LinearRegionItem.Horizontal,
                 brush=QtGui.QColor(*colour),
                 movable=False,
             )
-            fig.addItem(item)
-            fig.addItem(pg.InfiniteLine(pos=region[0], angle=0, pen='w'))
-            # Keep track of each histology LinearRegionItem for hover interaction
-            self.hist_regions.append(item)
+            item.region_name = name
+            items.append(item)
+            regions.append(item)
+            if boundaries:
+                items.append(pg.InfiniteLine(pos=region[0], angle=0, pen='w'))
+            else:
+                for line in item.lines:  # the region item's own edge lines, too
+                    line.setPen(pg.mkPen(None))
 
         # Add additional boundary for final region
-        fig.addItem(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen='w'))
+        if boundaries:
+            items.append(pg.InfiniteLine(pos=data.region[-1][1], angle=0, pen='w'))
 
-        # Add probe limits as dotted lines
-        fig.addItem(pg.InfiniteLine(pos=self.probe_tip, angle=0, pen=self.kpen_dot))
-        fig.addItem(pg.InfiniteLine(pos=self.probe_top, angle=0, pen=self.kpen_dot))
+        return items, regions
 
-        self.set_yaxis_range(fig)
-
-    def plot_histology_cumulative(self, fig: pg.PlotItem, data: Bunch, ax: str = 'right') -> None:
+    @staticmethod
+    def _cumulative_items(data: Bunch) -> list[pg.FillBetweenItem]:
         """
-        Plot cumulative histology probabilities on the given figure.
+        Create the items that draw cumulative region probabilities along the probe.
 
         Parameters
         ----------
-        fig : pg.PlotItem
-            The figure on which to plot the histology regions.
         data : Bunch
-            A Bunch object containing the histology data.
-        ax : str, default='left'
-            Orientation of the axis on which to add labels. 'left' for the main histology
-            figure (fig_hist), and 'right' for the reference figure (fig_hist_ref).
-        """
-        self.clear_histology(fig)
-        axis = fig.getAxis(ax)
-        axis.setTicks([])
-        set_axis(fig, 'bottom', pen='w', label=' ')
+            A Bunch object containing the cumulative ``probability`` (channels x classes), the
+            ``depths`` of the channels and the ``colours`` of the classes.
 
+        Returns
+        -------
+        list of pg.FillBetweenItem
+            One filled band per class, to add to a figure.
+        """
         # Insert a column of zeros at the start for cumulative plotting
         values = np.c_[np.zeros(data.probability.shape[0]), data.probability]
 
-        for i, colour in enumerate(data.colours):
-            item = pg.FillBetweenItem(
+        return [
+            pg.FillBetweenItem(
                 pg.PlotCurveItem(values[:, i + 1], data.depths),
                 pg.PlotCurveItem(values[:, i], data.depths),
                 brush=pg.mkBrush(colour),
             )
-            fig.addItem(item)
+            for i, colour in enumerate(data.colours)
+        ]
 
-        # Add probe limits as dotted lines
-        fig.addItem(pg.InfiniteLine(pos=self.probe_tip, angle=0, pen=self.kpen_dot))
-        fig.addItem(pg.InfiniteLine(pos=self.probe_top, angle=0, pen=self.kpen_dot))
+    def clear_prediction(
+        self, fig: pg.PlotItem, title: str | None = None, message: str | None = None
+    ) -> None:
+        """
+        Clear a prediction figure, keeping its reference and probe lines.
+
+        Parameters
+        ----------
+        fig : pg.PlotItem
+            The prediction figure to clear.
+        title : str, optional
+            The title to show above the figure.
+        message : str, optional
+            A message to show in the figure instead of a prediction.
+        """
+        self.pred_items[fig] = self.remove_items(fig, self.pred_items[fig])
+        fig.getAxis('right').setTicks([[]])
+        self.set_prediction_title(fig, title)
+        set_axis(fig, 'bottom', pen='w', label=' ')
+        self.set_xaxis_range(fig, [0, 1])
+
+        if message:
+            text = pg.TextItem(message, color='k', anchor=(0.5, 0.5), angle=90)
+            text.setPos(0.5, np.mean(self.yrange))
+            fig.addItem(text)
+            self.pred_items[fig].append(text)
+
+    def plot_prediction(self, fig: pg.PlotItem, data: Bunch, title: str) -> None:
+        """
+        Plot a channel prediction on a prediction figure.
+
+        The prediction is either brain regions along the probe, drawn as in the histology plots,
+        or cumulative region probabilities (``probability`` in ``data``), drawn as stacked bands.
+
+        Parameters
+        ----------
+        fig : pg.PlotItem
+            The prediction figure on which to plot.
+        data : Bunch
+            A Bunch object containing the prediction.
+        title : str
+            The title to show above the figure.
+        """
+        self.clear_prediction(fig, title)
+
+        if 'probability' in data:
+            items = self._cumulative_items(data)
+        else:
+            items, _ = self._region_items(data, boundaries=data.get('boundaries', True))
+            axis = fig.getAxis('right')
+            axis.setTicks([data.axis_label])
+            axis.setZValue(10)
+        for item in items:
+            fig.addItem(item)
+        self.pred_items[fig] = items
 
         self.set_yaxis_range(fig)
-        self.set_xaxis_range(fig, [0, 1])
 
     def clear_scale_factor(self):
         """Clear items from the scale factor plot."""
@@ -1003,10 +1181,11 @@ class ShankView:
             Whether to show the labels or not.
         """
         pen = 'k' if show else None
-        for ax in [self.ax_hist, self.ax_hist_ref]:
+        figs = [self.fig_hist, self.fig_hist_ref, *self.prediction_figs]
+        for ax in [self.ax_hist, self.ax_hist_ref, *(fig.getAxis('right') for fig in figs[2:])]:
             ax.setPen(pen)
             ax.setTextPen(pen)
-        for fig in [self.fig_hist, self.fig_hist_ref]:
+        for fig in figs:
             fig.update()
 
     def toggle_channels(self, fig_slice: pg.ViewBox, show: bool) -> None:
@@ -1104,6 +1283,26 @@ class ShankView:
         else:
             set_axis(self.fig_feature_label, 'top', pen='w', label=' ', ticks=False)
 
+    def set_prediction_title(self, fig: pg.PlotItem, title: str | None) -> None:
+        """
+        Update the title above a prediction figure.
+
+        Parameters
+        ----------
+        fig : pg.PlotItem
+            The prediction figure.
+        title : str or None
+            The title to display, or None for none.
+        """
+        label = self.pred_labels[fig]
+        if title:
+            # The prediction figures are narrow: wrap long titles over more lines, in small text
+            title = '<br>'.join(textwrap.wrap(title, width=self.PRED_TITLE_WIDTH))
+            axis = set_axis(label, 'top', pen='k', ticks=False)
+            axis.setLabel(title, **{'font-size': self.PRED_TITLE_SIZE})
+        else:
+            set_axis(label, 'top', pen='w', label=' ', ticks=False)
+
     def match_linear_region(self, hover_item: pg.LinearRegionItem) -> int | None:
         """
         Find the index of a hovered linear region within the list of scale regions.
@@ -1166,7 +1365,7 @@ class ShankView:
         if idx[0].size == 0:
             return None, None
         line_idx = idx[0][0]
-        fig_idx = np.setdiff1d(np.arange(0, 4), idx[1][0])  # indices of two other plots
+        fig_idx = np.setdiff1d(np.arange(len(self.feature_figs)), idx[1][0])  # the other plots
         return line_idx, fig_idx
 
     def match_track_line(self, track_line: pg.InfiniteLine) -> int | None:
@@ -1224,9 +1423,9 @@ class ShankView:
         self.fig_hist.addItem(line_track)
         self.lines_tracks.append(line_track)
 
-        # Reference lines on image, line and probe figures (feature)
+        # Reference lines on each ephys figure (feature)
         line_features = []
-        for fig in [self.fig_img, self.fig_line, self.fig_probe, self.fig_feature]:
+        for fig in self.feature_figs:
             line_feature = pg.InfiniteLine(pos=pos, angle=0, pen=pen, movable=True)
             line_feature.setZValue(100)
             fig.addItem(line_feature)
@@ -1284,10 +1483,8 @@ class ShankView:
         line_idx: int
             The index of the reference line to remove
         """
-        self.fig_img.removeItem(self.lines_features[line_idx][0])
-        self.fig_line.removeItem(self.lines_features[line_idx][1])
-        self.fig_probe.removeItem(self.lines_features[line_idx][2])
-        self.fig_feature.removeItem(self.lines_features[line_idx][3])
+        for fig, line in zip(self.feature_figs, self.lines_features[line_idx], strict=True):
+            fig.removeItem(line)
         self.fig_hist.removeItem(self.lines_tracks[line_idx])
 
     def delete_reference_line_and_point(self, line_idx: int) -> None:
@@ -1320,9 +1517,8 @@ class ShankView:
         fig_idx: list
             The index of the figures where the feature line position needs to be updated.
         """
-        self.lines_features[line_idx][fig_idx[0]].setPos(feature_line.value())
-        self.lines_features[line_idx][fig_idx[1]].setPos(feature_line.value())
-        self.lines_features[line_idx][fig_idx[2]].setPos(feature_line.value())
+        for i in fig_idx:
+            self.lines_features[line_idx][i].setPos(feature_line.value())
         self.points[line_idx].setData(
             x=[self.lines_features[line_idx][0].pos().y()],
             y=[self.lines_tracks[line_idx].pos().y()],
@@ -1363,17 +1559,13 @@ class ShankView:
     def remove_reference_lines_from_display(self) -> None:
         """Remove all reference lines from the respective plots."""
         for line_feature, line_track in zip(self.lines_features, self.lines_tracks, strict=False):
-            self.fig_img.removeItem(line_feature[0])
-            self.fig_line.removeItem(line_feature[1])
-            self.fig_probe.removeItem(line_feature[2])
-            self.fig_feature.removeItem(line_feature[3])
+            for fig, line in zip(self.feature_figs, line_feature, strict=True):
+                fig.removeItem(line)
             self.fig_hist.removeItem(line_track)
 
     def add_reference_lines_to_display(self) -> None:
         """Add all reference lines to the respective plots."""
         for line_feature, line_track in zip(self.lines_features, self.lines_tracks, strict=False):
-            self.fig_img.addItem(line_feature[0])
-            self.fig_line.addItem(line_feature[1])
-            self.fig_probe.addItem(line_feature[2])
-            self.fig_feature.addItem(line_feature[3])
+            for fig, line in zip(self.feature_figs, line_feature, strict=True):
+                fig.addItem(line)
             self.fig_hist.addItem(line_track)

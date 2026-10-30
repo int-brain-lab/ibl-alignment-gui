@@ -20,15 +20,12 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     ----------
     offline: bool
         Whether to run in offline mode (local files) or online mode (ONE/Alyx)
-    config: bool
-        Whether multiple configs are to be used
     allen: bool
         Whether to run the Allen/Code Ocean (anatomical) workflow, which adds a DocDB checkbox
     """
 
-    def __init__(self, offline: bool = False, config: bool = False, allen: bool = False):
+    def __init__(self, offline: bool = False, allen: bool = False):
         super().__init__()
-        self.config = config
         self.allen = allen
 
         self.resize(1600, 800)
@@ -38,7 +35,7 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         # Create custom widgets that will be added to the main window
         self.button_widgets = custom_widgets.ButtonWidget(parent=self)
         self.selection_widgets = custom_widgets.SelectionWidget(
-            offline=offline, config=self.config, allen=self.allen, parent=self
+            offline=offline, allen=self.allen, parent=self
         )
         self.menu_widgets = custom_widgets.MenuWidget(self)
         self.setMenuBar(self.menu_widgets)
@@ -118,6 +115,8 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         default_config: str,
         non_default_config: str,
         feature_view: bool = False,
+        prediction_view: bool = False,
+        all_predictions: bool = False,
     ) -> list[QtWidgets.QWidget]:
         """
         Initialize the shank and slice tab widgets with the given shank items.
@@ -134,6 +133,10 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             The non-default configuration.
         feature_view: bool
             Whether to display the ephys plot as a feature view or not.
+        prediction_view: bool
+            Whether to display the prediction plot alongside the ephys plots or not.
+        all_predictions: bool
+            Whether to display all the prediction plots side by side instead of the ephys plots.
 
         Returns
         -------
@@ -149,23 +152,34 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
         for i, shank in enumerate(shank_items):
             # Create the shank panel depending on the configuration selected
             if selected_config == 'both':
-                if feature_view:
+                if all_predictions:
+                    fig_area = custom_widgets.DualConfigPredictionWidget(
+                        shank_items[shank][default_config].view,
+                        shank_items[shank][non_default_config].view,
+                    )
+                elif feature_view:
                     fig_area = custom_widgets.DualConfigFeatureWidget(
                         shank_items[shank][default_config].view,
                         shank_items[shank][non_default_config].view,
+                        prediction=prediction_view,
                     )
                 else:
                     fig_area = custom_widgets.DualConfigWidget(
                         shank_items[shank][default_config].view,
                         shank_items[shank][non_default_config].view,
+                        prediction=prediction_view,
                     )
+            elif all_predictions:
+                fig_area = custom_widgets.SingleConfigPredictionWidget(
+                    shank_items[shank][selected_config].view
+                )
             elif feature_view:
                 fig_area = custom_widgets.SingleConfigFeatureWidget(
-                    shank_items[shank][selected_config].view
+                    shank_items[shank][selected_config].view, prediction=prediction_view
                 )
             else:
                 fig_area = custom_widgets.SingleConfigWidget(
-                    shank_items[shank][selected_config].view
+                    shank_items[shank][selected_config].view, prediction=prediction_view
                 )
 
             # Add the fit items from each shank to the fit plot
@@ -287,6 +301,51 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
             tab, callback, options, set_checked=set_checked
         )
 
+    def set_menu_enabled(self, tab: str, enabled: bool, reason: str = '') -> None:
+        """
+        Enable or grey out a menu tab.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        enabled: bool
+            Whether the tab can be opened
+        reason: str
+            Why the tab is greyed out, shown when the mouse rests on it
+        """
+        menu = self.menu_widgets.tabs[tab]['menu']
+        menu.setEnabled(enabled)
+        menu.menuAction().setToolTip('' if enabled else reason)
+
+    def set_menu_visible(self, tab: str, visible: bool) -> None:
+        """
+        Show or hide a menu tab in the menu bar.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        visible: bool
+            Whether the tab is shown
+        """
+        self.menu_widgets.tabs[tab]['menu'].menuAction().setVisible(visible)
+
+    def check_menu_option(self, tab: str, option: str) -> None:
+        """
+        Check an action in an action group stored in the menubar, without triggering it.
+
+        Parameters
+        ----------
+        tab: str
+            The name of the tab
+        option: str
+            The name of the option in the tab to check
+        """
+        action = self.menu_widgets.find_actions(option, self.menu_widgets.tabs[tab]['group'])
+        if action is not None:
+            action.setChecked(True)
+
     def add_shortcuts_to_menu(self, tab: str, options: dict) -> None:
         """See :meth:`MenuWidget.populate_non_exclusive_tab` for details."""
         return self.menu_widgets.populate_non_exclusive_tab(tab, options)
@@ -373,6 +432,27 @@ class AlignmentGUIView(QtWidgets.QMainWindow):
     # --------------------------------------------------------------------------------------------
     # Selection widget
     # --------------------------------------------------------------------------------------------
+    def show_config_dropdown(self, configs: list[str] | None) -> None:
+        """
+        Offer the configurations of the loaded session in the configuration dropdown.
+
+        Parameters
+        ----------
+        configs: list of str or None
+            The configurations to offer, or None to hide the dropdown when the session has only
+            one configuration
+        """
+        combobox = self.selection_widgets.dropdowns['config']['combobox']
+        if configs:
+            self.populate_selection_dropdown('config', configs)
+        else:
+            self.clear_selection_dropdown('config')
+        combobox.setVisible(bool(configs))
+        # The menu bar sizes its corner widget only when it is set, so set it again for the
+        # selection widgets to make room for the dropdown rather than squeeze the others
+        self.selection_widgets.adjustSize()
+        self.menu_widgets.setCornerWidget(self.selection_widgets, corner=QtCore.Qt.TopRightCorner)
+
     def set_selection_dropdown(self, name: str, idx: int) -> None:
         """
         Set the dropdown to a given index.

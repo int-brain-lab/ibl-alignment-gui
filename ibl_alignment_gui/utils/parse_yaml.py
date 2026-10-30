@@ -217,16 +217,20 @@ def load_alignment_yaml(
     Notes
     -----
     - If no 'configurations' section exists, creates a 'default' configuration
-    - Falls back to the spike_sorting path if raw_ephys is not specified
-    - Falls back to the raw_ephys path if processed_ephys is not specified
-    - Falls back to the spike_sorting path, and then the picks path, if output is not specified
+    - Falls back to the spike_sorting path if picks is not specified
+    - Falls back to the raw_ephys path, and then the spike_sorting path, if processed_ephys is not
+      specified
+    - Never guesses raw_ephys or output: output must always be given, and raw_ephys must be given
+      when there is no spike_sorting, as its .ap.meta file is then the only probe geometry
+    - Needs at least one of spike_sorting and processed_ephys
 
     Raises
     ------
     FileNotFoundError
         If the yaml file does not exist.
     ValueError
-        If the yaml file is empty or does not contain a mapping.
+        If the yaml file is empty or does not contain a mapping, a probe is missing required
+        datasets, or the configurations do not contain the same probes.
     """
     yaml_file = Path(yaml_file)
 
@@ -304,27 +308,32 @@ def load_alignment_yaml(
                 )
                 setattr(resolved_paths, dataset_name, resolved_path)
 
-            # The xyz picks are read from the picks path, falling back to the spike sorting
-            # folder, and the results are written to the output, falling back to either of them.
-            # With neither there is nowhere to read the trajectory from or write the results to.
-            if resolved_paths.spike_sorting is None and resolved_paths.picks is None:
-                raise ValueError(
-                    f'No spike_sorting or picks path given for probe {pname} in configuration '
-                    f'{cname}; at least one of the two is needed'
+            # Datasets that are only read can be looked for in the folders where they are usually
+            # saved: the trajectory beside the spike sorting, and the RMS and power spectra beside
+            # the raw data or the spike sorting. The raw data is never guessed, and the output,
+            # the one dataset that is written to, must always be given.
+            if resolved_paths.picks is None:
+                resolved_paths.picks = resolved_paths.spike_sorting
+            if resolved_paths.processed_ephys is None:
+                resolved_paths.processed_ephys = (
+                    resolved_paths.raw_ephys or resolved_paths.spike_sorting
                 )
 
-            # The raw ephys is filled in first so that the processed ephys can fall back to
-            # it, rather than the other way round which discarded an explicit processed_ephys
-            if resolved_paths.raw_ephys is None:
-                resolved_paths.raw_ephys = resolved_paths.spike_sorting
-
-            if resolved_paths.processed_ephys is None:
-                resolved_paths.processed_ephys = resolved_paths.raw_ephys
-
-            # If no output is given the alignment results are written alongside the spike sorting,
-            # falling back to the picks for sessions that have no spike sorting path
-            if resolved_paths.output is None:
-                resolved_paths.output = resolved_paths.spike_sorting or resolved_paths.picks
+            missing = [
+                name for name in ('picks', 'output') if getattr(resolved_paths, name) is None
+            ]
+            if resolved_paths.spike_sorting is None and resolved_paths.processed_ephys is None:
+                missing.append('spike_sorting or processed_ephys')
+            # Without spike sorting, the .ap.meta file is the only source of the probe geometry
+            if resolved_paths.spike_sorting is None and resolved_paths.raw_ephys is None:
+                missing.append(
+                    'raw_ephys (the folder with the .ap.meta file, needed without spike_sorting)'
+                )
+            if missing:
+                raise ValueError(
+                    f'Probe {pname} in configuration {cname} is missing required datasets: '
+                    f'{", ".join(missing)}'
+                )
 
             data_paths[cname][pname] = resolved_paths
 
@@ -340,9 +349,7 @@ def load_alignment_yaml(
         detail = '; '.join(
             f'{cname}: {sorted(names)}' for cname, names in probes_per_config.items()
         )
-        raise ValueError(
-            f'Every configuration must contain the same probes, found {detail}'
-        )
+        raise ValueError(f'Every configuration must contain the same probes, found {detail}')
 
     # dict.fromkeys rather than a set, so that duplicates across configurations are dropped
     # while the order the probes are given in the yaml is kept. The order reaches the shank tabs

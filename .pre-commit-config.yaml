@@ -1,0 +1,40 @@
+# Install the hooks once with `uv run pre-commit install`; run them on demand with
+# `uv run pre-commit run --all-files`. CI runs the same ruff checks, so the hooks are a
+# convenience for catching problems before pushing rather than the source of truth.
+exclude: ^tests/fixtures/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+  # Keep uv.lock in step with pyproject.toml (CI installs with `uv sync --locked`).
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.11.3
+    hooks:
+      - id: uv-lock
+
+  # Ruff runs from the project environment rather than a hook-managed install, so the version
+  # is the one pinned in uv.lock and the hooks always agree with CI. It runs on the whole
+  # project, as CI does, so the `include`/`exclude` settings in pyproject.toml apply.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --no-sync ruff check --fix
+        language: system
+        types_or: [python, pyi, toml]
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --no-sync ruff format
+        language: system
+        types_or: [python, pyi, toml]
+        pass_filenames: false

@@ -5,3 +5,5 @@ probes:
     datasets:
       spike_sorting:
         path: probe_00/kilosort
+      output:
+        path: /mnt/output

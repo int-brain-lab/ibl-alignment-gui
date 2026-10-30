@@ -404,6 +404,38 @@ class ProbeHandler(ABC):
         return self.get_plot_keys('probe_plots')
 
     @property
+    def has_features(self) -> bool:
+        """
+        Return whether any loaded shank has ephys-atlas features.
+
+        Returns
+        -------
+        bool
+            True when a shank and configuration loaded features with the session, else False.
+        """
+        return any(
+            handler.data_loaded and handler.raw_data.get('features', {}).get('exists', False)
+            for configs in self.shanks.values()
+            for handler in configs.values()
+        )
+
+    @property
+    def has_spike_sorting(self) -> bool:
+        """
+        Return whether any loaded shank has spike sorting.
+
+        Returns
+        -------
+        bool
+            True when a shank and configuration loaded spikes with the session, else False.
+        """
+        return any(
+            handler.data_loaded and handler.raw_data.get('spikes', {}).get('exists', False)
+            for configs in self.shanks.values()
+            for handler in configs.values()
+        )
+
+    @property
     def feature_keys(self) -> list[str]:
         """
         Find the list of available feature plot keys across all shanks and configurations.
@@ -1057,6 +1089,35 @@ class ProbeHandlerCSV(ProbeHandler):
         return ins[0]
 
 
+def find_features_file(folder: Path) -> Path | None:
+    """
+    Find the per-channel features file in a data folder.
+
+    The file is the one parquet file with ``features`` in its name. With none there are no
+    features; with several it is unclear which to use, so none is used and the files are logged.
+
+    Parameters
+    ----------
+    folder : Path
+        The data folder.
+
+    Returns
+    -------
+    Path or None
+        The features file, or None.
+    """
+    files = sorted({*folder.glob('*features*.pqt'), *folder.glob('*features*.parquet')})
+    if len(files) > 1:
+        logger.warning(
+            'Several features files in %s, so none is used: %s. Keep one, or give it in a '
+            'session yaml.',
+            folder,
+            ', '.join(f.name for f in files),
+        )
+        return None
+    return files[0] if files else None
+
+
 class ProbeHandlerLocal(ProbeHandler):
     """
     Local file system implementation of ProbeHandler.
@@ -1086,6 +1147,7 @@ class ProbeHandlerLocal(ProbeHandler):
             histology=folder_path,
             picks=folder_path,
             output=folder_path,
+            features=find_features_file(folder_path),
         )
 
         # Load in the geometry and find the number of shnaks
@@ -1136,6 +1198,9 @@ class ProbeHandlerLocal(ProbeHandler):
             )
             if self.data_paths.raw_ephys is not None:
                 loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
+            # A features file in the folder holds every shank; the loader splits it per shank
+            if self.data_paths.features is not None:
+                loaders['features'] = FeatureLoaderLocal(self.data_paths.features)
             loaders['plots'] = PlotLoader()
             self.shanks[ishank][self.default_config] = ShankHandler(loaders, ish)
 
@@ -1158,12 +1223,12 @@ class ProbeHandlerLocalYaml(ProbeHandler):
     """
 
     def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
-        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
-            yaml_file
-        )
         # The atlas (anatomical or Allen, see _make_atlas) is built lazily by build_atlas() on the
         # background loading thread rather than here, so it does not block GUI construction.
         super().__init__(brain_atlas)
+        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
+            yaml_file
+        )
 
         # The base sets a single 'default' config; mirror it to the yaml config name and, when the
         # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.

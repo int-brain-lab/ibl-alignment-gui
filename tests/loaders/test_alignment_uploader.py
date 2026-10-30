@@ -1,4 +1,4 @@
-import datetime
+import datetime as dt
 import json
 import tempfile
 import unittest
@@ -13,6 +13,7 @@ from ibl_alignment_gui.loaders.alignment_uploader import (
     AlignmentUploaderLocal,
     AlignmentUploaderOne,
 )
+from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from iblutil.util import Bunch
 
 
@@ -72,6 +73,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
         with self.subTest('No changes'):
             self.assertIn('No changes made', self.uploader.get_upload_info(False, False))
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('ibllib.pipes.histology.register_aligned_track')
     def test_upload_channels(self, mock_register):
         """Test the upload_channels method"""
@@ -97,7 +99,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
     @patch('ibl_alignment_gui.loaders.alignment_uploader.datetime')
     def test_upload_alignments(self, mock_datetime, mock_save_alignments):
         """Test the upload_alignments method"""
-        mock_datetime.now.return_value = datetime.datetime(2025, 8, 4)
+        mock_datetime.now.return_value = dt.datetime(2025, 8, 4)
 
         self.uploader.user = 'user1'
         self.uploader.qc_str = 'PASS'
@@ -153,6 +155,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
         self.uploader.save_alignments({})
         self.assertEqual(self.mock_one.alyx.rest.call_count, 2)
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('ibllib.qc.critical_reasons.main_gui')
     def test_set_user_qc(self, mock_note):
         """Test the set_user_qc method"""
@@ -181,6 +184,7 @@ class TestAlignmentUploaderOne(unittest.TestCase):
             self.uploader.set_user_qc('High', 'Pass', [], True)
             self.assertTrue(self.uploader.force_resolve)
 
+    @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('ibllib.qc.alignment_qc.AlignmentQC')
     def test_upload_qc(self, mock_align_qc_class):
         """Test the upload_qc method"""
@@ -294,7 +298,7 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
     @patch('ibl_alignment_gui.loaders.alignment_uploader.datetime')
     def test_upload_alignments(self, mock_datetime, mock_save_alignments):
         """Test the upload_alignments method"""
-        mock_datetime.now.return_value = datetime.datetime(2025, 8, 4)
+        mock_datetime.now.return_value = dt.datetime(2025, 8, 4)
 
         user = 'user1'
         expected_time = mock_datetime.now.return_value.replace(second=0, microsecond=0).isoformat()
@@ -421,6 +425,12 @@ class TestAlignmentUploaderLocal(unittest.TestCase):
         with open(file_path) as f:
             data = json.load(f)
         self.assertEqual(data, json_data)
+
+    def test_save_json_file_creates_missing_folder(self):
+        """Test the output folder is created if it does not exist yet"""
+        file_path = self.temp_path.joinpath('not', 'made', 'yet', 'test_file.json')
+        self.uploader._save_json_file(file_path, {'a': 1})
+        self.assertTrue(file_path.exists())
 
 
 class TestUploaderLoaderPaths(unittest.TestCase):

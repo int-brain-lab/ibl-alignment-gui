@@ -173,7 +173,7 @@ class TestExamples(unittest.TestCase):
             ('sparse', 'raw_ephys'): '/mnt/s0/Data/sparse_session/probe_00/spikeglx',
             ('sparse', 'picks'): '/mnt/s0/Data/sparse_session/probe_00/kilosort',
             ('sparse', 'histology'): '/common/histology/subject_001',
-            ('sparse', 'output'): '/mnt/s0/Data/sparse_session/probe_00/kilosort',
+            ('sparse', 'output'): '/mnt/s0/Data/sparse_session/probe_00/alignment_outputs',
         }
         configs, probes, data_paths, _ = self.load('complete_hierarchy')
         self.assertEqual(configs, ['dense', 'sparse'])
@@ -185,7 +185,7 @@ class TestExamples(unittest.TestCase):
 
 
 class TestPathFallbacks(unittest.TestCase):
-    """Test the fallbacks applied once the dataset paths have been resolved."""
+    """Test the folders a dataset that is not given is looked for in."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -205,44 +205,38 @@ class TestPathFallbacks(unittest.TestCase):
         return path
 
     def load(self, datasets):
+        """Load a single probe yaml; an output is given unless the datasets give their own."""
+        datasets = {'output': 'out', **datasets}
         _, _, data_paths, _ = load_alignment_yaml(self.write_yaml(datasets))
         return data_paths['default']['probe_00']
 
-    def test_ephys_fallbacks(self):
-        with self.subTest('both given'):
-            paths = self.load({'spike_sorting': 'ks', 'processed_ephys': 'proc',
-                               'raw_ephys': 'raw'})
+    def test_processed_ephys(self):
+        with self.subTest('given'):
+            paths = self.load(
+                {'spike_sorting': 'ks', 'processed_ephys': 'proc', 'raw_ephys': 'raw'}
+            )
             self.assertEqual(paths.processed_ephys, self.root.joinpath('proc'))
-            self.assertEqual(paths.raw_ephys, self.root.joinpath('raw'))
 
-        with self.subTest('processed given, raw absent'):
-            # The explicit processed_ephys is kept, and raw_ephys falls back to the spike sorting
-            paths = self.load({'spike_sorting': 'ks', 'processed_ephys': 'proc'})
-            self.assertEqual(paths.processed_ephys, self.root.joinpath('proc'))
-            self.assertEqual(paths.raw_ephys, self.root.joinpath('ks'))
-
-        with self.subTest('processed absent, raw given'):
+        with self.subTest('read from the raw data'):
             paths = self.load({'spike_sorting': 'ks', 'raw_ephys': 'raw'})
             self.assertEqual(paths.processed_ephys, self.root.joinpath('raw'))
-            self.assertEqual(paths.raw_ephys, self.root.joinpath('raw'))
 
-        with self.subTest('both absent'):
+        with self.subTest('read from the spike sorting without raw data'):
             paths = self.load({'spike_sorting': 'ks'})
             self.assertEqual(paths.processed_ephys, self.root.joinpath('ks'))
-            self.assertEqual(paths.raw_ephys, self.root.joinpath('ks'))
 
-    def test_output_fallbacks(self):
-        with self.subTest('output given'):
-            paths = self.load({'spike_sorting': 'ks', 'output': 'out'})
-            self.assertEqual(paths.output, self.root.joinpath('out'))
+    def test_raw_ephys_is_not_guessed(self):
+        paths = self.load({'spike_sorting': 'ks', 'processed_ephys': 'proc'})
+        self.assertIsNone(paths.raw_ephys)
 
-        with self.subTest('falls back to the spike sorting'):
+    def test_picks(self):
+        with self.subTest('given'):
             paths = self.load({'spike_sorting': 'ks', 'picks': 'picks'})
-            self.assertEqual(paths.output, self.root.joinpath('ks'))
+            self.assertEqual(paths.picks, self.root.joinpath('picks'))
 
-        with self.subTest('falls back to the picks when there is no spike sorting'):
-            paths = self.load({'picks': 'picks'})
-            self.assertEqual(paths.output, self.root.joinpath('picks'))
+        with self.subTest('read from the spike sorting'):
+            paths = self.load({'spike_sorting': 'ks'})
+            self.assertEqual(paths.picks, self.root.joinpath('ks'))
 
 
 class TestDefaults(unittest.TestCase):
@@ -263,6 +257,7 @@ class TestDefaults(unittest.TestCase):
         lines += ['probes:', '  probe_00:']
         if probe_path is not None:
             lines += [f'    path: {probe_path}']
+        datasets += '\noutput:\n  path: out'
         lines += ['    datasets:', *[f'      {line}' for line in datasets.splitlines()]]
 
         path = self.root.joinpath('session.yaml')
@@ -323,10 +318,18 @@ class TestDefaults(unittest.TestCase):
 
     def test_the_defaults_section_takes_datasets_not_a_base_path(self):
         # `path` under defaults is read as a dataset named "path", whose value must be a mapping
-        text = '\n'.join([
-            f'path: {self.root}', 'defaults:', '  path: /mnt/base', 'probes:', '  probe_00:',
-            '    datasets:', '      spike_sorting:', '        path: ks',
-        ])
+        text = '\n'.join(
+            [
+                f'path: {self.root}',
+                'defaults:',
+                '  path: /mnt/base',
+                'probes:',
+                '  probe_00:',
+                '    datasets:',
+                '      spike_sorting:',
+                '        path: ks',
+            ]
+        )
         yaml_file = self.root.joinpath('session.yaml')
         yaml_file.write_text(text + '\n')
 
@@ -354,21 +357,40 @@ class TestRequiredDatasets(unittest.TestCase):
 
         return data_paths['default']['probe_00']
 
-    def test_spike_sorting_or_picks_is_required(self):
+    def test_output_is_required(self):
         with self.assertRaises(ValueError) as ctx:
-            self.load({'histology': 'hist'})
+            self.load({'spike_sorting': 'ks'})
         self.assertIn('probe_00', str(ctx.exception))
+        self.assertIn('output', str(ctx.exception))
 
-    def test_spike_sorting_alone_is_enough(self):
-        paths = self.load({'spike_sorting': 'ks'})
+    def test_spike_sorting_or_processed_ephys_is_required(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.load({'picks': 'picks', 'output': 'out'})
+        self.assertIn('spike_sorting or processed_ephys', str(ctx.exception))
+
+    def test_picks_is_required_without_spike_sorting(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.load({'processed_ephys': 'proc', 'raw_ephys': 'raw', 'output': 'out'})
+        self.assertIn('picks', str(ctx.exception))
+
+    def test_raw_ephys_is_required_without_spike_sorting(self):
+        """Without spike sorting the geometry comes from the .ap.meta file in raw_ephys"""
+        with self.assertRaises(ValueError) as ctx:
+            self.load({'processed_ephys': 'proc', 'picks': 'picks', 'output': 'out'})
+        self.assertIn('raw_ephys', str(ctx.exception))
+
+    def test_spike_sorting_and_output_are_enough(self):
+        paths = self.load({'spike_sorting': 'ks', 'output': 'out'})
         self.assertEqual(paths.spike_sorting, self.root.joinpath('ks'))
-        self.assertIsNone(paths.picks)
+        self.assertEqual(paths.picks, self.root.joinpath('ks'))
 
-    def test_picks_alone_is_enough(self):
-        # Datasets with no spike sorting are supported; the output falls back to the picks
-        paths = self.load({'picks': 'picks'})
+    def test_no_spike_sorting(self):
+        """A session with no spike sorting needs its raw ephys, picks and output"""
+        paths = self.load(
+            {'processed_ephys': 'proc', 'raw_ephys': 'raw', 'picks': 'picks', 'output': 'out'}
+        )
         self.assertIsNone(paths.spike_sorting)
-        self.assertEqual(paths.output, self.root.joinpath('picks'))
+        self.assertEqual(paths.output, self.root.joinpath('out'))
 
 
 class TestMatchingProbes(unittest.TestCase):
@@ -386,8 +408,14 @@ class TestMatchingProbes(unittest.TestCase):
         for cname, probes in config_probes.items():
             lines += [f'  {cname}:', '    probes:']
             for probe in probes:
-                lines += [f'      {probe}:', '        datasets:', '          spike_sorting:',
-                          f'            path: {probe}']
+                lines += [
+                    f'      {probe}:',
+                    '        datasets:',
+                    '          spike_sorting:',
+                    f'            path: {probe}',
+                    '          output:',
+                    f'            path: {probe}/out',
+                ]
         path = self.root.joinpath('session.yaml')
         path.write_text('\n'.join(lines) + '\n')
 
@@ -446,15 +474,27 @@ class TestLoaderErrors(unittest.TestCase):
     def test_more_than_two_configurations(self):
         text = '\n'.join(
             [f'path: {self.root}', 'configurations:']
-            + [f'  config_{i}:\n    probes:\n      probe_00:\n        datasets:'
-               f'\n          spike_sorting:\n            path: ks' for i in range(3)]
+            + [
+                f'  config_{i}:\n    probes:\n      probe_00:\n        datasets:'
+                f'\n          spike_sorting:\n            path: ks'
+                f'\n          output:\n            path: out'
+                for i in range(3)
+            ]
         )
         with self.assertRaises(AssertionError):
             load_alignment_yaml(self.write(text + '\n'))
 
     def test_histology_space(self):
-        base = [f'path: {self.root}', 'probes:', '  probe_00:', '    datasets:',
-                '      spike_sorting:', '        path: ks']
+        base = [
+            f'path: {self.root}',
+            'probes:',
+            '  probe_00:',
+            '    datasets:',
+            '      spike_sorting:',
+            '        path: ks',
+            '      output:',
+            '        path: out',
+        ]
 
         with self.subTest('defaults to ccf'):
             _, _, _, space = load_alignment_yaml(self.write('\n'.join(base) + '\n'))
@@ -462,22 +502,35 @@ class TestLoaderErrors(unittest.TestCase):
 
         with self.subTest('read from the defaults section'):
             text = '\n'.join(
-                [f'path: {self.root}', 'defaults:', '  histology:', '    path: hist',
-                 '    space: anatomical'] + base[1:]
+                [
+                    f'path: {self.root}',
+                    'defaults:',
+                    '  histology:',
+                    '    path: hist',
+                    '    space: anatomical',
+                ]
+                + base[1:]
             )
             _, _, _, space = load_alignment_yaml(self.write(text + '\n'))
             self.assertEqual(space, 'anatomical')
 
         with self.subTest('a probe level space is ignored'):
-            text = '\n'.join(base + ['      histology:', '        path: hist',
-                                     '        space: anatomical'])
+            text = '\n'.join(
+                base + ['      histology:', '        path: hist', '        space: anatomical']
+            )
             _, _, _, space = load_alignment_yaml(self.write(text + '\n'))
             self.assertEqual(space, 'ccf')
 
         with self.subTest('an unknown space is rejected'):
             text = '\n'.join(
-                [f'path: {self.root}', 'defaults:', '  histology:', '    path: hist',
-                 '    space: nonsense'] + base[1:]
+                [
+                    f'path: {self.root}',
+                    'defaults:',
+                    '  histology:',
+                    '    path: hist',
+                    '    space: nonsense',
+                ]
+                + base[1:]
             )
             with self.assertRaises(ValidationError):
                 load_alignment_yaml(self.write(text + '\n'))

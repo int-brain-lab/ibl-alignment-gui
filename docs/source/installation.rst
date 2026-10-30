@@ -4,7 +4,7 @@ Installation
 Prerequisites
 -------------
 
-To use the IBL Alignment GUI, you need Python 3.10 or higher installed on your system.
+To use the IBL Alignment GUI, you need Python 3.12 or higher installed on your system.
 
 We recommend installing the package into a new virtual environment to avoid dependency conflicts. You can use any of the following tools:
 
@@ -140,4 +140,5 @@ To verify that the installation was successful, run:
 
 This should print the version number of the installed package without any errors.
 
-If the installation was successful, you can proceed to the :doc:`getting_started` guide.
+If the installation was successful, you can proceed to the first tutorial,
+:ref:`tutorial-first-alignment`.

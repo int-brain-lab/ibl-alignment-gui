@@ -6,3 +6,5 @@ probes:
     datasets:
       spike_sorting:
         path: /custom/location/kilosort
+      output:
+        path: /mnt/output

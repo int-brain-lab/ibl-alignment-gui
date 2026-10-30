@@ -151,6 +151,8 @@ class AlignmentHandler:
         self.tracks: list = [0] * (self.buffer.max_idx + 1)
         self.features: list = [0] * (self.buffer.max_idx + 1)
         self.hist_mapping: str = 'Allen'
+        # The regions along the track looked up for each mapping other than Allen
+        self._mapping_regions: dict[str, tuple] = {}
 
     @property
     def xyz_track(self) -> np.ndarray:
@@ -336,9 +338,7 @@ class AlignmentHandler:
         scale_data = Bunch()
         hist_data_ref = Bunch()
 
-        region_label = None
-        region = None
-        colour = self.ephysalign.region_colour
+        region, region_label, colour = self.get_mapping_regions(self.hist_mapping)
 
         hist_data['region'], hist_data['axis_label'] = self.ephysalign.scale_histology_regions(
             self.features[self.idx],
@@ -363,6 +363,62 @@ class AlignmentHandler:
         hist_data_ref['colour'] = colour
 
         return hist_data, hist_data_ref, scale_data
+
+    def get_mapping_regions(self, mapping: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Return the brain regions along the probe track for an atlas mapping, before alignment.
+
+        The Allen regions are those of the track. The regions of another mapping are looked up
+        the first time they are needed, and kept.
+
+        Parameters
+        ----------
+        mapping : str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'.
+
+        Returns
+        -------
+        region : np.ndarray
+            The region boundaries along the track.
+        region_label : np.ndarray
+            The label positions and acronyms of the regions.
+        colour : np.ndarray
+            The colour of each region.
+        """
+        if mapping == 'Allen':
+            ephysalign = self.ephysalign
+            return ephysalign.region, ephysalign.region_label, ephysalign.region_colour
+        if mapping not in self._mapping_regions:
+            region, region_label, colour, _ = self.ephysalign.get_histology_regions(
+                self.xyz_samples, self.ephysalign.sampling_trk, self.brain_atlas, mapping=mapping
+            )
+            self._mapping_regions[mapping] = (region, region_label, colour)
+
+        return self._mapping_regions[mapping]
+
+    def get_reference_histology(self, mapping: str = 'Allen') -> Bunch:
+        """
+        Compute the brain regions along the probe track for an atlas mapping, without alignment.
+
+        Parameters
+        ----------
+        mapping : str
+            The atlas mapping, e.g. 'Allen', 'Beryl' or 'Cosmos'.
+
+        Returns
+        -------
+        Bunch
+            The regions, axis labels and colours along the track, in um, for ``plot_histology``.
+        """
+        region, region_label, colour = self.get_mapping_regions(mapping)
+        region, region_label = self.ephysalign.scale_histology_regions(
+            self.ephysalign.track_extent,
+            self.ephysalign.track_extent,
+            region=region,
+            region_label=region_label,
+        )
+
+        return Bunch(region=region, axis_label=region_label, colour=colour)
 
     def scale_hist_data(
         self,

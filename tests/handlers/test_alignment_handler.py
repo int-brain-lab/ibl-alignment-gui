@@ -264,6 +264,61 @@ class TestAlignmentHandler(unittest.TestCase):
         self.assertIn('region', hist_data_ref)
         self.assertIn('axis_label', hist_data_ref)
 
+    def test_get_reference_histology(self):
+        """Allen uses the track's regions; another mapping looks them up with that mapping"""
+        self.mock_ephysalign.get_histology_regions.return_value = (
+            np.array([[0.0, 1e-4]]),
+            np.array([[5e-5, 'A']], dtype=object),
+            np.array([[1, 2, 3]]),
+            np.array([[1]]),
+        )
+        with self.subTest('Allen'):
+            data = self.align_handler.get_reference_histology('Allen')
+            self.mock_ephysalign.get_histology_regions.assert_not_called()
+            self.assertEqual(data.colour, 'red')
+            np.testing.assert_array_equal(data.region, [1])
+
+        with self.subTest('Beryl'):
+            data = self.align_handler.get_reference_histology('Beryl')
+            self.assertEqual(
+                self.mock_ephysalign.get_histology_regions.call_args.kwargs, {'mapping': 'Beryl'}
+            )
+            # The regions are scaled with the unaligned track, as the reference histology is
+            kwargs = self.mock_ephysalign.scale_histology_regions.call_args.kwargs
+            np.testing.assert_array_equal(kwargs['region'], [[0.0, 1e-4]])
+            np.testing.assert_array_equal(data.colour, [[1, 2, 3]])
+            np.testing.assert_array_equal(data.region, [1])
+            np.testing.assert_array_equal(data.axis_label, [2])
+
+    def test_get_scaled_histology_uses_the_mapping(self):
+        """The scaled, scale factor and reference histology follow the chosen mapping"""
+        beryl_region = np.array([[0.0, 1e-4]])
+        self.mock_ephysalign.get_histology_regions.return_value = (
+            beryl_region,
+            np.array([[5e-5, 'A']], dtype=object),
+            np.array([[1, 2, 3]]),
+            np.array([[1]]),
+        )
+        with self.subTest('Allen by default'):
+            hist_data, _, _ = self.align_handler.get_scaled_histology()
+            self.mock_ephysalign.get_histology_regions.assert_not_called()
+            self.assertEqual(hist_data.colour, 'red')
+
+        with self.subTest('Beryl'):
+            self.align_handler.hist_mapping = 'Beryl'
+            hist_data, hist_data_ref, _ = self.align_handler.get_scaled_histology()
+            np.testing.assert_array_equal(hist_data.colour, [[1, 2, 3]])
+            np.testing.assert_array_equal(hist_data_ref.colour, [[1, 2, 3]])
+            for call in self.mock_ephysalign.scale_histology_regions.call_args_list[-2:]:
+                np.testing.assert_array_equal(call.kwargs['region'], beryl_region)
+            region_orig = self.mock_ephysalign.get_scale_factor.call_args.kwargs['region_orig']
+            np.testing.assert_array_equal(region_orig, beryl_region)
+
+        with self.subTest('The regions of a mapping are looked up once'):
+            self.align_handler.get_scaled_histology()
+            self.align_handler.get_reference_histology('Beryl')
+            self.mock_ephysalign.get_histology_regions.assert_called_once()
+
     def test_scale_hist_data_calls(self):
         self.align_handler.tracks[self.align_handler.idx] = np.array([1, 2, 3])
         self.align_handler.features[self.align_handler.idx] = np.array([4, 5, 6])

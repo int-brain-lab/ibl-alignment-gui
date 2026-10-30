@@ -52,8 +52,9 @@
 {% block modules %}
 {% if modules %}
 {#- Third-party widgets vendored into the repository; excluded from the api reference in the
-    same way they are excluded from the linter. -#}
-{% set vendored = ['adapted_axis', 'qrange_slider'] %}
+    same way they are excluded from the linter. The Allen/Code Ocean mode modules are not
+    documented either (backends only holds the allen package). -#}
+{% set vendored = ['adapted_axis', 'qrange_slider', 'allen', 'backends', 'transform_loader'] %}
 .. autosummary::
    :toctree:
    :template: custom-module-template.rst

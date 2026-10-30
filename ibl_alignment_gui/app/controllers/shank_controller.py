@@ -21,6 +21,8 @@ class ShankController:
         The index of the shank
     config:
         The config of the shank
+    prediction_keys: list of str, optional
+        The channel prediction options, each shown on its own figure in the all predictions view
 
     Attributes
     ----------
@@ -40,12 +42,19 @@ class ShankController:
         The cluster data for the chosen scatter plot if it exists
     """
 
-    def __init__(self, model: ShankHandler, name: str, index: int, config: str):
+    def __init__(
+        self,
+        model: ShankHandler,
+        name: str,
+        index: int,
+        config: str,
+        prediction_keys: list[str] | tuple = (),
+    ):
         self.name: str = name
         self.index: int = index
         self.config: str = config
         self.model: ShankHandler = model
-        self.view: ShankView = ShankView(self.name, self.index, self.config)
+        self.view: ShankView = ShankView(self.name, self.index, self.config, prediction_keys)
         self.cluster: bool = False
         self.cluster_data: np.ndarray | None = None
 
@@ -74,9 +83,21 @@ class ShankController:
 
         return self.view.hist_regions[-2]
 
-    def plot_histology_ref(self) -> None:
-        """Plot the histology reference plot."""
-        self.view.plot_histology(self.view.fig_hist_ref, self.model.hist_data_ref, ax='right')
+    def plot_histology_ref(self, mapping: str = 'Allen') -> None:
+        """
+        Plot the histology reference plot.
+
+        Parameters
+        ----------
+        mapping: str
+            The atlas mapping of the regions, e.g. 'Allen', 'Beryl' or 'Cosmos'
+        """
+        data = (
+            self.model.hist_data_ref
+            if mapping == 'Allen'
+            else self.model.get_reference_histology(mapping)
+        )
+        self.view.plot_histology(self.view.fig_hist_ref, data, ax='right')
 
     def plot_scale_factor(self) -> ColorBar:
         """

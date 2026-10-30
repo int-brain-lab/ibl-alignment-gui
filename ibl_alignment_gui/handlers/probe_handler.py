@@ -1223,12 +1223,12 @@ class ProbeHandlerLocalYaml(ProbeHandler):
     """
 
     def __init__(self, yaml_file: str | Path, brain_atlas: BrainAtlas | None = None):
-        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
-            yaml_file
-        )
         # The atlas (anatomical or Allen, see _make_atlas) is built lazily by build_atlas() on the
         # background loading thread rather than here, so it does not block GUI construction.
         super().__init__(brain_atlas)
+        self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
+            yaml_file
+        )
 
         # The base sets a single 'default' config; mirror it to the yaml config name and, when the
         # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.

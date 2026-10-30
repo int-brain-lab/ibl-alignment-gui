@@ -8,9 +8,12 @@ import numpy as np
 
 from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandler,
+    ProbeHandlerLocalYaml,
     ProbeHandlerONE,
     find_features_file,
 )
+
+FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures', 'yaml')
 
 
 def make_insertion(subject: str, name: str, pid: str) -> dict:
@@ -147,6 +150,25 @@ class TestFindFeaturesFile(unittest.TestCase):
         with self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs:
             self.assertIsNone(find_features_file(self.folder))
         self.assertIn('features_a.pqt', logs.output[0])
+
+
+class TestProbeHandlerLocalYaml(unittest.TestCase):
+    """The configurations of a session yaml are offered by the handler."""
+
+    def test_single_config(self):
+        model = ProbeHandlerLocalYaml(FIXTURE_PATH.joinpath('single_probe.yaml'))
+        self.assertEqual(model.configs, ['default'])
+        self.assertEqual(model.possible_configs, ['default'])
+        self.assertEqual(model.selected_config, 'default')
+
+    def test_two_configs(self):
+        model = ProbeHandlerLocalYaml(FIXTURE_PATH.joinpath('dual_config.yaml'))
+        self.assertEqual(model.configs, ['dense', 'sparse'])
+        self.assertEqual(model.possible_configs, ['dense', 'sparse', 'both'])
+        self.assertEqual(model.default_config, 'dense')
+        self.assertEqual(model.non_default_config, 'sparse')
+        self.assertEqual(model.selected_config, 'dense')
+        self.assertEqual(set(model.data_paths), {'dense', 'sparse'})
 
 
 if __name__ == '__main__':

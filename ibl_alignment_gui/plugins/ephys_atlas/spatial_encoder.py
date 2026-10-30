@@ -7,7 +7,8 @@ only their GUI. The released model is loaded with ``ephysatlas.load_pretrained``
 its ``predict``. The shank's recorded channel features are then warped along its histology track
 (the GUI's ``xyz_samples``, top to bottom of the brain) onto the model's predictions along it,
 behind a progress dialog. The result figure opens in a pop-up window, and the prediction panel
-shows either the predicted regions or the alignment confidence along the probe.
+shows either the atlas region of each channel where the alignment placed it, or the alignment
+confidence along the probe.
 
 Each shank is aligned once: both prediction-panel views -- the predicted regions and the alignment
 confidence, two prediction options -- are built from the alignment straight away and cached by
@@ -31,7 +32,6 @@ from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
-    M_TO_UM,
     NO_FEATURES_MESSAGE,
     ModelSpec,
     PredictionError,
@@ -39,7 +39,6 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     clear_predictions,
     features_for_vintage,
     features_vintage,
-    get_region_boundaries,
     missing_features_error,
     model_vintage,
     update_results_action,
@@ -245,29 +244,12 @@ def alignment_inputs(model: ChannelModel, df: pd.DataFrame) -> dict:
     )
 
 
-def _warped_track_depths(n_track: int, channel_to_trace_work, channel_depth_um) -> np.ndarray:
-    """``[n_track]`` probe depth (µm, tip ~0) of every GUI track sample.
-
-    The GUI track runs bottom -> top and the alignment works top -> bottom. An affine fit of trace
-    index -> channel depth through the aligned channels maps every track sample to a probe depth,
-    so regions beyond the probe stay visible above and below it.
-    """
-    j_gui = (n_track - 1) - np.asarray(channel_to_trace_work, dtype=int)
-    depth = np.asarray(channel_depth_um, dtype=float)
-    ok = np.isfinite(depth)
-    if ok.sum() >= 2 and np.ptp(j_gui[ok]) > 0:
-        scale, offset = np.polyfit(j_gui[ok].astype(float), depth[ok], deg=1)
-    else:
-        scale, offset = 10.0, 0.0
-    return scale * np.arange(n_track, dtype=float) + offset
-
-
 def _align(
     controller: AlignmentGUIController,
     items: ShankController,
     model: ChannelModel,
     progress: Callable[[float | None, str], None],
-) -> tuple[object, dict, np.ndarray]:
+) -> tuple[object, dict]:
     """Align the shank with a loaded model, without Qt.
 
     The features come from the table of the model's vintage, as for the region decoders
@@ -279,8 +261,6 @@ def _align(
         The alignment, from ``ephysatlas.alignment.align_histology``.
     dict
         Its inputs (:func:`alignment_inputs`) and the insertion's ``pid``.
-    np.ndarray
-        The GUI's histology track, bottom to top.
 
     Raises
     ------
@@ -310,7 +290,7 @@ def _align(
     except Exception as exc:  # e.g. too few usable channels: reported to the user
         raise PredictionError(str(exc)) from exc
 
-    return result, probe, track_gui
+    return result, probe
 
 
 def align_shank(
@@ -341,16 +321,13 @@ def align_shank(
     TaskCancelledError
         If Cancel was pressed.
     """
-    result, probe, track_gui = _align(controller, items, model, progress)
-    track_depth_um = _warped_track_depths(
-        len(track_gui), result.diagnostics['channel_to_trace'], probe['axial_um']
-    )
+    result, probe = _align(controller, items, model, progress)
     views = {
         AUTO_ALIGNMENT_KEY: predict_regions(
-            controller.model.brain_atlas, track_gui, track_depth_um
+            controller.model.brain_atlas, result.channel_xyz, probe['axial_um']
         ),
         AUTO_ALIGNMENT_CONFIDENCE_KEY: predict_confidence(
-            result.p_good, result.valid, probe['axial_um'], track_depth_um
+            result.p_good, result.valid, probe['axial_um']
         ),
     }
 
@@ -366,36 +343,65 @@ def _show_result(controller: AlignmentGUIController, items: ShankController, ext
 # -----------------------------------------------------------------------------
 # The prediction-panel views: predicted regions and confidence
 # -----------------------------------------------------------------------------
-def predict_regions(brain_atlas, track: np.ndarray, track_depth_um: np.ndarray) -> Bunch:
-    """Return the regions view: the atlas regions along the shank's whole histology track.
+def _depth_edges(levels: np.ndarray) -> np.ndarray:
+    """Return the edges (µm) of probe depths: halfway between them, 10 µm past the ends."""
+    return np.r_[levels[0] - 10.0, 0.5 * (levels[1:] + levels[:-1]), levels[-1] + 10.0]
+
+
+def _first_most_common(ids: np.ndarray):
+    """Return the most common of ``ids``; on a tie, the one that comes first."""
+    values, first, counts = np.unique(ids, return_index=True, return_counts=True)
+    tied = counts == counts.max()
+    return values[tied][np.argmin(first[tied])]
+
+
+def predict_regions(brain_atlas, channel_xyz: np.ndarray, axial_um: np.ndarray) -> Bunch:
+    """Return the regions view: the atlas region of each channel where the alignment placed it.
+
+    The view covers the probe only. A Neuropixels probe has two sites per depth, which can land
+    either side of a region boundary, so each depth takes the region most of its sites are in (on a
+    tie, the region of its first site in probe order).
 
     Parameters
     ----------
     brain_atlas : AllenAtlas
         The GUI's brain atlas.
-    track : np.ndarray
-        ``[L, 3]`` histology track samples (m), bottom to top.
-    track_depth_um : np.ndarray
-        ``[L]`` probe depth (µm) of each track sample, from the aligned channels.
+    channel_xyz : np.ndarray
+        ``[C, 3]`` position (m) of each channel on the histology track, from the alignment.
+    axial_um : np.ndarray
+        ``[C]`` probe depth (µm) of each channel.
 
     Returns
     -------
     Bunch
-        The region boundaries, labels and colours along the probe, for ``plot_histology``.
+        The region boundaries, labels and colours along the probe, for ``plot_prediction``.
     """
+    depth = np.asarray(axial_um, dtype=float)
     # Allen region ids, as ``regions.get`` expects (not region-table indices).
-    ids = brain_atlas.get_labels(track, mapping='Allen')
-    regions = brain_atlas.regions.get(ids)
-    return get_region_boundaries(regions, np.asarray(track_depth_um, dtype=float) / M_TO_UM)
+    ids = np.asarray(brain_atlas.get_labels(np.asarray(channel_xyz), mapping='Allen'))
+    ok = np.isfinite(depth)
+    depth, ids = depth[ok], ids[ok]
+    levels = np.unique(depth)  # one per probe depth, tip first
+    level_ids = np.array([_first_most_common(ids[depth == d]) for d in levels])
+
+    # One segment per run of the same region, its edges halfway between neighbouring depths
+    edges = _depth_edges(levels)
+    starts = np.r_[0, np.flatnonzero(np.diff(level_ids)) + 1]
+    ends = np.r_[starts[1:], len(levels)]
+    regions = brain_atlas.regions.get(level_ids[starts])
+    region = np.c_[edges[starts], edges[ends]]
+    axis_label = np.empty((len(starts), 2), dtype=object)
+    axis_label[:, 0] = region.mean(axis=1)
+    axis_label[:, 1] = regions.acronym
+
+    return Bunch(region=region, axis_label=axis_label, colour=np.asarray(regions.rgb, dtype=int))
 
 
-def predict_confidence(
-    p_good: np.ndarray, valid: np.ndarray, axial_um: np.ndarray, track_depth_um: np.ndarray
-) -> Bunch:
+def predict_confidence(p_good: np.ndarray, valid: np.ndarray, axial_um: np.ndarray) -> Bunch:
     """Return the confidence view: the alignment confidence p(good) along the probe.
 
-    Green is high and red low confidence (``RdYlGn``); the track beyond the probe and channels
-    without a value are grey. Depths are the channels' probe depths (µm), like the regions view.
+    Green is high and red low confidence (``RdYlGn``); channels without a value are grey. Depths
+    are the channels' probe depths (µm), and the view covers the probe only, like the regions view.
 
     Parameters
     ----------
@@ -405,14 +411,12 @@ def predict_confidence(
         ``[C]`` whether each channel was aligned; channels that were not have no value.
     axial_um : np.ndarray
         ``[C]`` probe depth (µm) of each channel.
-    track_depth_um : np.ndarray
-        ``[L]`` probe depth (µm) of each histology track sample.
 
     Returns
     -------
     Bunch
         The segments (``region``), their ``colour`` and ``axis_label``, without boundary lines,
-        for ``plot_histology``.
+        for ``plot_prediction``.
     """
     import matplotlib as mpl  # noqa: PLC0415 - only needed here
 
@@ -426,15 +430,11 @@ def predict_confidence(
             for d in levels
         ]
     )
-    edges = np.r_[levels[0] - 10.0, 0.5 * (levels[1:] + levels[:-1]), levels[-1] + 10.0]
+    edges = _depth_edges(levels)
 
     cmap = mpl.colormaps['RdYlGn']
     q = np.where(np.isfinite(p), np.round(p / CONFIDENCE_STEP) * CONFIDENCE_STEP, np.nan)
     region, colour, labels = [], [], []
-    track = np.sort(np.asarray(track_depth_um, dtype=float)[[0, -1]])
-    if track[0] < edges[0]:
-        region.append((track[0], edges[0]))
-        colour.append(NO_VALUE_RGB)
     start = 0
     for i in range(1, len(levels) + 1):
         if i < len(levels) and (q[i] == q[start] or (np.isnan(q[i]) and np.isnan(q[start]))):
@@ -447,9 +447,6 @@ def predict_confidence(
             else tuple(int(255 * c) for c in cmap(float(value))[:3])
         )
         start = i
-    if track[1] > edges[-1]:
-        region.append((edges[-1], track[1]))
-        colour.append(NO_VALUE_RGB)
     # Axis labels: the mean confidence every ~500 µm along the probe.
     for lo in np.arange(levels[0], levels[-1], 500.0):
         window = (levels >= lo) & (levels < lo + 500.0)

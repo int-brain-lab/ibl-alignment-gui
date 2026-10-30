@@ -1,4 +1,4 @@
-"""Tests for the auto-alignment: its two region-panel views and how they are computed and cached.
+"""Tests for the auto-alignment: its two prediction views and how they are computed and cached.
 
 The model, the alignment and the result window are replaced by stand-ins: no model is used, nothing
 is drawn on screen and ``ephysatlas`` does not need to be installed.
@@ -31,7 +31,7 @@ OPTIONS = {AUTO_ALIGNMENT_KEY, AUTO_ALIGNMENT_CONFIDENCE_KEY}
 
 
 def _fake_atlas(ids) -> SimpleNamespace:
-    """An atlas whose track labels are ``ids``; region 1 is 'A' (red), region 2 is 'B' (blue)."""
+    """An atlas whose labels are ``ids`` whatever the positions; 1 is 'A' (red), 2 'B' (blue)."""
     table = {1: ('A', RED), 2: ('B', BLUE)}
 
     def get(region_ids):
@@ -48,37 +48,60 @@ def _fake_atlas(ids) -> SimpleNamespace:
 
 
 class TestPredictRegions(unittest.TestCase):
-    def test_predict_regions(self):
-        """One segment per run of the same region along the track, with labels and colours"""
-        atlas = _fake_atlas([1, 1, 2, 2, 2])
-        view = spatial_encoder.predict_regions(
-            atlas, np.zeros((5, 3)), np.array([0.0, 10.0, 20.0, 30.0, 40.0])
-        )
-        np.testing.assert_allclose(view.region, [[0, 10], [20, 40]])
-        # Depths go through metres and back, so positions are compared with a tolerance.
-        np.testing.assert_allclose(view.axis_label[:, 0].astype(float), [5, 30])
+    # Two sites at each of four depths (µm), top of the probe first, as the alignment has them.
+    AXIAL = np.array([80.0, 80.0, 60.0, 60.0, 40.0, 40.0, 20.0, 20.0])
+
+    def _view(self, ids, axial=None):
+        axial = self.AXIAL if axial is None else axial
+        atlas = _fake_atlas(ids)
+        atlas.get_labels = MagicMock(side_effect=atlas.get_labels)
+        xyz = np.arange(3 * len(axial), dtype=float).reshape(-1, 3)
+        view = spatial_encoder.predict_regions(atlas, xyz, axial)
+        np.testing.assert_array_equal(atlas.get_labels.call_args.args[0], xyz)
+        return view
+
+    def test_region_per_channel(self):
+        """Each depth is in the region of its channels' aligned positions, tip first"""
+        view = self._view([2, 2, 2, 2, 1, 1, 1, 1])
         self.assertEqual(view.axis_label[:, 1].tolist(), ['A', 'B'])
         np.testing.assert_array_equal(view.colour, [RED, BLUE])
 
+    def test_contiguous_segments(self):
+        """Segments meet halfway between depths and end 10 µm past the outermost channels"""
+        view = self._view([2, 2, 2, 2, 1, 1, 1, 1])
+        np.testing.assert_allclose(view.region, [[10, 50], [50, 90]])
+        np.testing.assert_allclose(view.axis_label[:, 0].astype(float), [30, 70])
+
+    def test_sites_at_one_depth_disagree(self):
+        """A depth takes the region of most of its sites, or of its first site on a tie"""
+        axial = np.array([60.0, 60.0, 60.0, 40.0, 40.0, 20.0, 20.0])
+        # 60 µm: two of three sites in B; 40 µm: a tie, its first site is in A
+        view = self._view([2, 1, 2, 1, 2, 1, 1], axial)
+        self.assertEqual(view.axis_label[:, 1].tolist(), ['A', 'B'])
+        np.testing.assert_allclose(view.region, [[10, 50], [50, 70]])
+
+    def test_channels_without_depth_skipped(self):
+        """Channels without a depth are left out"""
+        axial = np.array([60.0, np.nan, 20.0])
+        view = self._view([2, 1, 1], axial)
+        np.testing.assert_allclose(view.region, [[10, 40], [40, 70]])
+
 
 class TestPredictConfidence(unittest.TestCase):
-    # Two channels at each of three depths (µm), the track reaching beyond the probe both ways.
+    # Two channels at each of three depths (µm).
     AXIAL = np.array([20.0, 20.0, 40.0, 40.0, 60.0, 60.0])
-    TRACK = np.array([-100.0, 1000.0])
 
     def _view(self, p_good, valid=None):
         valid = np.ones(len(p_good), dtype=bool) if valid is None else np.asarray(valid, bool)
         return spatial_encoder.predict_confidence(
-            np.asarray(p_good, dtype=float), valid, self.AXIAL, self.TRACK
+            np.asarray(p_good, dtype=float), valid, self.AXIAL
         )
 
-    def test_predict_confidence_groups_and_greys(self):
-        """Depths of the same rounded confidence merge; the track beyond the probe is grey"""
+    def test_predict_confidence_groups(self):
+        """Depths of the same rounded confidence merge; the view covers the probe only"""
         view = self._view([0.9, 0.9, 0.9, 0.9, 0.1, 0.1])
-        np.testing.assert_allclose(view.region, [[-100, 10], [10, 50], [50, 70], [70, 1000]])
-        self.assertEqual(view.colour[0].tolist(), GREY)
-        self.assertEqual(view.colour[-1].tolist(), GREY)
-        high, low = view.colour[1], view.colour[2]
+        np.testing.assert_allclose(view.region, [[10, 50], [50, 70]])
+        high, low = view.colour[0], view.colour[1]
         self.assertGreater(high[1], high[0])  # green: high confidence
         self.assertGreater(low[0], low[1])  # red: low confidence
         self.assertFalse(view.boundaries)
@@ -86,13 +109,13 @@ class TestPredictConfidence(unittest.TestCase):
     def test_predict_confidence_unscored_channels(self):
         """Channels that were not aligned have no value and are drawn grey"""
         view = self._view([0.9, 0.9, 0.9, 0.9, 0.1, 0.1], valid=[1, 1, 1, 1, 0, 0])
-        np.testing.assert_allclose(view.region, [[-100, 10], [10, 50], [50, 70], [70, 1000]])
-        self.assertEqual(view.colour[2].tolist(), GREY)
+        np.testing.assert_allclose(view.region, [[10, 50], [50, 70]])
+        self.assertEqual(view.colour[1].tolist(), GREY)
 
     def test_predict_confidence_no_confidence(self):
         """Without any confidence value the probe is one grey segment and has no labels"""
         view = self._view([np.nan] * 6)
-        np.testing.assert_allclose(view.region, [[-100, 10], [10, 70], [70, 1000]])
+        np.testing.assert_allclose(view.region, [[10, 70]])
         self.assertTrue(all(c == GREY for c in view.colour.tolist()))
         self.assertEqual(view.axis_label.shape, (0, 2))
 
@@ -100,7 +123,7 @@ class TestPredictConfidence(unittest.TestCase):
         """The mean confidence is labelled in the middle of every 500 µm"""
         axial = np.arange(0.0, 1500.0, 20.0)
         view = spatial_encoder.predict_confidence(
-            np.full(axial.size, 0.5), np.ones(axial.size, bool), axial, axial
+            np.full(axial.size, 0.5), np.ones(axial.size, bool), axial
         )
         self.assertEqual(
             view.axis_label.tolist(), [[250.0, 'p 0.50'], [750.0, 'p 0.50'], [1250.0, 'p 0.50']]
@@ -133,7 +156,7 @@ class TestAlignShank(unittest.TestCase):
             all_shanks=['probe00'],
             shank_items={'probe00': {'default': self.items}},
             model=SimpleNamespace(
-                brain_atlas=_fake_atlas([1, 1, 1, 2, 2, 2]),
+                brain_atlas=_fake_atlas([2, 2, 1, 1]),
                 configs=['default'],
                 get_current_shank=lambda shank, config: SimpleNamespace(align_exists=True),
             ),
@@ -145,12 +168,12 @@ class TestAlignShank(unittest.TestCase):
         self.result = SimpleNamespace(
             p_good=np.array([0.9, 0.9, 0.1, 0.1]),
             valid=np.ones(4, dtype=bool),
+            channel_xyz=np.zeros((4, 3)),
             diagnostics={'channel_to_trace': np.array([0, 1, 2, 3])},
         )
-        track = np.zeros((self.N_TRACK, 3), dtype=np.float32)
         self.model = object()
         # The alignment itself (features, inputs and align_histology), faked.
-        self.align = MagicMock(return_value=(self.result, self.probe, track))
+        self.align = MagicMock(return_value=(self.result, self.probe))
         self.open_window = MagicMock()
         for name, value in (('_align', self.align), ('_open_result_window', self.open_window)):
             self.enterContext(patch.object(spatial_encoder, name, value))
@@ -300,7 +323,7 @@ class TestAlign(unittest.TestCase):
 
     def test_aligns_with_session_pid(self):
         """The alignment gets the inputs, the track top first and the session's pid"""
-        result, probe, _ = self.align()
+        result, probe = self.align()
         self.assertEqual(result, 'result')
         self.assertEqual(probe['pid'], 'pid')
         kwargs = self.align_histology.call_args.kwargs

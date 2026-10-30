@@ -13,8 +13,6 @@ from ibl_alignment_gui.handlers.probe_handler import (
     find_features_file,
 )
 
-FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures', 'yaml')
-
 
 def make_insertion(subject: str, name: str, pid: str) -> dict:
     """Build a minimal insertion dict matching the Alyx REST response shape."""
@@ -155,14 +153,42 @@ class TestFindFeaturesFile(unittest.TestCase):
 class TestProbeHandlerLocalYaml(unittest.TestCase):
     """The configurations of a session yaml are offered by the handler."""
 
+    PROBE = (
+        '      probe_00:\n'
+        '        datasets:\n'
+        '          spike_sorting:\n'
+        '            path: {name}/spike_sorting\n'
+        '          output:\n'
+        '            path: {name}/alignment\n'
+    )
+
+    def setUp(self):
+        # The yaml's root is the temporary folder, so its paths are absolute on every platform
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def write_yaml(self, body: str) -> Path:
+        path = self.root.joinpath('session.yaml')
+        path.write_text(f'path: {self.root.as_posix()}\n\n{body}')
+        return path
+
     def test_single_config(self):
-        model = ProbeHandlerLocalYaml(FIXTURE_PATH.joinpath('single_probe.yaml'))
+        yaml_file = self.write_yaml('probes:\n' + self.PROBE.format(name='single')[2:])
+        model = ProbeHandlerLocalYaml(yaml_file)
         self.assertEqual(model.configs, ['default'])
         self.assertEqual(model.possible_configs, ['default'])
         self.assertEqual(model.selected_config, 'default')
 
     def test_two_configs(self):
-        model = ProbeHandlerLocalYaml(FIXTURE_PATH.joinpath('dual_config.yaml'))
+        yaml_file = self.write_yaml(
+            'configurations:\n'
+            '  dense:\n    probes:\n'
+            + self.PROBE.format(name='dense')
+            + '  sparse:\n    probes:\n'
+            + self.PROBE.format(name='sparse')
+        )
+        model = ProbeHandlerLocalYaml(yaml_file)
         self.assertEqual(model.configs, ['dense', 'sparse'])
         self.assertEqual(model.possible_configs, ['dense', 'sparse', 'both'])
         self.assertEqual(model.default_config, 'dense')

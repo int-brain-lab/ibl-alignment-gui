@@ -1711,7 +1711,7 @@ wheels = [
 [[package]]
 name = "ibleatools"
 version = "0.12.0"
-source = { git = "https://github.com/int-brain-lab/ibleatools.git#124dc82bb8e3fdc6dc3b1bfc7a0bddc6af5834e6" }
+source = { git = "https://github.com/int-brain-lab/ibleatools.git#39d6d1d11c0487e82a564de8f7ac82d648014f40" }
 dependencies = [
     { name = "filelock" },
     { name = "huggingface-hub" },

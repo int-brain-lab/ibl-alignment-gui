@@ -420,7 +420,7 @@ class TestEncoderModelLoading(_ModelLoadingTests, unittest.TestCase):
         alignment = types.ModuleType('ephysatlas.alignment')
         alignment.ChannelModel = self._fake_load
         alignment.CHANNEL_MODEL_REPO_ID = self.default_repo
-        alignment.VINTAGE = self.default_revision
+        alignment.CHANNEL_MODEL_REVISION = self.default_revision
         stubs = {'ephysatlas': types.ModuleType('ephysatlas'), 'ephysatlas.alignment': alignment}
         self.enterContext(patch.dict(sys.modules, stubs))
 

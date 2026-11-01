@@ -4,7 +4,8 @@ Automatic probe alignment with the Ephys Atlas channel-level model (channel-pred
 The model and the alignment method live in ``ephysatlas.alignment`` (ibleatools); this module is
 only their GUI. The released model is loaded with ``ephysatlas.load_pretrained`` (through
 ``ephysatlas.alignment.ChannelModel``) from the Hugging Face Hub or a local release, and run with
-its ``predict``. The shank's recorded channel features are then warped along its histology track
+its ``predict``, which predicts the way the release says. The shank's recorded channel features are
+then warped along its histology track
 (the GUI's ``xyz_samples``, top to bottom of the brain) onto the model's predictions along it,
 behind a progress dialog. The result figure opens in a pop-up window, and the prediction panel
 shows either the atlas region of each channel where the alignment placed it, or the alignment
@@ -75,9 +76,12 @@ ENCODER_NOTE = (
 # -----------------------------------------------------------------------------
 def _default_source() -> tuple[str, str]:
     """Return the alignment model's default repository and release tag, from ephysatlas."""
-    from ephysatlas.alignment import CHANNEL_MODEL_REPO_ID, VINTAGE  # noqa: PLC0415 - heavy, lazy
+    from ephysatlas.alignment import (  # noqa: PLC0415 - heavy, lazy
+        CHANNEL_MODEL_REPO_ID,
+        CHANNEL_MODEL_REVISION,
+    )
 
-    return CHANNEL_MODEL_REPO_ID, VINTAGE
+    return CHANNEL_MODEL_REPO_ID, CHANNEL_MODEL_REVISION
 
 
 def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:

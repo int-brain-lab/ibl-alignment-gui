@@ -594,5 +594,21 @@ class TestLazyImports(unittest.TestCase):
         self.assertEqual(run.stdout.strip(), '[]')
 
 
+class TestDefaultSource(unittest.TestCase):
+    """The alignment model's default release."""
+
+    def test_the_default_is_the_model_release_not_the_feature_vintage(self):
+        """A model is tagged apart from the features it was trained on"""
+        alignment = SimpleNamespace(
+            CHANNEL_MODEL_REPO_ID='int-brain-lab/ea-encoder-channel',
+            CHANNEL_MODEL_REVISION='2026_W45',
+            VINTAGE='2026_W42',
+        )
+        with patch.dict(sys.modules, {'ephysatlas.alignment': alignment}):
+            self.assertEqual(
+                spatial_encoder._default_source(), ('int-brain-lab/ea-encoder-channel', '2026_W45')
+            )
+
+
 if __name__ == '__main__':
     unittest.main()

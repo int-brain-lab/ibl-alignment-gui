@@ -15,7 +15,7 @@ disk.
 1. Open `Plugins → Channel Prediction` and choose the model's `Load … model (Hugging Face)…` entry.
 2. In the dialog, either:
 
-   - give the Hugging Face repository and the release tag, such as `2026_W42`, or
+   - give the Hugging Face repository and the release tag, such as `2026_W45`, or
    - choose a local release directory, one that holds an `ephysatlas_model.json`.
 
 3. Click **OK**. The release is downloaded once and cached in `~/.cache/ephysatlas/models`.

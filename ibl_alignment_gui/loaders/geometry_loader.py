@@ -6,8 +6,12 @@ from typing import Any
 import numpy as np
 import spikeglx
 
-import one.alf.io as alfio
-from ibl_alignment_gui.loaders.sources import load_alf
+from ibl_alignment_gui.loaders.sources import (
+    AlfReaderLocal,
+    AlfReaderOne,
+    SortingSource,
+    SortingSourceAlf,
+)
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -302,10 +306,16 @@ class GeometryLoader(ABC):
     """
     Abstract base class for loading probe geometry from metadata or channels.
 
-    Subclasses must implement the `load_meta_data` and `load_channels` methods.
+    Subclasses must implement the `load_meta_data` method.
+
+    Parameters
+    ----------
+    sorting : SortingSource
+        The source of the spike sorting channels.
     """
 
-    def __init__(self):
+    def __init__(self, sorting: SortingSource):
+        self.sorting: SortingSource = sorting
         self.electrodes: Geometry | None = None
         self.channels: Geometry | None = None
 
@@ -344,9 +354,18 @@ class GeometryLoader(ABC):
     def load_meta_data(self) -> Bunch[str, Any] | None:
         """Load probe metadata from spikeglx ap.meta file."""
 
-    @abstractmethod
-    def load_channels(self, **kwargs) -> Bunch[str, np.ndarray] | None:
-        """Load spike sorting channels data."""
+    def load_channels(self) -> Bunch[str, np.ndarray] | None:
+        """
+        Load spike sorting channels data.
+
+        Returns
+        -------
+        Bunch or None
+            A Bunch containing the channels data, or None if not found (or there is no spike
+            sorting).
+        """
+        chns = self.sorting.load_channels()
+        return chns if chns['exists'] else None
 
     def get_sites_for_shank(self, shank_idx: int, sites=None) -> Bunch[str, Any]:
         """
@@ -413,7 +432,9 @@ class GeometryLoaderOne(GeometryLoader):
         self.probe_label: str = insertion['name']
         self.probe_collection: str = probe_collection
 
-        super().__init__()
+        super().__init__(
+            SortingSourceAlf(AlfReaderOne(one, self.eid, collection=self.probe_collection))
+        )
 
     def load_meta_data(self) -> dict | None:
         """
@@ -435,26 +456,6 @@ class GeometryLoaderOne(GeometryLoader):
         except ALFObjectNotFound:
             return None
 
-    def load_channels(self, **kwargs) -> Bunch[str, Any] | None:
-        """
-        Load spike sorting channels data.
-
-        Returns
-        -------
-        Bunch or None
-            A Bunch containing the channels data, or None if not found.
-        """
-        chns = load_alf(
-            self.one.load_object,
-            self.eid,
-            'channels',
-            collection=self.probe_collection,
-            attribute=['localCoordinates', 'rawInd'],
-            **kwargs,
-        )
-
-        return chns if chns['exists'] else None
-
 
 class GeometryLoaderLocal(GeometryLoader):
     """
@@ -470,8 +471,9 @@ class GeometryLoaderLocal(GeometryLoader):
     def __init__(self, data_paths: DatasetPaths):
         self.spike_path: Path = data_paths.spike_sorting
         self.meta_path: Path = data_paths.raw_ephys
+        reader = AlfReaderLocal(self.spike_path) if self.spike_path is not None else None
 
-        super().__init__()
+        super().__init__(SortingSourceAlf(reader))
 
     def load_meta_data(self) -> dict | None:
         """
@@ -486,27 +488,6 @@ class GeometryLoaderLocal(GeometryLoader):
             return None
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
         return spikeglx.read_meta_data(meta_file) if meta_file else None
-
-    def load_channels(self, **kwargs) -> Bunch[str, Any] | None:
-        """
-        Load spike sorting channels data.
-
-        Returns
-        -------
-        Bunch or None
-            A Bunch containing the channels data, or None if not found (or there is no spike
-            sorting).
-        """
-        if self.spike_path is None:
-            return None
-        chns = load_alf(
-            alfio.load_object,
-            self.spike_path,
-            'channels',
-            attribute=['localCoordinates', 'rawInd'],
-            **kwargs,
-        )
-        return chns if chns['exists'] else None
 
 
 def arrange_channels_into_banks(

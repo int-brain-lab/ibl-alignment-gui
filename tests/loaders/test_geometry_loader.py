@@ -19,6 +19,7 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     find_geometry_mismatches,
     pad_data_to_full_chn_map,
 )
+from ibl_alignment_gui.loaders.sources import AlfReaderLocal, SortingSource, SortingSourceAlf
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -56,13 +57,10 @@ class FixtureGeometryLoader(GeometryLoader):
 
     def __init__(self, np_type):
         self.np_type = np_type
-        super().__init__()
+        super().__init__(SortingSourceAlf(AlfReaderLocal(FIXTURE_PATH.joinpath(np_type))))
 
     def load_meta_data(self):
         return load_meta_fixtures(self.np_type)
-
-    def load_channels(self, **kwargs):
-        return load_channel_fixtures(self.np_type)
 
 
 class TestGeometry(unittest.TestCase):
@@ -598,20 +596,31 @@ class TestGeometryLoader(unittest.TestCase):
     def setUp(self):
         self.mock_meta = Bunch(x=np.array([0, 10]), y=np.array([0, 10]), shank=np.array([0, 0]))
         self.mock_channels = Bunch(
-            localCoordinates=np.array([[0, 0], [10, 10]]), rawInd=np.array([0, 1])
+            localCoordinates=np.array([[0, 0], [10, 10]]), rawInd=np.array([0, 1]), exists=True
         )
 
     def _mock_loaders(self, mock_channels, mock_meta):
-        """Helper to make a fake Geometry object with abstract methods implemented."""
+        """Helper to make a GeometryLoader that reads the given channels and metadata."""
 
         class MockGeometryLoader(GeometryLoader):
-            def load_channels(self):
-                return mock_channels
-
             def load_meta_data(self):
                 return mock_meta
 
-        return MockGeometryLoader()
+        sorting = MagicMock(spec=SortingSource)
+        sorting.load_channels.return_value = (
+            mock_channels if mock_channels is not None else Bunch(exists=False)
+        )
+        return MockGeometryLoader(sorting)
+
+    def test_load_channels(self):
+        """Channels are read from the sorting source, and are None when they do not exist"""
+        with self.subTest('Channels exist'):
+            loader = self._mock_loaders(self.mock_channels, None)
+            self.assertIs(loader.load_channels(), self.mock_channels)
+
+        with self.subTest('Channels do not exist'):
+            loader = self._mock_loaders(None, None)
+            self.assertIsNone(loader.load_channels())
 
     @patch('ibl_alignment_gui.loaders.geometry_loader.find_geometry_mismatches', return_value=[])
     @patch('ibl_alignment_gui.loaders.geometry_loader.ChannelGeometry')
@@ -763,18 +772,12 @@ class TestGeometryLoaderOne(unittest.TestCase):
             data = self.loader.load_meta_data()
             self.assertIsNone(data)
 
-    def test_load_channels(self):
-        """Test the load_channels method"""
-        with self.subTest('Channels data exists'):
-            self.mock_one.load_object.return_value = self.mock_data
-            data = self.loader.load_channels()
-            self.assertTrue(data.pop('exists'))
-            self.assertIs(data, self.mock_data)
-
-        with self.subTest('Channels data does not exist'):
-            self.mock_one.load_object.side_effect = ALFObjectNotFound
-            data = self.loader.load_channels()
-            self.assertIsNone(data)
+    def test_channels_read_probe_collection(self):
+        """Channels are read from the probe's spike sorting collection"""
+        loader = GeometryLoaderOne(self.insertion, self.mock_one, probe_collection='alf/probe00')
+        self.assertIs(loader.sorting.reader.one, self.mock_one)
+        self.assertEqual(loader.sorting.reader.eid, self.insertion['session'])
+        self.assertEqual(loader.sorting.reader.collection, 'alf/probe00')
 
 
 class TestGeometryLoaderLocal(unittest.TestCase):
@@ -788,7 +791,6 @@ class TestGeometryLoaderLocal(unittest.TestCase):
             spike_sorting=self.probe_path.joinpath('spikes'),
             raw_ephys=self.probe_path.joinpath('meta'),
         )
-        self.mock_data = Bunch({'x': np.arange(10), 'y': np.arange(10)})
         self.loader = GeometryLoaderLocal(self.collections)
 
     @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.read_meta_data')
@@ -821,20 +823,9 @@ class TestGeometryLoaderLocal(unittest.TestCase):
             self.assertIsNone(loader.meta_path)
             self.assertIsNone(loader.load_meta_data())
 
-    @patch('ibl_alignment_gui.loaders.geometry_loader.alfio.load_object')
-    def test_load_channels(self, mock_data):
-        """Test the load_channels method"""
-
-        with self.subTest('Channels data exists'):
-            mock_data.return_value = self.mock_data
-            data = self.loader.load_channels()
-            self.assertTrue(data.pop('exists'))
-            self.assertIs(data, self.mock_data)
-
-        with self.subTest('Channels data does not exist'):
-            mock_data.side_effect = ALFObjectNotFound
-            data = self.loader.load_channels()
-            self.assertIsNone(data)
+    def test_channels_read_spike_sorting_folder(self):
+        """Channels are read from the spike sorting folder"""
+        self.assertEqual(self.loader.sorting.reader.path, self.collections.spike_sorting)
 
 
 class TestGeometryWithoutSpikeSorting(unittest.TestCase):

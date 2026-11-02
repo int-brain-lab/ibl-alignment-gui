@@ -11,6 +11,7 @@ from ibl_alignment_gui.loaders.sources import (
     AlfReaderOne,
     SortingSource,
     SortingSourceAlf,
+    SortingSourceSI,
 )
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
@@ -137,7 +138,8 @@ class ChannelGeometry(Geometry):
     """
     Geometry class using spike sorting channel data.
 
-    Here the sites correspond to the spike sorting channels.
+    Here the sites correspond to the spike sorting channels. The channels are split into shanks
+    by their 'shank' when given, otherwise by the gaps in their x coordinates.
 
     Parameters
     ----------
@@ -149,6 +151,7 @@ class ChannelGeometry(Geometry):
 
     def __init__(self, channels: Bunch[str, np.ndarray], shank_diff: int = 100) -> None:
         self.shank_diff: int = shank_diff
+        self.shank: np.ndarray | None = channels.get('shank')
         chn_x = channels['localCoordinates'][:, 0]
         chn_y = channels['localCoordinates'][:, 1]
         chn_ind = channels['rawInd']
@@ -157,13 +160,15 @@ class ChannelGeometry(Geometry):
 
     def _get_n_shanks(self) -> int:
         """
-        Detect the number of shanks on the probe using the difference in spacing in x coordinates.
+        Detect the number of shanks on the probe from the shanks or the x coordinates.
 
         Returns
         -------
         int
             The number of shanks detected on the probe
         """
+        if self.shank is not None:
+            return np.unique(self.shank).size
         x_coords = np.unique(self.x_coords)
         x_coords_diff = np.diff(x_coords)
         n_shanks = np.sum(x_coords_diff > self.shank_diff) + 1
@@ -171,13 +176,20 @@ class ChannelGeometry(Geometry):
 
     def _get_shank_groups(self) -> Bunch[int, np.ndarray]:
         """
-        Get the channel index per shank using the difference in spacing in x coordinates.
+        Get the channel index per shank from the shanks or the x coordinates.
 
         Returns
         -------
         Bunch
             A bunch containing the sites indices for each shank.
         """
+        if self.shank is not None:
+            # Shank ids can be strings, so the shanks are ordered by their position instead
+            shanks = sorted(
+                np.unique(self.shank), key=lambda sh: np.min(self.x_coords[self.shank == sh])
+            )
+            return Bunch({i: np.where(self.shank == sh)[0] for i, sh in enumerate(shanks)})
+
         x_coords = np.unique(self.x_coords)
         shank_groups = np.split(x_coords, np.where(np.diff(x_coords) > self.shank_diff)[0] + 1)
 
@@ -488,6 +500,24 @@ class GeometryLoaderLocal(GeometryLoader):
             return None
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
         return spikeglx.read_meta_data(meta_file) if meta_file else None
+
+
+class GeometryLoaderSI(GeometryLoaderLocal):
+    """
+    Geometry loader using a SpikeInterface SortingAnalyzer on the local file system.
+
+    The channels are read from the SortingAnalyzer and the metadata from the ``raw_ephys`` folder.
+
+    Parameters
+    ----------
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe, with the SortingAnalyzer as the
+        ``spike_sorting``.
+    """
+
+    def __init__(self, data_paths: DatasetPaths):
+        super().__init__(data_paths)
+        self.sorting = SortingSourceSI(self.spike_path)
 
 
 def arrange_channels_into_banks(

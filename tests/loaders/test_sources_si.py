@@ -1,48 +1,16 @@
 import tempfile
 import unittest
-import warnings
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
+import one.alf.io as alfio
 from ibl_alignment_gui.loaders.sources import SortingSourceSI, raw_channel_indices
 from ibl_alignment_gui.utils.optional import SPIKEINTERFACE_EXTRA_HINT, has_spikeinterface
+from tests.loaders._si_analyzer import write_analyzer
 
 LOGGER = 'ibl_alignment_gui.loaders.sources'
-
-
-def write_analyzer(folder, extensions=None, **kwargs):
-    """
-    Save a small SortingAnalyzer of a generated recording, with the given extensions computed.
-
-    Parameters
-    ----------
-    folder : Path
-        The folder to save the analyzer to.
-    extensions : list of str or dict or None
-        The extensions to compute, or a dict of extension names to their parameters. Defaults to
-        the extensions SortingSourceSI needs.
-    **kwargs
-        Passed to generate_ground_truth_recording.
-
-    Returns
-    -------
-    Path
-        The analyzer folder.
-    """
-    import spikeinterface as si  # noqa: PLC0415
-
-    extensions = extensions or ['random_spikes', 'templates', 'spike_amplitudes']
-    kwargs = {'durations': [4.0], 'num_channels': 8, 'num_units': 4, 'seed': 0} | kwargs
-    # SpikeInterface warns that the generated recording cannot be saved with the analyzer
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        recording, sorting = si.generate_ground_truth_recording(**kwargs)
-        analyzer = si.create_sorting_analyzer(sorting, recording, sparse=False, verbose=False)
-        analyzer.compute(extensions, verbose=False)
-        analyzer.save_as(format='binary_folder', folder=folder)
-
-    return folder
 
 
 @unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
@@ -70,6 +38,8 @@ class TestSortingSourceSI(unittest.TestCase):
         amps = self.analyzer.get_extension('spike_amplitudes').get_data()
 
         self.assertTrue(spikes['exists'])
+        # The plots need the to_df method of the ALF objects
+        self.assertIsInstance(spikes, alfio.AlfBunch)
         np.testing.assert_array_equal(spikes['clusters'], spike_vector['unit_index'])
         np.testing.assert_allclose(
             spikes['times'], spike_vector['sample_index'] / self.analyzer.sampling_frequency
@@ -140,6 +110,8 @@ class TestSortingSourceSI(unittest.TestCase):
         np.testing.assert_array_equal(
             channels['localCoordinates'], self.analyzer.get_channel_locations()
         )
+        # The generated probe sets no shanks
+        self.assertNotIn('shank', channels)
 
     def test_no_spike_sorting(self):
         """Without an analyzer every object is returned with exists=False"""
@@ -212,6 +184,41 @@ class TestSortingSourceSIExtensions(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             SortingSourceSI(path).load_spikes()
         self.assertIn('2 segments', str(ctx.exception))
+
+
+@unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+class TestSortingSourceSIShanks(unittest.TestCase):
+    """The shanks of a multi-shank probe."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.path = write_analyzer(Path(self.temp_dir.name).joinpath('analyzer'), n_shanks=2)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_channels_carry_probe_shanks(self):
+        """The shank of each channel is read from the probe"""
+        channels = SortingSourceSI(self.path).load_channels()
+        np.testing.assert_array_equal(channels['shank'], ['0'] * 4 + ['1'] * 4)
+
+
+class TestSortingSourceSIWithoutSpikeInterface(unittest.TestCase):
+    """An analyzer cannot be read without SpikeInterface."""
+
+    def test_install_hint(self):
+        """Giving an analyzer without SpikeInterface installed says how to install it"""
+        with (
+            patch('ibl_alignment_gui.loaders.sources.has_spikeinterface', return_value=False),
+            self.assertRaises(ImportError) as ctx,
+        ):
+            SortingSourceSI(Path('analyzer'))
+        self.assertIn(SPIKEINTERFACE_EXTRA_HINT, str(ctx.exception))
+
+    def test_no_analyzer(self):
+        """Without an analyzer SpikeInterface is not needed"""
+        with patch('ibl_alignment_gui.loaders.sources.has_spikeinterface', return_value=False):
+            self.assertEqual(SortingSourceSI(None).load_channels(), {'exists': False})
 
 
 class TestRawChannelIndices(unittest.TestCase):

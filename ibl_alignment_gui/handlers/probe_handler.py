@@ -25,6 +25,7 @@ from ibl_alignment_gui.loaders.alignment_uploader import (
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoaderLocal,
     DataLoaderOne,
+    DataLoaderSI,
     FeatureLoaderLocal,
     FeatureLoaderOne,
     SpikeGLXLoaderLocal,
@@ -33,6 +34,7 @@ from ibl_alignment_gui.loaders.data_loader import (
 from ibl_alignment_gui.loaders.geometry_loader import (
     GeometryLoaderLocal,
     GeometryLoaderOne,
+    GeometryLoaderSI,
 )
 from ibl_alignment_gui.loaders.histology_loader import (
     SliceLoader,
@@ -42,7 +44,11 @@ from ibl_alignment_gui.loaders.histology_loader import (
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
 from ibl_alignment_gui.loaders.transform_loader import TransformLoaderAllen
-from ibl_alignment_gui.utils.parse_yaml import DatasetPaths, load_alignment_yaml
+from ibl_alignment_gui.utils.parse_yaml import (
+    DatasetPaths,
+    is_sorting_analyzer,
+    load_alignment_yaml,
+)
 from iblatlas.atlas import AllenAtlas, BrainAtlas
 from iblutil.util import Bunch
 from one import params
@@ -1118,11 +1124,56 @@ def find_features_file(folder: Path) -> Path | None:
     return files[0] if files else None
 
 
+def find_sorting_analyzer(folder: Path) -> Path | None:
+    """
+    Find the SpikeInterface SortingAnalyzer in a data folder.
+
+    The analyzer is either the folder itself or one folder or zarr in it.
+
+    Parameters
+    ----------
+    folder : Path
+        The data folder.
+
+    Returns
+    -------
+    Path or None
+        The SortingAnalyzer, or None.
+    """
+    if is_sorting_analyzer(folder):
+        return folder
+    analyzers = sorted(path for path in folder.iterdir() if is_sorting_analyzer(path))
+    if len(analyzers) > 1:
+        logger.warning(
+            'Several SortingAnalyzers in %s, so none is used: %s. Keep one, or give it in a '
+            'session yaml.',
+            folder,
+            ', '.join(path.name for path in analyzers),
+        )
+        return None
+    return analyzers[0] if analyzers else None
+
+
+def make_data_loader(data_paths: DatasetPaths) -> DataLoaderLocal:
+    """Build the local data loader for the format of the spike sorting."""
+    if data_paths.spike_sorting_format == 'spikeinterface':
+        return DataLoaderSI(data_paths)
+    return DataLoaderLocal(data_paths)
+
+
+def make_geometry_loader(data_paths: DatasetPaths) -> GeometryLoaderLocal:
+    """Build the local geometry loader for the format of the spike sorting."""
+    if data_paths.spike_sorting_format == 'spikeinterface':
+        return GeometryLoaderSI(data_paths)
+    return GeometryLoaderLocal(data_paths)
+
+
 class ProbeHandlerLocal(ProbeHandler):
     """
     Local file system implementation of ProbeHandler.
 
     For this ProbeHandler, all ephys and alignment data must be stored in a single folder on disk.
+    The spike sorting can be a SpikeInterface SortingAnalyzer, either the folder itself or in it.
     """
 
     def __init__(self, brain_atlas: BrainAtlas | None = None):
@@ -1140,18 +1191,21 @@ class ProbeHandlerLocal(ProbeHandler):
         folder_path : Path
             A path to the folder on the local disk that contains the data
         """
+        folder_path = Path(folder_path)
+        analyzer = find_sorting_analyzer(folder_path)
         self.data_paths = DatasetPaths(
-            spike_sorting=folder_path,
+            spike_sorting=analyzer or folder_path,
             processed_ephys=folder_path,
             raw_ephys=folder_path,
             histology=folder_path,
             picks=folder_path,
             output=folder_path,
             features=find_features_file(folder_path),
+            spike_sorting_format='spikeinterface' if analyzer else 'alf',
         )
 
         # Load in the geometry and find the number of shnaks
-        self.geom = GeometryLoaderLocal(self.data_paths)
+        self.geom = make_geometry_loader(self.data_paths)
         self.geom.get_geometry()
 
         self.n_shanks = self.geom.channels.n_shanks
@@ -1189,7 +1243,7 @@ class ProbeHandlerLocal(ProbeHandler):
         for ish, ishank in enumerate(self.shank_labels):
             loaders = Bunch()
             loaders['geom'] = self.geom
-            loaders['data'] = DataLoaderLocal(self.data_paths)
+            loaders['data'] = make_data_loader(self.data_paths)
             loaders['align'] = AlignmentLoaderLocal(
                 self.data_paths.output, ish, self.n_shanks, picks_path=self.data_paths.picks
             )
@@ -1255,7 +1309,7 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         """
         if len(self.probes) == 1:
             data_path = self.data_paths[self.default_config][self.probes[0]]
-            geom = GeometryLoaderLocal(data_path)
+            geom = make_geometry_loader(data_path)
             geom.get_geometry()
             # Shank count comes from the ALF channels object when present, else from the SpikeGLX
             # meta (e.g. external datasets with no spike sorting), mirroring the fallback used in
@@ -1308,8 +1362,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                 data_path = self.data_paths[config][probe]
 
                 loaders = Bunch()
-                loaders['geom'] = GeometryLoaderLocal(data_path)
-                loaders['data'] = DataLoaderLocal(data_path)
+                loaders['geom'] = make_geometry_loader(data_path)
+                loaders['data'] = make_data_loader(data_path)
                 loaders['align'] = self._build_align_loader(data_path, ishank)
                 loaders['upload'] = self._build_upload_loader(data_path, ishank)
                 loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)

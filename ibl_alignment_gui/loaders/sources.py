@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 import one.alf.io as alfio
+from ibl_alignment_gui.utils.optional import SPIKEINTERFACE_EXTRA_HINT, has_spikeinterface
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
 
@@ -491,6 +492,9 @@ class SortingSourceSI(SortingSource):
     """
     Spike sorting data from a saved SpikeInterface SortingAnalyzer.
 
+    The objects are returned as AlfBunch, the same as the ALF objects, as the plots use its
+    to_df method.
+
     The analyzer must have a single segment and the templates and spike_amplitudes extensions.
     The spike_locations, template_metrics and quality_metrics extensions are used when they have
     been computed.
@@ -505,6 +509,10 @@ class SortingSourceSI(SortingSource):
     """
 
     def __init__(self, path: Path | None, good_units_query: str | None = SI_GOOD_UNITS_QUERY):
+        if path is not None and not has_spikeinterface():
+            raise ImportError(
+                f'{path} is a SpikeInterface SortingAnalyzer. {SPIKEINTERFACE_EXTRA_HINT}'
+            )
         self.path: Path | None = path
         self.good_units_query: str | None = good_units_query
         self._analyzer: SortingAnalyzer | None = None
@@ -558,11 +566,11 @@ class SortingSourceSI(SortingSource):
         analyzer = self.analyzer
         spikes = analyzer.sorting.to_spike_vector()
 
-        samples = spikes['sample_index']
-        if analyzer.has_recording() and analyzer.recording.has_time_vector():
-            times = analyzer.recording.get_times()[samples]
+        # Both take the start time, and a recording's time vector, into account
+        if analyzer.has_recording():
+            times = analyzer.recording.sample_index_to_time(spikes['sample_index'])
         else:
-            times = samples / analyzer.sampling_frequency
+            times = analyzer.sorting.sample_index_to_time(spikes['sample_index'])
 
         if analyzer.has_extension('spike_locations'):
             depths = analyzer.get_extension('spike_locations').get_data()['y']
@@ -573,7 +581,7 @@ class SortingSourceSI(SortingSource):
         # The amplitudes are signed in uV, the plots expect positive amplitudes in V
         amps = np.abs(analyzer.get_extension('spike_amplitudes').get_data()) * 1e-6
 
-        return Bunch(
+        return alfio.AlfBunch(
             depths=depths,
             amps=amps,
             times=times,
@@ -614,7 +622,7 @@ class SortingSourceSI(SortingSource):
                 * 1e3
             )
 
-        return Bunch(
+        return alfio.AlfBunch(
             metrics=self._load_metrics(),
             peakToTrough=peak_to_trough,
             waveforms=waveforms[:, :, np.newaxis],
@@ -672,16 +680,21 @@ class SortingSourceSI(SortingSource):
         Returns
         -------
         Bunch
-            rawInd and localCoordinates (um) with an 'exists' flag.
+            rawInd, localCoordinates (um) and, when the probe sets them, the shank of each
+            channel, with an 'exists' flag.
         """
         if self.path is None:
             return Bunch(exists=False)
         analyzer = self.analyzer
-        return Bunch(
+        channels = alfio.AlfBunch(
             rawInd=raw_channel_indices(analyzer.channel_ids),
             localCoordinates=analyzer.get_channel_locations(),
             exists=True,
         )
+        shank_ids = analyzer.get_probe().shank_ids
+        if shank_ids is not None and np.all(shank_ids != ''):
+            channels['shank'] = np.asarray(shank_ids)
+        return channels
 
 
 def raw_channel_indices(channel_ids: np.ndarray) -> np.ndarray:

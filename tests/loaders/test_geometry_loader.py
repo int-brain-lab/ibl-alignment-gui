@@ -281,6 +281,22 @@ class TestGeometry(unittest.TestCase):
 class TestChannelGeometry(unittest.TestCase):
     """Test the ChannelGeometry class"""
 
+    def test_shanks_from_shank_ids(self):
+        """Given shanks are used over the x gaps, and ordered by their position"""
+        # The shanks are 50 um apart, below the gap that would split them, and their ids sort in
+        # the opposite order to their position
+        channels = Bunch(
+            localCoordinates=np.c_[[0, 50, 0, 50], [20, 20, 40, 40]],
+            rawInd=np.arange(4),
+            shank=np.array(['b', 'a', 'b', 'a']),
+        )
+        geom = ChannelGeometry(channels)
+        geom.n_shanks = geom._get_n_shanks()
+        self.assertEqual(geom.n_shanks, 2)
+        groups = geom._get_shank_groups()
+        np.testing.assert_array_equal(groups[0], [0, 2])
+        np.testing.assert_array_equal(groups[1], [1, 3])
+
     def test_get_n_shanks_and_get_shank_groups(self):
         """Test the _get_n_shanks and _get_shank_groups methods"""
         with self.subTest('Single shank'):

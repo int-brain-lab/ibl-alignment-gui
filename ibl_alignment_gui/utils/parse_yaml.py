@@ -39,6 +39,8 @@ class DatasetPaths(BaseModel):
         Path to a folder of registration transforms used to warp channel locations into the
         Allen CCF (anatomical workflow only). When set, channel locations are additionally
         saved in CCF coordinates.
+    spike_sorting_format : {'alf', 'spikeinterface'}
+        The format of the spike sorting: ALF files, or a SpikeInterface SortingAnalyzer.
     """
 
     spike_sorting: Path | None = None
@@ -52,6 +54,7 @@ class DatasetPaths(BaseModel):
     output: Path | None = None
     features: Path | None = None
     transforms: Path | None = None
+    spike_sorting_format: Literal['alf', 'spikeinterface'] = 'alf'
 
 
 class Datasets(BaseModel):
@@ -67,10 +70,14 @@ class Datasets(BaseModel):
         session-level coordinate space to use for histology slice loading. 'ccf' loads via
         NrrdSliceLoader using the Allen CCF atlas; 'anatomical' loads via AnatomicalSliceLoader
         using the original image space produced by the histology registration pipeline.
+    format : {'alf', 'spikeinterface'} | None
+        Only meaningful for the ``spike_sorting`` entry: whether the spike sorting is ALF files
+        or a SpikeInterface SortingAnalyzer. Detected from the path when not given.
     """
 
     path: Path | None = None
     space: Literal['ccf', 'anatomical'] | None = None
+    format: Literal['alf', 'spikeinterface'] | None = None
 
 
 class Probe(BaseModel):
@@ -182,6 +189,59 @@ def resolve_path(
     raise ValueError('No absolute root provided to resolve relative path.')
 
 
+def is_sorting_analyzer(path: Path | None) -> bool:
+    """
+    Whether a path is a saved SpikeInterface SortingAnalyzer.
+
+    Parameters
+    ----------
+    path : Path or None
+        The spike sorting path.
+
+    Returns
+    -------
+    bool
+        True for a SortingAnalyzer binary folder or zarr.
+    """
+    if path is None:
+        return False
+    return path.joinpath('spikeinterface_info.json').exists() or (
+        path.suffix == '.zarr' and path.joinpath('.zattrs').exists()
+    )
+
+
+def resolve_sorting_format(
+    path: Path | None, sorting_format: str | None = None
+) -> Literal['alf', 'spikeinterface']:
+    """
+    Get the format of the spike sorting at a path.
+
+    Parameters
+    ----------
+    path : Path or None
+        The spike sorting path.
+    sorting_format : {'alf', 'spikeinterface'} or None
+        The format given in the yaml. When None, it is detected from the path.
+
+    Returns
+    -------
+    {'alf', 'spikeinterface'}
+        The spike sorting format.
+
+    Raises
+    ------
+    ValueError
+        If the format is 'spikeinterface' and there is no SortingAnalyzer at the path.
+    """
+    if sorting_format is None:
+        return 'spikeinterface' if is_sorting_analyzer(path) else 'alf'
+    if sorting_format == 'spikeinterface' and not is_sorting_analyzer(path):
+        raise ValueError(
+            f'The spike_sorting format is spikeinterface but there is no SortingAnalyzer at {path}'
+        )
+    return sorting_format
+
+
 # -------------------------------
 # Loader
 # -------------------------------
@@ -290,6 +350,14 @@ def load_alignment_yaml(
                     return default_dataset.path if default_dataset else None
                 return None
 
+            def get_format(dname: str) -> str | None:
+                """Get the format of a dataset from the probe, else from the defaults section."""
+                dataset = datasets.get(dname)  # noqa: B023
+                if dataset and dataset.format:
+                    return dataset.format
+                default_dataset = alignment.defaults.get(dname) if alignment.defaults else None
+                return default_dataset.format if default_dataset else None
+
             # Resolve all paths
             for dataset_name in [
                 'spike_sorting',
@@ -307,6 +375,10 @@ def load_alignment_yaml(
                     path_value, probe_path, config_path, global_path, default_value
                 )
                 setattr(resolved_paths, dataset_name, resolved_path)
+
+            resolved_paths.spike_sorting_format = resolve_sorting_format(
+                resolved_paths.spike_sorting, get_format('spike_sorting')
+            )
 
             # Datasets that are only read can be looked for in the folders where they are usually
             # saved: the trajectory beside the spike sorting, and the RMS and power spectra beside

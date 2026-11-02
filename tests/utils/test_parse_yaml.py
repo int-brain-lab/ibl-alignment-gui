@@ -5,7 +5,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from ibl_alignment_gui.utils.parse_yaml import load_alignment_yaml, resolve_path
+from ibl_alignment_gui.utils.parse_yaml import (
+    load_alignment_yaml,
+    resolve_path,
+    resolve_sorting_format,
+)
 
 FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures', 'yaml')
 
@@ -335,6 +339,64 @@ class TestDefaults(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             load_alignment_yaml(yaml_file)
+
+
+class TestSpikeSortingFormat(unittest.TestCase):
+    """The spike sorting is ALF files or a SpikeInterface SortingAnalyzer."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name).resolve()
+        self.alf = self.root.joinpath('ks')
+        self.alf.mkdir()
+        self.analyzer = self.root.joinpath('analyzer')
+        self.analyzer.mkdir()
+        self.analyzer.joinpath('spikeinterface_info.json').touch()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def load(self, spike_sorting, defaults=''):
+        """Load a single probe yaml with the given spike_sorting entry."""
+        lines = [f'path: {self.root}']
+        if defaults:
+            lines += ['defaults:', *[f'  {line}' for line in defaults.splitlines()]]
+        lines += ['probes:', '  probe_00:', '    datasets:', '      spike_sorting:']
+        lines += [f'        {line}' for line in spike_sorting.splitlines()]
+        lines += ['      output:', '        path: out']
+
+        path = self.root.joinpath('session.yaml')
+        path.write_text('\n'.join(lines) + '\n')
+        _, _, data_paths, _ = load_alignment_yaml(path)
+
+        return data_paths['default']['probe_00']
+
+    def test_detected_from_the_path(self):
+        self.assertEqual(self.load('path: ks').spike_sorting_format, 'alf')
+        self.assertEqual(self.load('path: analyzer').spike_sorting_format, 'spikeinterface')
+
+    def test_zarr_analyzer_detected(self):
+        zarr = self.root.joinpath('analyzer.zarr')
+        zarr.mkdir()
+        zarr.joinpath('.zattrs').touch()
+        self.assertEqual(resolve_sorting_format(zarr), 'spikeinterface')
+
+    def test_given_format_wins(self):
+        paths = self.load('path: analyzer\nformat: alf')
+        self.assertEqual(paths.spike_sorting_format, 'alf')
+
+    def test_format_from_the_defaults(self):
+        paths = self.load('path: analyzer', defaults='spike_sorting:\n  format: alf')
+        self.assertEqual(paths.spike_sorting_format, 'alf')
+
+    def test_spikeinterface_without_an_analyzer(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.load('path: ks\nformat: spikeinterface')
+        self.assertIn('no SortingAnalyzer', str(ctx.exception))
+
+    def test_unknown_format(self):
+        with self.assertRaises(ValidationError):
+            self.load('path: ks\nformat: kilosort')
 
 
 class TestRequiredDatasets(unittest.TestCase):

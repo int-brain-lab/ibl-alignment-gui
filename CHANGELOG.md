@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A SpikeInterface `SortingAnalyzer` can be opened directly, without converting it to ALF first:
+  give it as the `spike_sorting` of a session YAML, or put it in the data folder. The format is
+  detected from the path, or set with `format: spikeinterface` or `format: alf`. Needs the
+  `spikeinterface` extra.
+
 ### Fixed
 - The image, scatter and probe plots are shown for a session without xyz picks; before, only the
   line plots were drawn.

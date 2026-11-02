@@ -19,6 +19,7 @@ from ibl_alignment_gui.loaders.sources import (
     EphysQCSourceAlf,
     PassiveSourceAlf,
     SortingSourceAlf,
+    SortingSourceSI,
 )
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
@@ -409,6 +410,25 @@ class DataLoaderLocal(DataLoader):
             The path to the spike sorting folder.
         """
         return self.spike_path
+
+
+class DataLoaderSI(DataLoaderLocal):
+    """
+    Data loader using a SpikeInterface SortingAnalyzer on the local file system.
+
+    The spike sorting is read from the SortingAnalyzer, and the RMS, power spectra and passive
+    data from their ALF folders as in :class:`DataLoaderLocal`.
+
+    Parameters
+    ----------
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe, with the SortingAnalyzer as the
+        ``spike_sorting``.
+    """
+
+    def __init__(self, data_paths: DatasetPaths):
+        super().__init__(data_paths)
+        self.sorting = SortingSourceSI(self.spike_path)
 
 
 def _local_reader(path: Path | None) -> AlfReaderLocal | None:

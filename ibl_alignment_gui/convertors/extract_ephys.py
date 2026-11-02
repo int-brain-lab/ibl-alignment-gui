@@ -33,11 +33,21 @@ def rmsmap(fbin, spectra=True):
     -------
     dict
         The RMS amplitudes in channel-time space, the spectral density in channel-frequency
-        space, and the time and frequency scales.
+        space, the time and frequency scales, and the raw file index of each channel.
+
+    Notes
+    -----
+    The channels are returned in the order they are stored in the binary file, whatever the
+    channel order of the reader, so that they can be indexed with the raw channel indices
+    (``channels.rawInd``) used by the GUI.
     """
-    if not isinstance(fbin, spikeglx.Reader):
-        sglx = spikeglx.Reader(fbin)
+    opened = not isinstance(fbin, spikeglx.Reader)
+    sglx = spikeglx.Reader(fbin, sort=False) if opened else fbin
+    if not sglx.is_open:
         sglx.open()
+    # A reader returns its channels in raw_channel_order, which sorts them by position on the
+    # probe by default. Request them so that they come back in file order.
+    file_order = np.argsort(getattr(sglx, 'raw_channel_order', np.arange(sglx.nc)))
     rms_win_length_samples = 2 ** np.ceil(np.log2(sglx.fs * RMS_WIN_LENGTH_SECS))
     # the window generator will generates window indices
     wingen = utils.WindowGenerator(ns=sglx.ns, nswin=rms_win_length_samples, overlap=0)
@@ -47,12 +57,14 @@ def rmsmap(fbin, spectra=True):
         'nsamples': np.zeros((wingen.nwin,)),
         'fscale': fourier.fscale(WELCH_WIN_LENGTH_SAMPLES, 1 / sglx.fs, one_sided=True),
         'tscale': wingen.tscale(fs=sglx.fs),
+        'raw_ind': np.arange(sglx.nc),
     }
     win['spectral_density'] = np.zeros((len(win['fscale']), sglx.nc))
     # loop through the whole session
     with tqdm(total=wingen.nwin) as pbar:
         for first, last in wingen.firstlast:
-            data = sglx.read_samples(first_sample=first, last_sample=last)[0].transpose()
+            data, _ = sglx.read_samples(first_sample=first, last_sample=last, channels=file_order)
+            data = data.transpose()
             # remove low frequency noise below 1 Hz
             data = fourier.hp(data, 1 / sglx.fs, [0, 1])
             iw = wingen.iw
@@ -78,7 +90,8 @@ def rmsmap(fbin, spectra=True):
             if (iw % min(20, max(int(np.floor(wingen.nwin / 75)), 1))) == 0:
                 pbar.update(iw)
 
-    sglx.close()
+    if opened:
+        sglx.close()
     return win
 
 
@@ -107,12 +120,21 @@ def extract_rmsmap(fbin, out_folder=None, spectra=True):
     # output ALF files, single precision with the optional label as suffix before extension
     if not out_folder.exists():
         out_folder.mkdir()
-    tdict = {'rms': rms['TRMS'].astype(np.single), 'timestamps': rms['tscale'].astype(np.single)}
+    # The raw index of each channel is saved with the data, (1, channels) so that it broadcasts
+    # over the windows and frequencies. It records that the channels are in file order, which
+    # older versions of this function did not write them in.
+    raw_ind = rms['raw_ind'][np.newaxis, :].astype(np.int32)
+    tdict = {
+        'rms': rms['TRMS'].astype(np.single),
+        'timestamps': rms['tscale'].astype(np.single),
+        'rawInd': raw_ind,
+    }
     alfio.save_object_npy(out_folder, object=alf_object_time, dico=tdict, namespace='iblqc')
     if spectra:
         fdict = {
             'power': rms['spectral_density'].astype(np.single),
             'freqs': rms['fscale'].astype(np.single),
+            'rawInd': raw_ind,
         }
         alfio.save_object_npy(out_folder, object=alf_object_freq, dico=fdict, namespace='iblqc')
 

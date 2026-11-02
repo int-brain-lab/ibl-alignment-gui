@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `extract_ephys` writes the RMS and power spectral density with the channels in the order they
+  are stored in the raw file, and saves that order as `rawInd` with each `_iblqc_` object. Files
+  made before had the channels sorted by position on the probe, so on NP2 probes the plots showed
+  the wrong channels; recompute them with `extract_ephys`. Passing an open `spikeglx.Reader` to
+  `rmsmap` no longer fails.
+
 ## [0.1.0a2] - 2026-10-30
 
 ### Added

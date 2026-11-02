@@ -18,6 +18,7 @@ from ibl_alignment_gui.loaders.sources import (
     AlfReaderOne,
     EphysQCSourceAlf,
     PassiveSourceAlf,
+    RawSourceSpikeGLX,
     SortingSourceAlf,
     SortingSourceSI,
 )
@@ -34,7 +35,12 @@ except ImportError:
 
 if TYPE_CHECKING:
     from brainbox.io.spikeglx import Streamer
-    from ibl_alignment_gui.loaders.sources import EphysQCSource, PassiveSource, SortingSource
+    from ibl_alignment_gui.loaders.sources import (
+        EphysQCSource,
+        PassiveSource,
+        RawSource,
+        SortingSource,
+    )
     from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
     from one.api import ONE
 
@@ -436,22 +442,23 @@ def _local_reader(path: Path | None) -> AlfReaderLocal | None:
     return AlfReaderLocal(path) if path is not None else None
 
 
-class SpikeGLXLoader(ABC):
+class RawDataLoader:
     """
-    Abstract base class for loading SpikeGLX metadata and AP band snippets.
-
-    Subclasses must implement the follow abstract methods:
-    - `load_meta_data`
-    - `load_ap_data`
+    Load snippets of a probe's raw AP and LF data and flag its bad channels.
 
     Parameters
     ----------
+    ap : RawSource or None
+        The AP band of the recording, or None when there is none.
+    lf : RawSource or None
+        The LF band of the recording, or None when there is none.
     save_path : Path or None
         Directory where cached snippet data will be saved.
     """
 
-    def __init__(self, save_path: Path | None = None):
-        self.meta: Bunch | None = None
+    def __init__(self, ap: RawSource | None, lf: RawSource | None, save_path: Path | None = None):
+        self.ap: RawSource | None = ap
+        self.lf: RawSource | None = lf
         self.save_path: Path | None = save_path
         self.cached_ap_path: Path | None = (
             save_path.joinpath('alignment_gui_raw_data_snippets.npy') if save_path else None
@@ -459,34 +466,6 @@ class SpikeGLXLoader(ABC):
         self.cached_lf_path: Path | None = (
             save_path.joinpath('alignment_gui_raw_lf_data_snippets.npy') if save_path else None
         )
-
-    def get_meta_data(self) -> Bunch[str, Any]:
-        """
-        Load and parse metadata for the AP band.
-
-        Returns
-        -------
-        Bunch
-            A Bunch containing geometry info and an 'exists' flag.
-        """
-        self.meta = self.load_meta_data()
-        if not self.meta:
-            return Bunch({'exists': False})
-
-        geometry = spikeglx.geometry_from_meta(self.meta, sort=True)
-        return Bunch(geometry, exists=True)
-
-    @abstractmethod
-    def load_meta_data(self) -> dict | None:
-        """Abstract method to load AP metadata."""
-
-    @abstractmethod
-    def load_ap_data(self) -> spikeglx.Reader | Streamer | None:
-        """Abstract method to return a SpikeGLX reader or Streamer object."""
-
-    @abstractmethod
-    def load_lf_data(self) -> spikeglx.Reader | Streamer | None:
-        """Abstract method to return a SpikeGLX reader or Streamer object."""
 
     def load_ap_snippets(self, twin: float = 1) -> Bunch[str, Any] | defaultdict[str, Any]:
         """
@@ -510,11 +489,10 @@ class SpikeGLXLoader(ABC):
             if 'dead_channels' in data:
                 return data
 
-        sr = self.load_ap_data()
-        if not sr:
+        if self.ap is None:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr)
+        times = self.get_time_snippets(self.ap)
 
         # Thresholds for channel quality detection
         detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
@@ -522,7 +500,9 @@ class SpikeGLXLoader(ABC):
         data = defaultdict(Bunch)
 
         for i, t in enumerate(times):
-            raw, labels, features = self._get_ap_snippet(sr, t, twin=twin, **detection_thresholds)
+            raw, labels, features = self._get_ap_snippet(
+                self.ap, t, twin=twin, **detection_thresholds
+            )
 
             if i == 0:
                 chn_labels = np.zeros((raw.shape[1], len(times)))
@@ -560,7 +540,7 @@ class SpikeGLXLoader(ABC):
         )
 
         data['exists'] = True
-        data['fs'] = sr.fs
+        data['fs'] = self.ap.fs
 
         if self.cached_ap_path:
             np.save(self.cached_ap_path, data)
@@ -588,21 +568,20 @@ class SpikeGLXLoader(ABC):
             data = np.load(self.cached_lf_path, allow_pickle=True).item()
             return data
 
-        sr = self.load_lf_data()
-        if not sr:
+        if self.lf is None:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr)
+        times = self.get_time_snippets(self.lf)
 
         data = defaultdict(Bunch)
 
         for t in times:
-            raw = self._get_lf_snippet(sr, t, twin=twin)
+            raw = self._get_lf_snippet(self.lf, t, twin=twin)
 
             data['images'][t] = raw
 
         data['exists'] = True
-        data['fs'] = sr.fs
+        data['fs'] = self.lf.fs
 
         # TODO uncomment once we are happy with the snippet length
         # if self.cached_lf_path:
@@ -612,15 +591,15 @@ class SpikeGLXLoader(ABC):
 
     @staticmethod
     def _get_ap_snippet(
-        sr: spikeglx.Reader | Streamer, t: float, twin: float = 1, **kwargs
+        source: RawSource, t: float, twin: float = 1, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of AP data centered at time t.
 
         Parameters
         ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader
+        source : RawSource
+            The AP band of the recording
         t : float
             Time in seconds for center of snippet.
         twin : float
@@ -631,31 +610,30 @@ class SpikeGLXLoader(ABC):
         np.ndarray
             Snippet of raw data (time, channels)
         """
-        start_sample = int(t * sr.fs)
-        end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, : -sr.nsync].T
+        fs = source.fs
+        raw = source.get_traces(int(t * fs), int(twin * fs)).T
 
         # Detect bad channels and destripe
-        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, sr.fs, **kwargs)
+        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, fs, **kwargs)
         raw = ibldsp.voltage.destripe(
-            raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels, k_filter=False
+            raw, fs=fs, h=source.geometry, channel_labels=channel_labels, k_filter=False
         )
 
         # Extract a window in time (450–500 ms)
-        window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
+        window = slice(int(0.45 * fs), int(0.5 * fs))
         return raw[:, window].T, channel_labels, channel_features
 
     @staticmethod
     def _get_lf_snippet(
-        sr: spikeglx.Reader | Streamer, t: float, twin: float = 3, **kwargs
+        source: RawSource, t: float, twin: float = 3, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of LF data centered at time t.
 
         Parameters
         ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader
+        source : RawSource
+            The LF band of the recording
         t : float
             Time in seconds for center of snippet.
         twin : float
@@ -666,34 +644,33 @@ class SpikeGLXLoader(ABC):
         np.ndarray
             Snippet of raw data (time, channels)
         """
-        start_sample = int(t * sr.fs)
-        end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, : -sr.nsync].T
+        fs = source.fs
+        raw = source.get_traces(int(t * fs), int(twin * fs)).T
 
-        butter_kwargs = {'N': 3, 'Wn': 2 / sr.fs * 2, 'btype': 'highpass'}
+        butter_kwargs = {'N': 3, 'Wn': 2 / fs * 2, 'btype': 'highpass'}
         # Detect bad channels and destripe
         raw = ibldsp.voltage.destripe(
             raw,
-            fs=sr.fs,
+            fs=fs,
             channel_labels=True,
             butter_kwargs=butter_kwargs,
-            h=sr.geometry,
+            h=source.geometry,
             k_filter=None,
         )
 
         # Extract a window in time (1–2 seconds)
-        window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
+        window = slice(int(0.5 * fs), int(2.5 * fs))
         return raw[:, window].T
 
     @staticmethod
-    def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:
+    def get_time_snippets(source: RawSource, n: int = 3, pad: int = 200) -> np.ndarray:
         """
         Return n time points across the file duration, excluding pad seconds from start and end.
 
         Parameters
         ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader
+        source : RawSource
+            The band of the recording
         n : int
             Number of time points to extract.
         pad : int
@@ -704,11 +681,39 @@ class SpikeGLXLoader(ABC):
         np.ndarray
             Array of time points in seconds.
         """
-        file_duration = sr.meta['fileTimeSecs']
+        file_duration = source.duration
         pad = pad if file_duration > 500 else 0
         usable_time = file_duration - 2 * pad
         intervals = usable_time // n
         return intervals * (np.arange(n) + 1)
+
+
+class SpikeGLXLoader(RawDataLoader, ABC):
+    """
+    Abstract base class for loading the raw data and metadata of a SpikeGLX recording.
+
+    Subclasses must implement the `load_meta_data` method.
+    """
+
+    def get_meta_data(self) -> Bunch[str, Any]:
+        """
+        Load and parse metadata for the AP band.
+
+        Returns
+        -------
+        Bunch
+            A Bunch containing geometry info and an 'exists' flag.
+        """
+        self.meta = self.load_meta_data()
+        if not self.meta:
+            return Bunch({'exists': False})
+
+        geometry = spikeglx.geometry_from_meta(self.meta, sort=True)
+        return Bunch(geometry, exists=True)
+
+    @abstractmethod
+    def load_meta_data(self) -> dict | None:
+        """Abstract method to load AP metadata."""
 
 
 class SpikeGLXLoaderOne(SpikeGLXLoader):
@@ -740,7 +745,11 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         self.force: bool = force
         save_path = self.session_path.joinpath(f'raw_ephys_data/{self.probe_label}')
 
-        super().__init__(save_path)
+        super().__init__(
+            RawSourceSpikeGLX(lambda: self._stream('ap')),
+            RawSourceSpikeGLX(lambda: self._stream('lf')),
+            save_path,
+        )
 
     def load_meta_data(self) -> dict | None:
         """
@@ -762,31 +771,23 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         except ALFObjectNotFound:
             return None
 
-    def load_ap_data(self) -> Streamer:
+    def _stream(self, band: str) -> Streamer:
         """
-        Load AP data using ONE.
+        Start streaming a band of the raw data using ONE.
+
+        Parameters
+        ----------
+        band : str
+            The band to stream, 'ap' or 'lf'.
 
         Returns
         -------
         Streamer
-            A streamer object for AP band.
+            A streamer object for the band.
         """
         import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
 
-        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
-
-    def load_lf_data(self):
-        """
-        Load LF data using ONE.
-
-        Returns
-        -------
-        Streamer
-            A streamer object for LF band.
-        """
-        import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
-
-        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
+        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ=band)
 
 
 class SpikeGLXLoaderLocal(SpikeGLXLoader):
@@ -795,16 +796,14 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
 
     Parameters
     ----------
-    probe_path : Path
-        Root directory of probe data
-    meta_collection : str
-        Name of subfolder containing meta and binary files.
+    meta_path : Path or None
+        The folder holding the meta and binary files, or None when there is no raw data.
     """
 
     def __init__(self, meta_path: Path):
         self.meta_path: Path = meta_path
 
-        super().__init__(self.meta_path)
+        super().__init__(self._source('ap'), self._source('lf'), self.meta_path)
 
     def load_meta_data(self) -> dict | None:
         """
@@ -820,33 +819,26 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
         return spikeglx.read_meta_data(meta_file) if meta_file else None
 
-    def load_ap_data(self) -> spikeglx.Reader | None:
+    def _source(self, band: str) -> RawSourceSpikeGLX | None:
         """
-        Load binary AP data from local path.
+        Get a band of the raw data from the local path.
+
+        Parameters
+        ----------
+        band : str
+            The band, 'ap' or 'lf'.
 
         Returns
         -------
-        spikeglx.Reader or None
-            A spikeglx.Reader instance to load the raw data, or None if not found.
+        RawSourceSpikeGLX or None
+            The band of the recording, or None if its binary file is not found.
         """
-        if self.meta_path is None:
+        if self.meta_path is None:  # no raw_ephys dataset
             return None
-        ap_file = next(self.meta_path.glob('*.ap.*bin'), None)
-        return spikeglx.Reader(ap_file) if ap_file else None
-
-    def load_lf_data(self) -> spikeglx.Reader | None:
-        """
-        Load binary LF data from local path.
-
-        Returns
-        -------
-        spikeglx.Reader or None
-            A spikeglx.Reader instance to load the raw data, or None if not found.
-        """
-        if self.meta_path is None:
+        bin_file = next(self.meta_path.glob(f'*.{band}.*bin'), None)
+        if bin_file is None:
             return None
-        lf_file = next(self.meta_path.glob('*.lf.*bin'), None)
-        return spikeglx.Reader(lf_file) if lf_file else None
+        return RawSourceSpikeGLX(lambda: spikeglx.Reader(bin_file))
 
 
 class FeatureLoader(ABC):

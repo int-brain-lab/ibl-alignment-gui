@@ -3,7 +3,8 @@ Sources of the spike sorting, ephys QC and passive data shown in the GUI.
 
 A source reads one kind of data from one place and returns it as a Bunch in the format the
 plots expect, with an ``exists`` flag that is False when the data cannot be found. The
-``DataLoader`` classes combine one source of each kind.
+``DataLoader`` classes combine one source of each kind. A ``RawSource`` reads one band of the
+raw recording for the ``RawDataLoader``.
 
 The ALF sources read ALF objects through an ``AlfReader``, which hides whether the objects
 come from a folder on disk or through ONE. The SpikeInterface sources read a saved
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    import spikeglx
     from spikeinterface import SortingAnalyzer
 
     from one.api import ONE
@@ -279,6 +281,43 @@ class PassiveSource(ABC):
     @abstractmethod
     def load_gabor(self) -> Bunch[str, Any]:
         """Load the start times of the left and right gabor stimuli."""
+
+
+class RawSource(ABC):
+    """Abstract base class for one band (AP or LF) of a probe's raw recording."""
+
+    @property
+    @abstractmethod
+    def fs(self) -> float:
+        """The sampling frequency (Hz)."""
+
+    @property
+    @abstractmethod
+    def duration(self) -> float:
+        """The duration of the recording (s)."""
+
+    @property
+    @abstractmethod
+    def geometry(self) -> dict[str, np.ndarray]:
+        """The channel header used to destripe: x, y, shank, row, col, adc and sample_shift."""
+
+    @abstractmethod
+    def get_traces(self, start: int, n_samples: int) -> np.ndarray:
+        """
+        Read a block of the recording.
+
+        Parameters
+        ----------
+        start : int
+            The first sample.
+        n_samples : int
+            The number of samples.
+
+        Returns
+        -------
+        np.ndarray
+            The traces (time, channels) in V, without the sync channels.
+        """
 
 
 class SortingSourceAlf(SortingSource):
@@ -716,3 +755,61 @@ def raw_channel_indices(channel_ids: np.ndarray) -> np.ndarray:
     if all(matches):
         return np.array([int(match.group(1)) for match in matches])
     return np.arange(len(channel_ids))
+
+
+class RawSourceSpikeGLX(RawSource):
+    """
+    One band of a SpikeGLX recording, read with a spikeglx.Reader or a ONE Streamer.
+
+    The reader is opened when the data are first needed, so a stream is only started when the
+    raw data are read.
+
+    Parameters
+    ----------
+    open_reader : Callable
+        Returns the spikeglx.Reader or Streamer of the band.
+    """
+
+    def __init__(self, open_reader: Callable[[], spikeglx.Reader]):
+        self._open_reader: Callable[[], spikeglx.Reader] = open_reader
+        self._reader: spikeglx.Reader | None = None
+
+    @property
+    def reader(self) -> spikeglx.Reader:
+        """The spikeglx.Reader or Streamer, opened on first use."""
+        if self._reader is None:
+            self._reader = self._open_reader()
+        return self._reader
+
+    @property
+    def fs(self) -> float:
+        """The sampling frequency (Hz)."""
+        return self.reader.fs
+
+    @property
+    def duration(self) -> float:
+        """The duration of the recording (s)."""
+        return self.reader.meta['fileTimeSecs']
+
+    @property
+    def geometry(self) -> dict[str, np.ndarray]:
+        """The channel header used to destripe, read from the metadata."""
+        return self.reader.geometry
+
+    def get_traces(self, start: int, n_samples: int) -> np.ndarray:
+        """
+        Read a block of the recording.
+
+        Parameters
+        ----------
+        start : int
+            The first sample.
+        n_samples : int
+            The number of samples.
+
+        Returns
+        -------
+        np.ndarray
+            The traces (time, channels) in V, without the sync channels.
+        """
+        return self.reader[start : start + n_samples, : -self.reader.nsync]

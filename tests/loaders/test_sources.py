@@ -11,6 +11,7 @@ from ibl_alignment_gui.loaders.sources import (
     AlfReaderOne,
     EphysQCSourceAlf,
     PassiveSourceAlf,
+    RawSourceSpikeGLX,
     SortingSourceAlf,
     load_alf,
 )
@@ -252,3 +253,29 @@ class TestPassiveSourceAlf(_SessionTest):
             for load in (source.load_rf_map, source.load_stims, source.load_gabor):
                 with self.subTest(load=load.__name__):
                     self.assertEqual(load(), Bunch(exists=False))
+
+
+class TestRawSourceSpikeGLX(unittest.TestCase):
+    """Test the RawSourceSpikeGLX class."""
+
+    def setUp(self):
+        self.reader = MagicMock()
+        self.reader.fs = 30000
+        self.reader.nsync = 1
+        self.reader.meta = {'fileTimeSecs': 600}
+        self.open_reader = MagicMock(return_value=self.reader)
+        self.source = RawSourceSpikeGLX(self.open_reader)
+
+    def test_reader_opened_once_when_read(self):
+        """The reader is not opened until it is needed, then reused"""
+        self.open_reader.assert_not_called()
+        self.assertEqual(self.source.fs, 30000)
+        self.assertEqual(self.source.duration, 600)
+        self.assertIs(self.source.geometry, self.reader.geometry)
+        self.open_reader.assert_called_once()
+
+    def test_traces_without_sync(self):
+        """A block of samples is read on every channel but the sync channel"""
+        traces = self.source.get_traces(100, 50)
+        self.assertIs(traces, self.reader.__getitem__.return_value)
+        self.reader.__getitem__.assert_called_once_with((slice(100, 150), slice(None, -1)))

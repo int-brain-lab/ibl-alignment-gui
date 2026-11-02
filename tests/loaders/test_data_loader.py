@@ -14,11 +14,18 @@ from ibl_alignment_gui.loaders.data_loader import (
     DataLoaderLocal,
     DataLoaderOne,
     FeatureLoaderOne,
+    RawDataLoader,
     SpikeGLXLoader,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
 )
-from ibl_alignment_gui.loaders.sources import EphysQCSource, PassiveSource, SortingSource
+from ibl_alignment_gui.loaders.sources import (
+    EphysQCSource,
+    PassiveSource,
+    RawSource,
+    RawSourceSpikeGLX,
+    SortingSource,
+)
 from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
@@ -260,90 +267,61 @@ class TestLoadersWithoutDatasets(unittest.TestCase):
     def test_no_raw_data(self):
         loader = SpikeGLXLoaderLocal(None)
         self.assertIsNone(loader.load_meta_data())
-        self.assertIsNone(loader.load_ap_data())
-        self.assertIsNone(loader.load_lf_data())
+        self.assertIsNone(loader.ap)
+        self.assertIsNone(loader.lf)
+        self.assertEqual(loader.load_ap_snippets(), {'exists': False})
+        self.assertEqual(loader.load_lf_snippets(), {'exists': False})
 
 
-class TestSpikeGLXLoader(unittest.TestCase):
+class TestRawDataLoader(unittest.TestCase):
+    """Test the RawDataLoader class."""
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
 
-        self.mock_spikeglx = MagicMock()
-        self.mock_spikeglx.geometry_from_meta.return_value = Bunch(
-            {'x': np.arange(10), 'y': np.arange(10)}
-        )
-        self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 2000})
-        self.mock_spikeglx.fs = 30000
-        self.mock_spikeglx.n_sync = 1
-        self.mock_spikeglx.__getitem__.return_value = np.ones((30000, 385))
+        self.ap = MagicMock(spec=RawSource)
+        self.ap.fs = 30000
+        self.ap.duration = 2000
+        self.ap.geometry = Bunch({'x': np.arange(384), 'y': np.arange(384)})
+        self.ap.get_traces.return_value = np.ones((30000, 384))
+        self.loader = RawDataLoader(self.ap, None, self.temp_path)
 
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def _mock_loaders(self, mock_data):
-        """Helper to make a fake DataLoader with abstract methods implemented."""
-
-        class MockDataLoader(SpikeGLXLoader):
-            def load_meta_data(self):
-                return mock_data
-
-            def load_ap_data(self):
-                return mock_data
-
-            def load_lf_data(self):
-                return mock_data
-
-        return MockDataLoader(self.temp_path)
-
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.geometry_from_meta')
-    def test_get_meta_data(self, mock_geom):
-        """Test the get_meta_data method."""
-        with self.subTest('Meta data exists'):
-            mock_geom.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-            loader = self._mock_loaders(Bunch(adc=np.ones(10)))
-            data = loader.get_meta_data()
-            self.assertTrue(data.pop('exists'))
-            np.testing.assert_equal(dict(data), dict(mock_geom.return_value))
-
-        with self.subTest('Meta data does not exist'):
-            loader = self._mock_loaders(None)
-            data = loader.get_meta_data()
-            self.assertFalse(data['exists'])
-
     def test_get_time_snippets(self):
-        """Test the get_time_snippets method."""
+        """Snippets are spread over the duration, padded by 200 s in recordings over 500 s"""
         with self.subTest('2000s'):
-            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 2000})
-            loader = self._mock_loaders(None)
-            snippets = loader.get_time_snippets(self.mock_spikeglx)
+            snippets = self.loader.get_time_snippets(self.ap)
             np.testing.assert_array_equal(snippets, np.array([533, 1066, 1599]))
-            snippets = loader.get_time_snippets(self.mock_spikeglx, n=4)
+            snippets = self.loader.get_time_snippets(self.ap, n=4)
             np.testing.assert_array_equal(snippets, np.array([400, 800, 1200, 1600]))
 
         with self.subTest('400s'):
-            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 400})
-            loader = self._mock_loaders(None)
-            snippets = loader.get_time_snippets(self.mock_spikeglx)
+            self.ap.duration = 400
+            snippets = self.loader.get_time_snippets(self.ap)
             np.testing.assert_array_equal(snippets, np.array([133, 266, 399]))
-            snippets = loader.get_time_snippets(self.mock_spikeglx, n=2)
+            snippets = self.loader.get_time_snippets(self.ap, n=2)
             np.testing.assert_array_equal(snippets, np.array([200, 400]))
 
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
     def test_get_ap_snippet(self, mock_destripe, mock_bad_channels):
-        """Test the _get_ap_snippet method"""
+        """A second of traces is read at t, destriped with the geometry, and 50 ms kept"""
         mock_bad_channels.return_value = (np.zeros(384), None)
         mock_destripe.return_value = np.ones((384, 30000))
 
-        loader = self._mock_loaders(None)
-        snippet, *_ = loader._get_ap_snippet(self.mock_spikeglx, t=0, twin=1)
-        self.assertEqual(snippet.shape, (1500, 384))
+        snippet, *_ = self.loader._get_ap_snippet(self.ap, t=2, twin=1)
 
-    @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader.get_time_snippets')
-    @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader._get_ap_snippet')
+        self.assertEqual(snippet.shape, (1500, 384))
+        self.ap.get_traces.assert_called_once_with(60000, 30000)
+        self.assertIs(mock_destripe.call_args.kwargs['h'], self.ap.geometry)
+
+    @patch('ibl_alignment_gui.loaders.data_loader.RawDataLoader.get_time_snippets')
+    @patch('ibl_alignment_gui.loaders.data_loader.RawDataLoader._get_ap_snippet')
     def test_load_ap_snippets(self, mock_snippet, mock_times):
-        """Test the load_ap_snippets method"""
+        """Snippets and channel flags are built for each time, then cached"""
         mock_raw = np.random.randn(1500, 384)
         mock_labels = np.zeros(384)
         mock_features = {
@@ -354,44 +332,60 @@ class TestSpikeGLXLoader(unittest.TestCase):
         mock_snippet.return_value = (mock_raw, mock_labels, mock_features)
         mock_times.return_value = np.array([200, 400, 600])
 
-        with self.subTest('No raw data snippets'):
-            loader = self._mock_loaders(None)
-            data = loader.load_ap_snippets()
+        with self.subTest('No raw data'):
+            data = RawDataLoader(None, None, self.temp_path).load_ap_snippets()
             self.assertFalse(data['exists'])
 
         # First time read in data and save to disk
         with self.subTest('Generate raw data snippets'):
-            loader = self._mock_loaders(Bunch({'exists': True, 'fs': 30000}))
-            data = loader.load_ap_snippets()
+            data = self.loader.load_ap_snippets()
             self.assertTrue(data.pop('exists'))
             for t in mock_times.return_value:
-                np.testing.assert_array_equal(data['images'][t], mock_snippet.return_value[0])
+                np.testing.assert_array_equal(data['images'][t], mock_raw)
             self.assertEqual(data['fs'], 30000)
-            # Check channel quality metrics
-            self.assertIn('dead_channels', data)
-            self.assertIn('noisy_channels_coherence', data)
-            self.assertIn('noisy_channels_psd', data)
-            self.assertIn('outside_channels', data)
-
-            # Verify structure of quality metrics
             for key in [
                 'dead_channels',
                 'noisy_channels_coherence',
                 'noisy_channels_psd',
                 'outside_channels',
             ]:
-                self.assertIn('values', data[key])
-                self.assertIn('lines', data[key])
-                self.assertIn('points', data[key])
-            mock_times.assert_called_once()
+                with self.subTest(key=key):
+                    self.assertEqual(set(data[key]), {'values', 'lines', 'points'})
+            mock_times.assert_called_once_with(self.ap)
 
-        # Second time data is loaded from disk so we don't expect the get_time_snippets
-        # to be called
+        # Second time data is loaded from disk, so the recording is not read
         with self.subTest('Load existing raw data snippets'):
             mock_times.reset_mock()
             mock_snippet.reset_mock()
-            _ = loader.load_ap_snippets()
+            _ = self.loader.load_ap_snippets()
             mock_times.assert_not_called()
+            mock_snippet.assert_not_called()
+
+
+class TestSpikeGLXLoader(unittest.TestCase):
+    """Test the SpikeGLXLoader class."""
+
+    def _mock_loader(self, meta):
+        """Helper to make a SpikeGLXLoader that reads the given metadata."""
+
+        class MockSpikeGLXLoader(SpikeGLXLoader):
+            def load_meta_data(self):
+                return meta
+
+        return MockSpikeGLXLoader(None, None)
+
+    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.geometry_from_meta')
+    def test_get_meta_data(self, mock_geom):
+        """Test the get_meta_data method."""
+        with self.subTest('Meta data exists'):
+            mock_geom.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
+            data = self._mock_loader(Bunch(adc=np.ones(10))).get_meta_data()
+            self.assertTrue(data.pop('exists'))
+            np.testing.assert_equal(dict(data), dict(mock_geom.return_value))
+
+        with self.subTest('Meta data does not exist'):
+            data = self._mock_loader(None).get_meta_data()
+            self.assertFalse(data['exists'])
 
 
 class TestSpikeGLXLoaderOne(unittest.TestCase):
@@ -423,12 +417,20 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
 
     @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('brainbox.io.spikeglx.Streamer')
-    def test_load_ap_data(self, mock_streamer):
-        """Test the load_ap_data method"""
-        self.loader.load_ap_data()
-        mock_streamer.assert_called_with(
-            pid=self.loader.pid, one=self.mock_one, remove_cached=self.loader.force, typ='ap'
-        )
+    def test_sources_stream_when_read(self, mock_streamer):
+        """Each band is streamed through ONE, and only once its data are read"""
+        mock_streamer.assert_not_called()
+        for band in ('ap', 'lf'):
+            with self.subTest(band=band):
+                source = getattr(self.loader, band)
+                self.assertIsInstance(source, RawSourceSpikeGLX)
+                self.assertIs(source.reader, mock_streamer.return_value)
+                mock_streamer.assert_called_with(
+                    pid=self.loader.pid,
+                    one=self.mock_one,
+                    remove_cached=self.loader.force,
+                    typ=band,
+                )
 
 
 class TestSpikeGLXLoaderLocal(unittest.TestCase):
@@ -460,25 +462,20 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
             self.assertIsNone(data)
 
     @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.Reader')
-    def test_load_ap_data(self, mock_reader):
-        """Test the load_ap_data method"""
-        mock_reader.return_value = Bunch({'fs': 30000})
+    def test_sources_read_bin_files(self, mock_reader):
+        """Each band reads its binary file in the folder, opened only once its data are read"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ap_file = Path(temp_dir).joinpath('test_g0_t0.imec0.ap.cbin')
+            ap_file.touch()
 
-        with (
-            self.subTest('AP data exists'),
-            patch.object(
-                Path, 'glob', return_value=iter([self.probe_path.joinpath('spikeglx.ap.cbin')])
-            ),
-        ):
-            data = self.loader.load_ap_data()
-            self.assertEqual(data, mock_reader.return_value)
+            loader = SpikeGLXLoaderLocal(Path(temp_dir))
+            mock_reader.assert_not_called()
 
-        with (
-            self.subTest('AP data does not exist'),
-            patch.object(Path, 'glob', return_value=iter([])),
-        ):
-            data = self.loader.load_ap_data()
-            self.assertIsNone(data)
+            self.assertIsInstance(loader.ap, RawSourceSpikeGLX)
+            self.assertIs(loader.ap.reader, mock_reader.return_value)
+            mock_reader.assert_called_once_with(ap_file)
+            # There is no LF file
+            self.assertIsNone(loader.lf)
 
 
 class TestFeatureLoaderOneTables(unittest.TestCase):

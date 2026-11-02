@@ -3,13 +3,19 @@
 
 This guide shows you how to get a model running when it reports that your features don't match it.
 
-A model can only run on features of the vintage it was trained on. The error names the model's
-vintage, for example:
+A model can only run on features of the vintage it was trained on, the `vintage` in its release's
+`ephysatlas_model.json`. The error names the vintage of your features, when they record it, and the
+vintage the selected release requires, for example:
 
 ```text
-Features file is missing required column(s): [...]
+You have features of vintage 2026_W26, but the selected release 2026_W45 of the model
+int-brain-lab/ea-encoder-channel requires features of vintage 2026_W42.
 
-The model (2026_W39) needs features computed with the 2026_W39 feature set.
+You can either:
+
+1. Load a release of the model trained on features of vintage 2026_W26: ...
+
+2. Re-extract your features with vintage 2026_W42.
 ```
 
 ## Steps
@@ -18,9 +24,11 @@ Choose one of:
 
 **Use a model release that matches your features**
 
-1. Find the vintage of your features. If the file records it, the error says which release to load.
-2. Load that release of the model from `Plugins → Channel Prediction → Load … model`, with the
-   vintage as the release tag (see {ref}`howto-choose-model-release`).
+1. Find the vintage of your features. If the file records it, the error names it.
+2. Find a release of the model trained on that vintage: one whose `ephysatlas_model.json` gives it
+   as `vintage`. The release tag names the model, not its features, so it need not be the vintage.
+3. Load that release from `Plugins → Channel Prediction → Load … model` (see
+   {ref}`howto-choose-model-release`).
 
 **Compute features of the model's vintage**
 

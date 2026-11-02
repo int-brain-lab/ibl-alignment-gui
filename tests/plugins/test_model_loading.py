@@ -181,6 +181,7 @@ class _ModelLoadingTests:
         self.assertIs(model, self.model)
         self.assertEqual(self.loads, [NEW_SOURCE])
         self.assertEqual(reports[-1], 1.0)
+        self.assertEqual(_common.model_release(model), tuple(NEW_SOURCE))  # named in errors
         self.assertNotIn(self.key, self.controller.plugins[PLUGIN_KEY])
 
     # -- ModelSpec ----------------------------------------------------------------------------
@@ -420,7 +421,7 @@ class TestEncoderModelLoading(_ModelLoadingTests, unittest.TestCase):
         alignment = types.ModuleType('ephysatlas.alignment')
         alignment.ChannelModel = self._fake_load
         alignment.CHANNEL_MODEL_REPO_ID = self.default_repo
-        alignment.VINTAGE = self.default_revision
+        alignment.CHANNEL_MODEL_REVISION = self.default_revision
         stubs = {'ephysatlas': types.ModuleType('ephysatlas'), 'ephysatlas.alignment': alignment}
         self.enterContext(patch.dict(sys.modules, stubs))
 

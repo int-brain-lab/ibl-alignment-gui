@@ -939,11 +939,13 @@ class AlignmentGUIController:
             return
 
         if self.model.selected_config == 'both':
-            results = self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
+            results = self._plot_panels(
+                plot_key, plot_type, plot_func, data_only=data_only, **kwargs
+            )
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
-            self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
+            self._plot_panels(plot_key, plot_type, plot_func, data_only=data_only, **kwargs)
 
         # Optional plugin event
         if plugin_event:

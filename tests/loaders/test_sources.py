@@ -169,6 +169,14 @@ class TestEphysQCSourceAlf(unittest.TestCase):
         np.testing.assert_array_equal(data['timestamps'], [0, 3])
         self.assertEqual(data['xaxis'], 'Time samples')
 
+    def test_rms_amps_with_timestamps(self):
+        """Older RMS files with timestamps have amps renamed and keep the seconds axis"""
+        data = self._source(
+            Bunch(amps=np.ones((3, 2)), timestamps=np.arange(3.0), exists=True)
+        ).load_rms('ephysTimeRmsAP')
+        self.assertEqual(set(data.keys()), {'rms', 'timestamps', 'xaxis', 'exists'})
+        self.assertEqual(data['xaxis'], 'Time (s)')
+
     def test_psd_amps_renamed(self):
         """Older power files have amps renamed to power"""
         data = self._source(

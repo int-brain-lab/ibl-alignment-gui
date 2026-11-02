@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 import spikeglx
 
-import ibl_alignment_gui.loaders.data_loader as dloader
 import one.alf.io as alfio
+from ibl_alignment_gui.loaders.sources import load_alf
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -444,7 +444,7 @@ class GeometryLoaderOne(GeometryLoader):
         Bunch or None
             A Bunch containing the channels data, or None if not found.
         """
-        chns = dloader.DataLoader.load_data(
+        chns = load_alf(
             self.one.load_object,
             self.eid,
             'channels',
@@ -499,7 +499,7 @@ class GeometryLoaderLocal(GeometryLoader):
         """
         if self.spike_path is None:
             return None
-        chns = dloader.DataLoader.load_data(
+        chns = load_alf(
             alfio.load_object,
             self.spike_path,
             'channels',

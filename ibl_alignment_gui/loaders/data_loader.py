@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
@@ -14,9 +13,16 @@ import spikeglx
 
 import ibldsp.voltage
 import one.alf.io as alfio
+from ibl_alignment_gui.loaders.sources import (
+    AlfReaderLocal,
+    AlfReaderOne,
+    EphysQCSourceAlf,
+    PassiveSourceAlf,
+    SortingSourceAlf,
+)
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
+from one.alf.exceptions import ALFObjectNotFound
 
 try:
     import ephysatlas.data
@@ -26,29 +32,35 @@ except ImportError:
     EPHYS_ATLAS = False
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from brainbox.io.spikeglx import Streamer
+    from ibl_alignment_gui.loaders.sources import EphysQCSource, PassiveSource, SortingSource
     from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
     from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
 
-class DataLoader(ABC):
+class DataLoader:
     """
-    Abstract base class for loading processed data  for the ibl_alignment_gui.
+    Load the spike sorting, ephys QC and passive data of a probe for the ibl_alignment_gui.
 
-    Loads spikesorted and raw ephys data.
+    The data are read from one source of each kind, and only the data on the channels of the
+    selected shank are returned.
 
-    Subclasses must implement the follow abstract methods:
-    - `load_passive_data`
-    - `load_raw_passive_data`
-    - `load_ephys_data`
-    - `load_spikes_data`
+    Parameters
+    ----------
+    sorting : SortingSource
+        The source of the spikes, clusters and channels.
+    ephys_qc : EphysQCSource
+        The source of the RMS and power spectral density.
+    passive : PassiveSource
+        The source of the passive stimulus data.
     """
 
-    def __init__(self):
+    def __init__(self, sorting: SortingSource, ephys_qc: EphysQCSource, passive: PassiveSource):
+        self.sorting: SortingSource = sorting
+        self.ephys_qc: EphysQCSource = ephys_qc
+        self.passive: PassiveSource = passive
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
 
@@ -84,69 +96,6 @@ class DataLoader(ABC):
 
         return data
 
-    @staticmethod
-    def load_data(
-        load_function: Callable,
-        *args: Any,
-        raise_message: str | None = None,
-        raise_exception: type[Exception] | tuple[type[Exception], ...] = (
-            ALFObjectNotFound,
-            ALFMultipleCollectionsFound,
-        ),
-        raise_error: bool = False,
-        **kwargs,
-    ) -> Bunch[str, Any]:
-        """
-        Safely load data using a provided function.
-
-        Parameters
-        ----------
-        load_function : Callable
-            Function to load the data (e.g., ONE or alfio).
-        args : tuple
-            Arguments for the loading function.
-        raise_message : str or None
-            Message to log if an exception is raised.
-        raise_exception : Exception or ALFObjectNotFound
-            Type of exception to catch.
-        raise_error : bool
-            Whether to raise the exception after logging.
-
-        Returns
-        -------
-        Bunch
-            The loaded data with an 'exists' flag.
-        """
-        alf_object = args[1]
-        try:
-            data = load_function(*args, **kwargs)
-            if isinstance(data, dict | Bunch):
-                data['exists'] = True
-            return data
-        except raise_exception as e:
-            if raise_message is None:
-                if isinstance(e, ALFMultipleCollectionsFound):
-                    raise_message = (
-                        f'{alf_object} data matches multiple collections ({e}); '
-                        f'cannot disambiguate, some plots will not display'
-                    )
-                else:
-                    raise_message = f'{alf_object} data was not found, some plots will not display'
-            logger.warning(raise_message)
-            if raise_error:
-                logger.error(raise_message)
-                logger.error(traceback.format_exc())
-                raise e
-            return Bunch(exists=False)
-
-    @abstractmethod
-    def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """Abstract method to load passive data."""
-
-    @abstractmethod
-    def load_raw_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """Abstract method to load raw passive data."""
-
     def get_passive_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
         Load passive visual stimulus data including RF map, visual stimuli, and gabor events.
@@ -160,45 +109,7 @@ class DataLoader(ABC):
         vis_stim : Bunch
             Gabor event data for left and right gabors.
         """
-        try:
-            rf_data = self.load_passive_data('passiveRFM')
-            frame_path = self.load_raw_passive_data('RFMapStim')
-            frames = np.fromfile(frame_path['raw'], dtype='uint8')
-            rf_data['frames'] = np.transpose(
-                np.reshape(frames, [15, 15, -1], order='F'), [2, 1, 0]
-            )
-        except Exception:
-            logger.warning('passiveRFM data was not found, some plots will not display')
-            rf_data = Bunch(exists=False)
-
-        # Load in passive stim data
-        stim_data = self.load_passive_data('passiveStims')
-
-        # Load in passive gabor data
-        try:
-            gabor = self.load_passive_data('passiveGabor')
-            if not gabor['exists']:
-                vis_stim = Bunch(exists=False)
-            else:
-                vis_stim = Bunch()
-                vis_stim['leftGabor'] = np.array(
-                    gabor['start'][(gabor['position'] == 35) & (gabor['contrast'] > 0.1)],
-                    dtype=np.float64,
-                )
-                vis_stim['rightGabor'] = np.array(
-                    gabor['start'][(gabor['position'] == -35) & (gabor['contrast'] > 0.1)],
-                    dtype=np.float64,
-                )
-                vis_stim['exists'] = True
-        except Exception:
-            logger.warning('Failed to process passiveGabor data, some plots will not display')
-            vis_stim = Bunch(exists=False)
-
-        return rf_data, stim_data, vis_stim
-
-    @abstractmethod
-    def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """Abstract method to load ephys data."""
+        return self.passive.load_rf_map(), self.passive.load_stims(), self.passive.load_gabor()
 
     def get_rms_data(self, alf_object: str) -> Bunch[str, Any]:
         """
@@ -216,19 +127,7 @@ class DataLoader(ABC):
         rms_data : Bunch
             RMS data
         """
-        rms_data = self.load_ephys_data(alf_object)
-        rms_data = self.filter_raw_by_chns(rms_data)
-
-        if rms_data['exists']:
-            if 'amps' in rms_data:
-                rms_data['rms'] = rms_data.pop('amps')
-            if 'timestamps' not in rms_data:
-                rms_data['timestamps'] = np.array([0, rms_data['rms'].shape[0]])
-                rms_data['xaxis'] = 'Time samples'
-            else:
-                rms_data['xaxis'] = 'Time (s)'
-
-        return rms_data
+        return self.filter_raw_by_chns(self.ephys_qc.load_rms(alf_object))
 
     def get_psd_data(self, alf_object: str) -> Bunch[str, Any]:
         """
@@ -246,19 +145,7 @@ class DataLoader(ABC):
         psd_data: Bunch
             PSD data
         """
-        psd_data = self.load_ephys_data(alf_object)
-        psd_data = self.filter_raw_by_chns(psd_data)
-
-        if psd_data['exists'] and 'amps' in psd_data:
-            psd_data['power'] = psd_data.pop('amps')
-
-        return psd_data
-
-    @abstractmethod
-    def load_spikes_data(
-        self, alf_object: str, attributes: list[str], **kwargs
-    ) -> Bunch[str, Any]:
-        """Abstract method to load spike sorting data."""
+        return self.filter_raw_by_chns(self.ephys_qc.load_psd(alf_object))
 
     def get_spikes_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
@@ -275,13 +162,9 @@ class DataLoader(ABC):
         channels: Bunch
             channels data
         """
-        spikes = self.load_spikes_data('spikes', ['depths', 'amps', 'times', 'clusters'])
-
-        clusters = self.load_spikes_data(
-            'clusters', ['metrics', 'peakToTrough', 'waveforms', 'channels']
-        )
-
-        channels = self.load_spikes_data('channels', ['rawInd', 'localCoordinates'])
+        spikes = self.sorting.load_spikes()
+        clusters = self.sorting.load_clusters()
+        channels = self.sorting.load_channels()
 
         if self.filter and spikes['exists']:
             # Remove low firing rate clusters
@@ -334,9 +217,8 @@ class DataLoader(ABC):
             Filtered ephys data
         """
         for key in data:
-            if key == 'exists':
-                continue
-            if data[key].ndim == 1:
+            # Skip the exists flag, labels and 1D arrays such as timestamps
+            if not isinstance(data[key], np.ndarray) or data[key].ndim == 1:
                 continue
             # data[key] = data[key][:, self.shank_sites['raw_ind']]
             data[key] = self._safe_take(data[key], self.shank_sites['raw_ind'])
@@ -439,9 +321,16 @@ class DataLoaderOne(DataLoader):
         self.spike_collection: str | None = spike_collection
         self.probe_path: Path = self.get_spike_sorting_path()
         self.probe_collection: str = str(self.probe_path.relative_to(self.session_path))
+        # TODO DataLoader.__init__ resets this to False, so ONE sessions are not rate filtered
         self.filter: bool = True
 
-        super().__init__()
+        super().__init__(
+            SortingSourceAlf(AlfReaderOne(one, self.eid, collection=self.probe_collection)),
+            EphysQCSourceAlf(
+                AlfReaderOne(one, self.eid, collection=f'raw_ephys_data/{self.probe_label}')
+            ),
+            PassiveSourceAlf(AlfReaderOne(one, self.eid), AlfReaderOne(one, self.eid)),
+        )
 
     @property
     def spike_sorting_path(self) -> Path:
@@ -480,61 +369,6 @@ class DataLoaderOne(DataLoader):
         # If neither exist return ks2 path
         return probe_path
 
-    def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load passive data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(self.one.load_object, self.eid, alf_object)
-
-    def load_raw_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load raw passive data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(self.one.load_object, self.eid, alf_object)
-
-    def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load ephys data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(
-            self.one.load_object,
-            self.eid,
-            alf_object,
-            collection=f'raw_ephys_data/{self.probe_label}',
-            **kwargs,
-        )
-
-    def load_spikes_data(
-        self, alf_object: str, attributes: list[str], **kwargs
-    ) -> Bunch[str, Any]:
-        """
-        Load spike sorting data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(
-            self.one.load_object,
-            self.eid,
-            alf_object,
-            collection=self.probe_collection,
-            attribute=attributes,
-            **kwargs,
-        )
-
 
 class DataLoaderLocal(DataLoader):
     """
@@ -558,7 +392,11 @@ class DataLoaderLocal(DataLoader):
         # A session can have no spike sorting, only the RMS and power spectra
         self.probe_collection: str | None = self.spike_path.name if self.spike_path else None
 
-        super().__init__()
+        super().__init__(
+            SortingSourceAlf(_local_reader(self.spike_path)),
+            EphysQCSourceAlf(_local_reader(self.ephys_path)),
+            PassiveSourceAlf(_local_reader(self.task_path), _local_reader(self.raw_task_path)),
+        )
 
     @property
     def spike_sorting_path(self) -> Path:
@@ -572,67 +410,10 @@ class DataLoaderLocal(DataLoader):
         """
         return self.spike_path
 
-    def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load passive data from local path.
 
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(alfio.load_object, self.task_path, alf_object, **kwargs)
-
-    def load_raw_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load raw passive data from local path.
-
-        Returns
-        -------
-        Bunch or None
-        """
-        return self.load_data(alfio.load_object, self.raw_task_path, alf_object)
-
-    def get_passive_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
-        """
-        Load passive data from local path.
-
-        Only attempts to load if both task_path and raw_task_path are defined.
-
-        Returns
-        -------
-        Bunch or None
-        """
-        if self.task_path is None and self.raw_task_path is None:
-            return Bunch(exists=False), Bunch(exists=False), Bunch(exists=False)
-
-        return super().get_passive_data()
-
-    def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load ephys data from local path.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(alfio.load_object, self.ephys_path, alf_object, **kwargs)
-
-    def load_spikes_data(
-        self, alf_object: str, attributes: list[str], **kwargs
-    ) -> Bunch[str, Any]:
-        """
-        Load spike sorting data from local path.
-
-        Returns
-        -------
-        Bunch
-            The data, with ``exists`` False when the session has no spike sorting.
-        """
-        if self.spike_path is None:
-            return Bunch(exists=False)
-        return self.load_data(
-            alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs
-        )
+def _local_reader(path: Path | None) -> AlfReaderLocal | None:
+    """Return a reader for a folder, or None when the dataset has no folder."""
+    return AlfReaderLocal(path) if path is not None else None
 
 
 class SpikeGLXLoader(ABC):

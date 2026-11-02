@@ -6,21 +6,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0a3] - 2026-11-02
 
 ### Changed
-- The alignment model loads `ephysatlas.alignment.CHANNEL_MODEL_REVISION` by default, the release
-  tag of the model, instead of `VINTAGE`, the release of the features it was trained on. From
-  `2026_W45` the model and the features have different tags, and the release predicts with
-  interpolated context and averaged neighbour draws, which raises the held-out accuracy of the
-  predictions in every tissue, the root regions included.
-- The feature mismatch errors name the vintage the model was trained on (the `vintage`
-  in its `ephysatlas_model.json`) and suggest a release trained on the features' vintage, instead
-  of giving that vintage as a release tag to load.
-- A local features file that records another vintage than the model's is refused, as features
-  from Alyx are, instead of being run with a warning.
-- The prediction panels have short titles, such as `XGBoost prediction`, `XGBoost cumulative` and
-  `Auto-alignment confidence`, in the same font as the rest of the GUI.
+- The alignment model loads its own release (`2026_W45`) by default instead of the feature vintage
+  it was trained on; the vintage now comes only from the release's `ephysatlas_model.json`.
+- A local features file of another vintage than the model's is refused, as Alyx features already
+  were. The error names both vintages and how to resolve the mismatch.
+- The prediction panels have short titles, such as `XGBoost prediction`, in the GUI's usual font.
 
 ## [0.1.0a2] - 2026-10-30
 

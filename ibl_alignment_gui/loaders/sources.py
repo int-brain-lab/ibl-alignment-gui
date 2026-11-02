@@ -6,17 +6,21 @@ plots expect, with an ``exists`` flag that is False when the data cannot be foun
 ``DataLoader`` classes combine one source of each kind.
 
 The ALF sources read ALF objects through an ``AlfReader``, which hides whether the objects
-come from a folder on disk or through ONE.
+come from a folder on disk or through ONE. The SpikeInterface sources read a saved
+``SortingAnalyzer``; SpikeInterface is an optional dependency and is only imported when one is
+loaded.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import traceback
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 
 import one.alf.io as alfio
 from iblutil.util import Bunch
@@ -26,6 +30,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from spikeinterface import SortingAnalyzer
+
     from one.api import ONE
 
 logger = logging.getLogger(__name__)
@@ -33,6 +39,14 @@ logger = logging.getLogger(__name__)
 SPIKES_ATTRIBUTES = ['depths', 'amps', 'times', 'clusters']
 CLUSTERS_ATTRIBUTES = ['metrics', 'peakToTrough', 'waveforms', 'channels']
 CHANNELS_ATTRIBUTES = ['rawInd', 'localCoordinates']
+
+# The SortingAnalyzer extensions needed to show the spikes and clusters
+SI_REQUIRED_EXTENSIONS = ['templates', 'spike_amplitudes']
+# The quality metrics query that labels a unit as IBL good, as in SpikeInterface's
+# export_to_ibl_gui
+SI_GOOD_UNITS_QUERY = (
+    'amplitude_median < -40 and isi_violations_ratio < 0.5 and amplitude_cutoff < 0.2'
+)
 
 
 def load_alf(
@@ -471,3 +485,221 @@ class PassiveSourceAlf(PassiveSource):
             logger.warning('Failed to process passiveGabor data, some plots will not display')
             vis_stim = Bunch(exists=False)
         return vis_stim
+
+
+class SortingSourceSI(SortingSource):
+    """
+    Spike sorting data from a saved SpikeInterface SortingAnalyzer.
+
+    The analyzer must have a single segment and the templates and spike_amplitudes extensions.
+    The spike_locations, template_metrics and quality_metrics extensions are used when they have
+    been computed.
+
+    Parameters
+    ----------
+    path : Path or None
+        Path to the SortingAnalyzer folder or zarr, or None when the session has no spike sorting.
+    good_units_query : str or None
+        Query on the quality metrics that labels a unit as IBL good. When None, the units are not
+        labelled.
+    """
+
+    def __init__(self, path: Path | None, good_units_query: str | None = SI_GOOD_UNITS_QUERY):
+        self.path: Path | None = path
+        self.good_units_query: str | None = good_units_query
+        self._analyzer: SortingAnalyzer | None = None
+        self._missing_extensions: list[str] = []
+
+    @property
+    def analyzer(self) -> SortingAnalyzer:
+        """The SortingAnalyzer, loaded on first use."""
+        if self._analyzer is None:
+            import spikeinterface as si  # noqa: PLC0415
+
+            analyzer = si.load(self.path)
+            if analyzer.get_num_segments() != 1:
+                raise ValueError(
+                    f'The SortingAnalyzer at {self.path} has {analyzer.get_num_segments()} '
+                    f'segments, only single segment analyzers are supported'
+                )
+            self._missing_extensions = [
+                ext for ext in SI_REQUIRED_EXTENSIONS if not analyzer.has_extension(ext)
+            ]
+            if self._missing_extensions:
+                logger.warning(
+                    'The SortingAnalyzer at %s is missing the %s extensions, compute them with '
+                    'analyzer.compute() to show the spikes and clusters',
+                    self.path,
+                    ', '.join(self._missing_extensions),
+                )
+            self._analyzer = analyzer
+        return self._analyzer
+
+    def _has_sorting(self) -> bool:
+        """Whether there is an analyzer with the extensions needed for the spikes and clusters."""
+        if self.path is None:
+            return False
+        return self.analyzer is not None and not self._missing_extensions
+
+    def load_spikes(self) -> Bunch[str, Any]:
+        """
+        Load the spikes.
+
+        The depths come from the spike_locations extension when computed, otherwise from the
+        depth of the main channel of each spike's unit.
+
+        Returns
+        -------
+        Bunch
+            depths (um), amps (V), times (s) and clusters with an 'exists' flag.
+        """
+        if not self._has_sorting():
+            return Bunch(exists=False)
+        analyzer = self.analyzer
+        spikes = analyzer.sorting.to_spike_vector()
+
+        samples = spikes['sample_index']
+        if analyzer.has_recording() and analyzer.recording.has_time_vector():
+            times = analyzer.recording.get_times()[samples]
+        else:
+            times = samples / analyzer.sampling_frequency
+
+        if analyzer.has_extension('spike_locations'):
+            depths = analyzer.get_extension('spike_locations').get_data()['y']
+        else:
+            main_channels = analyzer.get_main_channels()
+            depths = analyzer.get_channel_locations()[main_channels[spikes['unit_index']], 1]
+
+        # The amplitudes are signed in uV, the plots expect positive amplitudes in V
+        amps = np.abs(analyzer.get_extension('spike_amplitudes').get_data()) * 1e-6
+
+        return Bunch(
+            depths=depths,
+            amps=amps,
+            times=times,
+            clusters=spikes['unit_index'].astype(np.int32),
+            exists=True,
+        )
+
+    def load_clusters(self) -> Bunch[str, Any]:
+        """
+        Load the clusters.
+
+        Returns
+        -------
+        Bunch
+            metrics, peakToTrough (ms), waveforms (units, samples, 1) on the main channel in V and
+            channels with an 'exists' flag.
+        """
+        if not self._has_sorting():
+            return Bunch(exists=False)
+        analyzer = self.analyzer
+        main_channels = analyzer.get_main_channels()
+
+        templates = analyzer.get_extension('templates').get_data()
+        waveforms = templates[np.arange(analyzer.get_num_units()), :, main_channels] * 1e-6
+
+        peak_to_trough = None
+        if analyzer.has_extension('template_metrics'):
+            template_metrics = analyzer.get_extension('template_metrics').get_data()
+            # peak_to_valley is the name used by older SpikeInterface versions
+            for column in ('peak_to_trough_duration', 'peak_to_valley'):
+                if column in template_metrics.columns:
+                    peak_to_trough = template_metrics[column].to_numpy() * 1e3
+                    break
+        if peak_to_trough is None:
+            peak_to_trough = (
+                (np.argmax(waveforms, axis=1) - np.argmin(waveforms, axis=1))
+                / analyzer.sampling_frequency
+                * 1e3
+            )
+
+        return Bunch(
+            metrics=self._load_metrics(),
+            peakToTrough=peak_to_trough,
+            waveforms=waveforms[:, :, np.newaxis],
+            channels=main_channels.astype(np.int64),
+            exists=True,
+        )
+
+    def _load_metrics(self) -> pd.DataFrame:
+        """
+        Build the cluster metrics table from the quality metrics and the sorting properties.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per unit with cluster_id, firing_rate and the quality metrics, plus label
+            (IBL good) and ks2_label (Kilosort label) when they can be set.
+        """
+        analyzer = self.analyzer
+        metrics = pd.DataFrame({'cluster_id': analyzer.unit_ids})
+        if analyzer.has_extension('quality_metrics'):
+            quality_metrics = analyzer.get_extension('quality_metrics').get_data()
+            metrics = pd.concat([metrics, quality_metrics.reset_index(drop=True)], axis=1)
+
+        if 'firing_rate' not in metrics.columns:
+            n_spikes = np.bincount(
+                analyzer.sorting.to_spike_vector()['unit_index'],
+                minlength=analyzer.get_num_units(),
+            )
+            metrics['firing_rate'] = n_spikes / analyzer.get_total_duration()
+
+        if self.good_units_query is not None:
+            try:
+                metrics['label'] = metrics.eval(self.good_units_query).astype(int)
+            except pd.errors.UndefinedVariableError as err:
+                logger.warning(
+                    'Units are not labelled as IBL good, the quality metrics needed by the '
+                    'query %r have not been computed: %s',
+                    self.good_units_query,
+                    err,
+                )
+
+        if 'KSLabel' in analyzer.sorting.get_property_keys():
+            metrics['ks2_label'] = analyzer.sorting.get_property('KSLabel')
+
+        return metrics
+
+    def load_channels(self) -> Bunch[str, Any]:
+        """
+        Load the channels.
+
+        The raw indices are read from SpikeGLX channel ids (e.g. 'imec0.ap#AP12'), which give
+        the channel in the raw file even when channels were removed before sorting. For other
+        recordings they are the channel order of the analyzer.
+
+        Returns
+        -------
+        Bunch
+            rawInd and localCoordinates (um) with an 'exists' flag.
+        """
+        if self.path is None:
+            return Bunch(exists=False)
+        analyzer = self.analyzer
+        return Bunch(
+            rawInd=raw_channel_indices(analyzer.channel_ids),
+            localCoordinates=analyzer.get_channel_locations(),
+            exists=True,
+        )
+
+
+def raw_channel_indices(channel_ids: np.ndarray) -> np.ndarray:
+    """
+    Get the index of each channel in the raw recording file.
+
+    Parameters
+    ----------
+    channel_ids : np.ndarray
+        The SpikeInterface channel ids.
+
+    Returns
+    -------
+    np.ndarray
+        The channel numbers of SpikeGLX ids (e.g. 'imec0.ap#AP12' gives 12), otherwise the
+        position of each channel.
+    """
+    matches = [re.search(r'#(?:AP|LF)(\d+)$', str(channel_id)) for channel_id in channel_ids]
+    if all(matches):
+        return np.array([int(match.group(1)) for match in matches])
+    return np.arange(len(channel_ids))

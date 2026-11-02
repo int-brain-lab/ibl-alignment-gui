@@ -50,6 +50,8 @@ allen = [
   "boto3",
   "antspyx",
 ]
+# SpikeInterface backend: load a SortingAnalyzer directly, without converting it to ALF.
+spikeinterface = ["spikeinterface>=0.105.4"]
 
 [project.urls]
 Changelog = "https://github.com/int-brain-lab/ibl-alignment-gui/blob/main/CHANGELOG.md"

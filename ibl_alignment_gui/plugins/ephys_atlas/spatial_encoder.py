@@ -484,4 +484,8 @@ ENCODER_SPEC = ModelSpec(
     needs_torch=True,
     model_class='NeighborInpaintingModel',
     on_computed=_show_result,
+    panel_titles={
+        AUTO_ALIGNMENT_KEY: 'Auto-alignment prediction',
+        AUTO_ALIGNMENT_CONFIDENCE_KEY: 'Auto-alignment confidence',
+    },
 )

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -88,6 +88,9 @@ class ModelSpec:
     on_computed : Callable or None
         ``on_computed(controller, items, extra)``: run on the main thread after ``compute``,
         e.g. to open a result window; None when the model needs nothing.
+    panel_titles : dict of str to str
+        A shorter title to show above the prediction panel, by option; an option without one
+        shows its name.
     """
 
     key: str
@@ -101,6 +104,11 @@ class ModelSpec:
     needs_torch: bool
     model_class: str
     on_computed: Callable[[AlignmentGUIController, ShankController, object], None] | None = None
+    panel_titles: dict[str, str] = field(default_factory=dict)
+
+    def panel_title(self, option: str) -> str:
+        """Return the title shown above the prediction panel for ``option``."""
+        return self.panel_titles.get(option, option)
 
 
 class ModelSourceDialog(QtWidgets.QDialog):

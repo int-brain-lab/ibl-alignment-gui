@@ -263,10 +263,11 @@ class TestAllPredictions(unittest.TestCase):
         self.assertEqual(self.compute.call_count, len(SHANKS))
         for shank in SHANKS:
             view = self.view(shank)
-            drawn = [c.args[2] for c in view.plot_prediction.call_args_list]
-            self.assertEqual(drawn, [DECODER, DECODER + ' (cumulative)'])
+            titles = [c.args[2] for c in view.plot_prediction.call_args_list]
+            self.assertEqual(titles, ['XGBoost prediction', 'XGBoost cumulative'])
             figs = [c.args[0] for c in view.plot_prediction.call_args_list]
-            self.assertEqual(figs, [view.fig_preds[o] for o in drawn])
+            options = [DECODER, DECODER + ' (cumulative)']
+            self.assertEqual(figs, [view.fig_preds[o] for o in options])
 
     def test_unloaded_model_not_loaded(self):
         """The options of a model that is not loaded say so, and it is not loaded"""
@@ -278,8 +279,8 @@ class TestAllPredictions(unittest.TestCase):
             self.assertEqual(
                 cleared,
                 {
-                    self.TRANSFORMER: cp.NOT_LOADED_MESSAGE,
-                    self.TRANSFORMER + ' (cumulative)': cp.NOT_LOADED_MESSAGE,
+                    'ProbeTransformer prediction': cp.NOT_LOADED_MESSAGE,
+                    'ProbeTransformer cumulative': cp.NOT_LOADED_MESSAGE,
                 },
             )
 
@@ -592,6 +593,25 @@ class TestLazyImports(unittest.TestCase):
             [sys.executable, '-c', code], capture_output=True, text=True, check=True
         )
         self.assertEqual(run.stdout.strip(), '[]')
+
+
+class TestPanelTitles(unittest.TestCase):
+    """The short titles above the prediction panels."""
+
+    def test_titles(self):
+        """Each option shows a short title above its panel; an unknown one shows its name"""
+        self.assertEqual(
+            {option: cp.panel_title(option) for option in cp.MODEL_FOR_OPTION},
+            {
+                'XGBoost region prediction': 'XGBoost prediction',
+                'XGBoost region prediction (cumulative)': 'XGBoost cumulative',
+                'ProbeTransformer region prediction': 'ProbeTransformer prediction',
+                'ProbeTransformer region prediction (cumulative)': 'ProbeTransformer cumulative',
+                'Auto-alignment': 'Auto-alignment prediction',
+                'Auto-alignment (confidence)': 'Auto-alignment confidence',
+            },
+        )
+        self.assertEqual(cp.panel_title('Unknown'), 'Unknown')
 
 
 class TestDefaultSource(unittest.TestCase):

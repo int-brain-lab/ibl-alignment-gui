@@ -107,20 +107,20 @@ its electrophysiology features.
 
 1. Choose `original` from the alignment dropdown, so the histology shows the track before any
    alignment.
-2. Open the `Prediction Plots` menu and choose `XGBoost region prediction`.
+2. Open the `Prediction Plots` menu and choose `ProbeTransformer region prediction`.
 3. The model's dialog opens. Keep the default repository and release, and click **OK**. The model
    is downloaded the first time, then the prediction runs.
 
 ```{image} ../_static/tutorials/03_prediction/model_load_dialog.png
-:alt: The dialog for loading the XGBoost region prediction model, with the default Hugging Face repository and release
+:alt: The dialog for loading the ProbeTransformer region prediction model, with the default Hugging Face repository and release
 :align: center
 ```
 
-A panel appears beside the ephys plots, showing the region the model predicts for each channel
-from the electrophysiology alone. Each predicted region is labelled with its acronym.
+A panel titled `ProbeTransformer prediction` appears beside the ephys plots, showing the region the
+model predicts for each channel from the electrophysiology alone. Each predicted region is labelled with its acronym.
 
 ```{image} ../_static/tutorials/03_prediction/decoder_prediction.png
-:alt: The XGBoost region prediction panel, with the thalamus, hippocampus and isocortex predicted along the probe
+:alt: The ProbeTransformer prediction panel, with the thalamus, hippocampus and isocortex predicted along the probe
 :align: center
 ```
 
@@ -128,16 +128,16 @@ from the electrophysiology alone. Each predicted region is labelled with its acr
    coarser level than the histology shows, so select `Cosmos` from the `Set Mapping` menu, or
    press {kbd}`Alt+M` until it is selected, to show the histology with fewer, larger regions.
    Select `Allen` again before you go on.
-5. Choose `XGBoost region prediction (cumulative)`. For each channel, it now shows the
+5. Choose `ProbeTransformer region prediction (cumulative)`. For each channel, it now shows the
    probability that the channel lies in each region, stacked side by side. Where one colour fills
    the width, the model is confident; where several share it, it is unsure.
 
 ```{image} ../_static/tutorials/03_prediction/decoder_cumulative.png
-:alt: The cumulative XGBoost region prediction, with the probabilities of the regions stacked along the probe
+:alt: The ProbeTransformer cumulative panel, with the probabilities of the regions stacked along the probe
 :align: center
 ```
 
-6. Choose `ProbeTransformer region prediction`, and load it in the same way. It is a second model,
+6. Choose `XGBoost region prediction`, and load it in the same way. It is a second model,
    trained on the same features. You will compare the two in step 6.
 
 ## 5. Predict the regions with the alignment model
@@ -167,7 +167,7 @@ The result window shows how the model matched the recording to the track:
    of each channel where the alignment model placed it on the track.
 
 ```{image} ../_static/tutorials/03_prediction/auto_align_prediction.png
-:alt: The Auto-alignment panel, with the atlas regions where the alignment placed each channel
+:alt: The Auto-alignment prediction panel, with the atlas regions where the alignment placed each channel
 :align: center
 ```
 
@@ -175,7 +175,7 @@ The result window shows how the model matched the recording to the track:
    green is high, red is low.
 
 ```{image} ../_static/tutorials/03_prediction/auto_align_confidence.png
-:alt: The Auto-alignment (confidence) panel, coloured from green for high confidence to red for low
+:alt: The Auto-alignment confidence panel, coloured from green for high confidence to red for low
 :align: center
 ```
 

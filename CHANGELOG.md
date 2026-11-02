@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of giving that vintage as a release tag to load.
 - A local features file that records another vintage than the model's is refused, as features
   from Alyx are, instead of being run with a warning.
+- The prediction panels have short titles, such as `XGBoost prediction`, `XGBoost cumulative` and
+  `Auto-alignment confidence`, in the same font as the rest of the GUI.
 
 ## [0.1.0a2] - 2026-10-30
 

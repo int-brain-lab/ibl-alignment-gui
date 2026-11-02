@@ -57,11 +57,14 @@ class Decoder(NamedTuple):
         identifies a local release directory as this decoder.
     needs_torch : bool
         Whether it needs torch (only offered when torch is installed).
+    short_name : str
+        Its name in the titles above the prediction panels, e.g. 'XGBoost prediction'.
     """
 
     repo: str
     model_class: str
     needs_torch: bool
+    short_name: str
 
 
 # Released channel-level region decoders on the Hugging Face Hub, by prediction option name (also
@@ -72,11 +75,13 @@ DECODERS = {
         repo='int-brain-lab/ea-decoder-channel-xgboost',
         model_class='xgboost.sklearn.XGBClassifier',
         needs_torch=False,
+        short_name='XGBoost',
     ),
     'ProbeTransformer region prediction': Decoder(
         repo='int-brain-lab/ea-decoder-channel-transformer',
         model_class='ProbeTransformer',
         needs_torch=True,
+        short_name='ProbeTransformer',
     ),
 }
 # Suffix of the prediction option showing a decoder's cumulative class probabilities.
@@ -398,6 +403,10 @@ DECODER_SPECS = {
         compute=functools.partial(decode_shank, name=name),
         needs_torch=decoder.needs_torch,
         model_class=decoder.model_class,
+        panel_titles={
+            name: f'{decoder.short_name} prediction',
+            name + CUMULATIVE_SUFFIX: f'{decoder.short_name} cumulative',
+        },
     )
     for name, decoder in DECODERS.items()
 }

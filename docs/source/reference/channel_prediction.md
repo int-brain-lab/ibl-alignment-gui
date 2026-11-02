@@ -68,7 +68,16 @@ the session's vintage. The vintage a release was trained on is the `vintage` in 
 The prediction entries are offered as soon as a session with features is loaded; without features,
 `Prediction Plots` is greyed out. Selecting one whose model has not been loaded opens the model's
 load dialog. A prediction is shown in a panel beside the ephys plots, placed by depth along the
-probe (see {ref}`ref-interface-ephys`).
+probe (see {ref}`ref-interface-ephys`). The panel is titled with a short name for the entry:
+
+| Entry | Panel title |
+|---|---|
+| `XGBoost region prediction` | XGBoost prediction |
+| `XGBoost region prediction (cumulative)` | XGBoost cumulative |
+| `ProbeTransformer region prediction` | ProbeTransformer prediction |
+| `ProbeTransformer region prediction (cumulative)` | ProbeTransformer cumulative |
+| `Auto-alignment` | Auto-alignment prediction |
+| `Auto-alignment (confidence)` | Auto-alignment confidence |
 
 `All predictions (side by side)` shows only the models already loaded, computed for the shanks
 that need them in one go; the panels of a model that is not loaded say so.

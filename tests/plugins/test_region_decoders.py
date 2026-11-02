@@ -126,17 +126,17 @@ class TestRunDecoder(unittest.TestCase):
             inference.run_decoder(self._model(['a', 'b'], predict), df)
         message = str(raised.exception)
         self.assertIn("missing required column(s): ['b']", message)
-        self.assertIn('The model (V1)', message)
+        self.assertIn('requires features of vintage V1', message)
 
     def test_missing_feature_suggests_features_vintage(self):
-        """With the table's vintage known, the error suggests that release of the model"""
+        """With the table's vintage known, the error suggests a release trained on it"""
 
         def predict(x):
             raise KeyError("missing ['b']")
 
         df = pd.DataFrame({'a': [1.0], 'axial_um': [0.0]})
         df.attrs['features_version'] = 'V0'
-        with self.assertRaisesRegex(PredictionError, 'load a V0 release of the model'):
+        with self.assertRaisesRegex(PredictionError, 'trained on features of vintage V0'):
             inference.run_decoder(self._model(['a', 'b'], predict), df)
 
     def test_other_key_error_raised(self):
@@ -218,23 +218,25 @@ class TestRegionDecoders(unittest.TestCase):
                         self.controller, _fake_shank(df), model, _no_progress, name
                     )
 
-    def test_features_version_warning(self):
-        """Features of another version than a decoder's queue one warning; its own queue none."""
+    def test_other_features_version_refused(self):
+        """Features of another version than a decoder's are refused; its own are used"""
         other = self.df.copy()
         other.attrs['features_version'] = '2026_W39'
-        for df, n_warnings in ((other, 1), (self.df, 0)):
-            for name, model in self.models.items():
-                version = df.attrs['features_version']
-                with self.subTest(name=name, features_version=version):
-                    # A fresh controller: the queued warnings live in the plugin state.
-                    controller = _fake_controller(self.models)
-                    out, _ = inference._decode(controller, _fake_shank(df), model, _no_progress)
-                    self.assertEqual(len(out), len(df))  # still predicted
-                    warnings = controller.plugins['Channel Prediction'].get('pending_warnings', [])
-                    self.assertEqual(len(warnings), n_warnings)
-                    for warning in warnings:
-                        self.assertIn(version, warning)
-                        self.assertIn(model.index['vintage'], warning)
+        for name, model in self.models.items():
+            with self.subTest(name=name):
+                controller = _fake_controller(self.models)
+                with self.assertRaises(PredictionError) as raised:
+                    inference._decode(controller, _fake_shank(other), model, _no_progress)
+                message = str(raised.exception)
+                self.assertIn(
+                    'You have features of vintage 2026_W39, but the selected release of the '
+                    f'model requires features of vintage {model.index["vintage"]}.',
+                    message,
+                )
+                self.assertIn('trained on features of vintage 2026_W39', message)
+                out, _ = inference._decode(controller, _fake_shank(self.df), model, _no_progress)
+                self.assertEqual(len(out), len(self.df))
+                self.assertNotIn('pending_warnings', controller.plugins['Channel Prediction'])
 
 
 RED, BLUE, GREEN = [255, 0, 0], [0, 0, 255], [0, 255, 0]

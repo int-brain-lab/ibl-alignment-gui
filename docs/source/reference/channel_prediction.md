@@ -49,10 +49,13 @@ The models read per-channel features (see {ref}`ref-input-datasets`), loaded wit
 
 A file holding every shank of a probe sorted together is split by channel for each shank.
 
-The features must be of the model's vintage. Missing columns are reported when the model runs. If
+The features must be of the model's vintage. A local features file that records another vintage
+(its `features_version`) is refused before the model runs; one that records none is used, and
+only its columns are checked. Missing columns are reported when the model runs. If
 the Alyx table of the model's vintage has no features for the insertion, the model reports it
 instead of running on another vintage's features, and suggests a release of the model trained on
-the session's vintage when one exists.
+the session's vintage. The vintage a release was trained on is the `vintage` in its
+`ephysatlas_model.json`, not its release tag.
 
 ## Results
 
@@ -97,7 +100,7 @@ the load dialogs are skipped. The features come from the session YAML:
 ```console
 python examples/launch_with_local_prediction.py \
     --yaml /path/to/session.yaml \
-    --model-dir /path/to/ea-decoder-channel-xgboost/<vintage>
+    --model-dir /path/to/ea-decoder-channel-xgboost/<release>
 ```
 
 `--model-dir` can be given once per model. The `model_class` in the release's

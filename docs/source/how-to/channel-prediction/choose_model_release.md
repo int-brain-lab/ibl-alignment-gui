@@ -24,8 +24,8 @@ disk.
 
 Loading a model clears its previous predictions and closes any of its result windows.
 
-The release must be trained on the vintage of your features (see
-{ref}`howto-fix-vintage-mismatch`).
+The release must be trained on the vintage of your features, the `vintage` in its
+`ephysatlas_model.json`, which need not be its release tag (see {ref}`howto-fix-vintage-mismatch`).
 
 ## Related
 

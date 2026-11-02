@@ -227,44 +227,134 @@ def features_vintage(df: pd.DataFrame) -> str | None:
     return df.attrs.get('features_version') or None
 
 
+MANIFEST = 'ephysatlas_model.json'
+
+
+def model_release(model) -> tuple[str, str] | None:
+    """Return the ``(repo_id_or_directory, revision)`` a model was loaded from, if known.
+
+    :func:`load_model` records it on the model, so the errors can name the selected release.
+
+    Parameters
+    ----------
+    model : object
+        A loaded model.
+
+    Returns
+    -------
+    tuple of (str, str) or None
+        The release, or None for a model not loaded with :func:`load_model`.
+    """
+    return getattr(model, 'gui_release', None)
+
+
+def _release_name(release: tuple[str, str] | None) -> str:
+    """Name the selected release in an error, e.g. 'the selected release 2026_W45 of the model'."""
+    if release is None:
+        return 'the selected release of the model'
+    repo, revision = release
+    if Path(str(repo)).is_dir():
+        return f'the selected release of the model in {repo}'
+    return f'the selected release {revision} of the model {repo}'
+
+
+def _manifest_location(release: tuple[str, str] | None) -> str | None:
+    """Return where the selected release's manifest can be read: its Hub page or its file."""
+    if release is None:
+        return None
+    repo, revision = release
+    if Path(str(repo)).is_dir():
+        return str(Path(repo) / MANIFEST)
+    return f'https://huggingface.co/{repo}/blob/{revision}/{MANIFEST}'
+
+
+def vintage_error(
+    vintage: str,
+    data_vintage: str | None,
+    release: tuple[str, str] | None = None,
+    *,
+    prefix: str = '',
+    note: str = '',
+) -> PredictionError:
+    """Return the error for features that do not match the vintage a model was trained on.
+
+    The error states the features' vintage and the one the selected release requires (the
+    ``vintage`` in its manifest), then the two ways out: load a release trained on the features'
+    vintage, or re-extract the features with the release's vintage. A release tag names the
+    model, not the features it was trained on (a ``2026_W45`` release can be trained on
+    ``2026_W42`` features), so the error points to the manifest rather than to a tag.
+
+    Parameters
+    ----------
+    vintage : str
+        The feature vintage the model was trained on (:func:`model_vintage`).
+    data_vintage : str or None
+        The vintage of the user's features (:func:`features_vintage`), if known.
+    release : tuple of (str, str) or None
+        The selected release (:func:`model_release`), if known.
+    prefix : str
+        A paragraph put first, e.g. the missing columns.
+    note : str
+        A sentence put after the first one, e.g. that Alyx has no features of the vintage.
+
+    Returns
+    -------
+    PredictionError
+        The error.
+    """
+    name = _release_name(release)
+    if data_vintage and data_vintage != vintage:
+        summary = (
+            f'You have features of vintage {data_vintage}, but {name} requires features of '
+            f'vintage {vintage}.'
+        )
+        trained_on = f'features of vintage {data_vintage}'
+    else:
+        summary = f'{name[0].upper()}{name[1:]} requires features of vintage {vintage}.'
+        trained_on = 'the vintage of your features'
+    manifest = _manifest_location(release)
+    example = f', e.g. {manifest}' if manifest else ''
+    message = (
+        f'{prefix}{summary}{" " + note if note else ""}\n\n'
+        'You can either:\n\n'
+        f'1. Load a release of the model trained on {trained_on}: Plugins -> Channel Prediction '
+        f"-> Load ... model. The vintage each release requires is the 'vintage' in its "
+        f'{MANIFEST}{example}.\n\n'
+        f'2. Re-extract your features with vintage {vintage}.'
+    )
+    return PredictionError(message)
+
+
 def missing_features_error(
-    missing: list[str], vintage: str, data_vintage: str | None = None
+    missing: list[str],
+    vintage: str,
+    data_vintage: str | None = None,
+    release: tuple[str, str] | None = None,
 ) -> PredictionError:
     """Return the error for a features table lacking columns a model needs.
-
-    It also points to the other way out: a release of the model matching the features' vintage.
 
     Parameters
     ----------
     missing : list of str
         The columns the model needs that the table lacks.
     vintage : str
-        The feature vintage the model was trained on.
+        The feature vintage the model was trained on (:func:`model_vintage`).
     data_vintage : str or None
         The vintage the features were computed with (:func:`features_vintage`), if known.
+    release : tuple of (str, str) or None
+        The selected release (:func:`model_release`), if known.
 
     Returns
     -------
     PredictionError
-        The error, naming the missing columns, the vintage and the release to load instead.
+        The error, naming the missing columns, then as :func:`vintage_error`.
     """
-    message = (
-        f'Features file is missing required column(s): {missing}\n\n'
-        f'The model ({vintage}) needs features computed with the {vintage} feature set.'
+    return vintage_error(
+        vintage,
+        data_vintage,
+        release,
+        prefix=f'Features file is missing required column(s): {missing}\n\n',
     )
-    if data_vintage and data_vintage != vintage:
-        message += (
-            f'\n\nAlternatively, load a {data_vintage} release of the model (Plugins -> '
-            f'Channel Prediction -> Load ... model, release tag {data_vintage}) to match your '
-            'features.'
-        )
-    else:
-        message += (
-            '\n\nAlternatively, load a release of the model whose vintage matches your features '
-            '(Plugins -> Channel Prediction -> Load ... model, with that vintage as the release '
-            'tag).'
-        )
-    return PredictionError(message)
 
 
 def choose_source(controller: AlignmentGUIController, spec: ModelSpec) -> tuple[str, str] | None:
@@ -326,11 +416,14 @@ def load_model(spec: ModelSpec, source: tuple[str, str], progress: Callable) -> 
         If Cancel was pressed, at the next progress report.
     """
     try:
-        return spec.load(source, progress)
+        model = spec.load(source, progress)
     except TaskCancelledError:
         raise
     except Exception as exc:
         raise PredictionError(f'Could not load {source[0]}@{source[1]}:\n{exc}') from exc
+    # Kept on the model so its errors can name the release (model_release).
+    model.gui_release = tuple(source)
+    return model
 
 
 def store_model(
@@ -525,6 +618,7 @@ def features_for_vintage(
     items: ShankController,
     vintage: str,
     progress: Callable[[float | None, str], None] | None = None,
+    release: tuple[str, str] | None = None,
 ) -> pd.DataFrame | None:
     """Return the shank's features from the feature table a model was trained on.
 
@@ -532,9 +626,9 @@ def features_for_vintage(
     a model was trained on (columns are renamed or dropped between vintages). When the features
     come from ONE, the table labelled ``vintage`` is loaded instead, and cached on the shank so the
     feature plots keep the latest table. A local features file (from the session YAML or the data
-    folder) is used as is; when it records another feature version than
-    ``vintage`` (:func:`features_vintage`), a warning is queued in the plugin state
-    (``pending_warnings``), which the main thread shows when the prediction ends.
+    folder) is used as is, unless it records another feature version than ``vintage``
+    (:func:`features_vintage`): then it is refused. A file that records no version is used, and
+    only its columns are checked when the model runs.
 
     The ephys-atlas tables are already outlier-treated when ephysatlas builds them (the alpha
     features), so the features are not treated again here.
@@ -550,6 +644,8 @@ def features_for_vintage(
     progress : Callable or None
         ``progress(fraction, message)``, told when the vintage table is loaded (which may download
         it). No Qt is used here, so this can run on a background thread.
+    release : tuple of (str, str) or None
+        The selected release (:func:`model_release`), named in the errors if known.
 
     Returns
     -------
@@ -559,21 +655,17 @@ def features_for_vintage(
     Raises
     ------
     PredictionError
-        If the model's vintage table cannot be loaded, or has no features for this insertion.
+        If the model's vintage table cannot be loaded, or has no features for this insertion, or
+        a local features file records another vintage than the model's.
     """
     loader = items.model.loaders.get('features')
     if not isinstance(loader, FeatureLoaderOne) or loader.feature_version == vintage:
         df = _get_features_df(controller, items)
-        # The features' version, when they record it. This may run on a background thread, so the
-        # message is queued; the main thread shows it when the prediction ends.
+        # The features' version, when they record it. Features of another vintage would give a
+        # confident but wrong prediction, so they are refused, as an Alyx table is above.
         data_vintage = None if df is None else features_vintage(df)
         if data_vintage not in (None, vintage):
-            message = (
-                f'The features were computed with feature version {data_vintage}, but the model '
-                f'was trained on {vintage} features: its predictions may be unreliable.'
-            )
-            logger.warning(message)
-            plugin_state(controller).setdefault('pending_warnings', []).append(message)
+            raise vintage_error(vintage, data_vintage, release)
         return df
 
     cache = items.model.raw_data.setdefault('model_features', {})
@@ -598,17 +690,12 @@ def features_for_vintage(
         # Features of another vintage would give a confident but wrong prediction. Instead, point
         # to the other way out: a release of the model trained on this session's vintage (one may
         # not exist for every model, so this names the vintage rather than promising a release).
-        message = (
-            f'No {vintage} features are available for this insertion; the model needs features '
-            f'computed with the {vintage} feature set.'
+        raise vintage_error(
+            vintage,
+            loader.feature_version,
+            release,
+            note=f'No features of vintage {vintage} are available for this insertion.',
         )
-        if loader.feature_version:
-            message += (
-                f'\n\nAlternatively, load a {loader.feature_version} release of the model '
-                f'(Plugins -> Channel Prediction -> Load ... model, release tag '
-                f'{loader.feature_version}) to match the features of this session.'
-            )
-        raise PredictionError(message)
     return feats['df']
 
 

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `2026_W45` the model and the features have different tags, and the release predicts with
   interpolated context and averaged neighbour draws, which raises the held-out accuracy of the
   predictions in every tissue, the root regions included.
+- The feature mismatch errors name the vintage the model was trained on (the `vintage`
+  in its `ephysatlas_model.json`) and suggest a release trained on the features' vintage, instead
+  of giving that vintage as a release tag to load.
+- A local features file that records another vintage than the model's is refused, as features
+  from Alyx are, instead of being run with a warning.
 
 ## [0.1.0a2] - 2026-10-30
 

@@ -28,6 +28,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     features_vintage,
     get_region_boundaries,
     missing_features_error,
+    model_release,
     model_vintage,
 )
 from ibl_alignment_gui.utils.helpers import shank_loop
@@ -231,7 +232,7 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
         if not missing:  # not a missing feature: an error in the model, for the safety net
             raise
         raise missing_features_error(
-            missing, model.index.get('vintage'), features_vintage(df)
+            missing, model.index.get('vintage'), features_vintage(df), model_release(model)
         ) from exc
     # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
     # that were predicted.
@@ -275,7 +276,9 @@ def _decode(
         If the model's release names no feature vintage, or the shank has no features, or they
         lack a column the model needs.
     """
-    df = features_for_vintage(controller, items, model_vintage(model.index), progress)
+    df = features_for_vintage(
+        controller, items, model_vintage(model.index), progress, model_release(model)
+    )
     if df is None:
         raise PredictionError(NO_FEATURES_MESSAGE)
     progress(None, 'Predicting the regions…')

@@ -41,6 +41,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     features_for_vintage,
     features_vintage,
     missing_features_error,
+    model_release,
     model_vintage,
     update_results_action,
 )
@@ -231,7 +232,10 @@ def alignment_inputs(model: ChannelModel, df: pd.DataFrame) -> dict:
     missing = [c for c in model.features if c not in df.columns]
     if missing:
         raise missing_features_error(
-            missing, model_vintage(getattr(model.encoder, 'index', None)), features_vintage(df)
+            missing,
+            model_vintage(getattr(model.encoder, 'index', None)),
+            features_vintage(df),
+            model_release(model),
         )
     df = df.sort_values(
         ['axial_um', 'channel'] if 'channel' in df else ['axial_um'], ascending=False
@@ -275,7 +279,7 @@ def _align(
         If Cancel was pressed, at the alignment's next progress report.
     """
     vintage = model_vintage(getattr(model.encoder, 'index', None))
-    df = features_for_vintage(controller, items, vintage, progress)
+    df = features_for_vintage(controller, items, vintage, progress, model_release(model))
     if df is None:
         raise PredictionError(NO_FEATURES_MESSAGE)
     probe = alignment_inputs(model, df)

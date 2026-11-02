@@ -181,6 +181,7 @@ class _ModelLoadingTests:
         self.assertIs(model, self.model)
         self.assertEqual(self.loads, [NEW_SOURCE])
         self.assertEqual(reports[-1], 1.0)
+        self.assertEqual(_common.model_release(model), tuple(NEW_SOURCE))  # named in errors
         self.assertNotIn(self.key, self.controller.plugins[PLUGIN_KEY])
 
     # -- ModelSpec ----------------------------------------------------------------------------

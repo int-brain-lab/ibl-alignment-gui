@@ -467,6 +467,69 @@ class TestDataLoaderLocal(unittest.TestCase):
         self.assertTrue(data, mock_data)
 
 
+class TestChannelOrder(unittest.TestCase):
+    """The RMS and spectra are put in file order, and files without rawInd are noted."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.ephys_path = Path(self.temp_dir.name)
+        self.shank_sites = Bunch(raw_ind=np.array([0, 5]))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def write_rms(self, raw_ind=None):
+        """Save an RMS object whose value on each column is the raw channel it holds"""
+        columns = np.arange(8) if raw_ind is None else raw_ind
+        rms = np.tile(columns.astype(float), (3, 1))
+        np.save(self.ephys_path.joinpath('_iblqc_ephysTimeRmsAP.rms.npy'), rms)
+        np.save(self.ephys_path.joinpath('_iblqc_ephysTimeRmsAP.timestamps.npy'), np.arange(3.0))
+        if raw_ind is not None:
+            np.save(self.ephys_path.joinpath('_iblqc_ephysTimeRmsAP.rawInd.npy'), raw_ind[None])
+
+    def local_loader(self):
+        loader = DataLoaderLocal(DatasetPaths(processed_ephys=self.ephys_path))
+        loader.shank_sites = self.shank_sites
+        return loader
+
+    def test_raw_ind_selects_raw_channels(self):
+        """Columns saved in any order are picked by their raw index"""
+        self.write_rms(raw_ind=np.array([7, 6, 5, 4, 3, 2, 1, 0]))
+        loader = self.local_loader()
+
+        data = loader.get_rms_data('ephysTimeRmsAP')
+
+        np.testing.assert_array_equal(data['rms'][0], [0, 5])
+        self.assertNotIn('rawInd', data)
+        self.assertEqual(loader.objects_without_raw_ind, [])
+
+    def test_raw_ind_subset(self):
+        """Raw channels that are not in the data are NaN"""
+        self.write_rms(raw_ind=np.array([0, 2, 4, 6]))
+        loader = self.local_loader()
+        loader.shank_sites = Bunch(raw_ind=np.array([4, 5]))
+
+        data = loader.get_rms_data('ephysTimeRmsAP')
+
+        np.testing.assert_array_equal(data['rms'][0], [4, np.nan])
+
+    def test_without_raw_ind_noted(self):
+        """Local data without rawInd are used as they are, and noted"""
+        self.write_rms()
+        loader = self.local_loader()
+
+        data = loader.get_rms_data('ephysTimeRmsAP')
+
+        np.testing.assert_array_equal(data['rms'][0], [0, 5])
+        self.assertEqual(loader.objects_without_raw_ind, ['ephysTimeRmsAP'])
+
+    def test_one_without_raw_ind_not_noted(self):
+        """The IBL pipeline saves in file order without rawInd, so ONE data are not noted"""
+        loader = DataLoaderOne({'session': 'eid', 'name': 'probe00'}, MagicMock())
+        loader.note_channel_order(Bunch(rms=np.ones((3, 8)), exists=True), 'ephysTimeRmsAP')
+        self.assertEqual(loader.objects_without_raw_ind, [])
+
+
 class TestLoadersWithoutDatasets(unittest.TestCase):
     """A session can have no spike sorting, and no raw data."""
 

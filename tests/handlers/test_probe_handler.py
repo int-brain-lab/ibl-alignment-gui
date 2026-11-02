@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import spikeglx
 
 from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandler,
@@ -12,6 +13,10 @@ from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandlerONE,
     find_features_file,
 )
+from ibl_alignment_gui.loaders.geometry_loader import ChannelGeometry, MetaGeometry
+from iblutil.util import Bunch
+
+FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures')
 
 
 def make_insertion(subject: str, name: str, pid: str) -> dict:
@@ -117,6 +122,102 @@ class TestHasSpikeSorting(unittest.TestCase):
         self.assertTrue(self.has_spike_sorting(False, True))
         self.assertFalse(self.has_spike_sorting(False))
         self.assertFalse(self.has_spike_sorting())
+
+
+class TestChannelOrderNotices(unittest.TestCase):
+    """RMS and spectra without rawInd are reported when the file is not in depth order."""
+
+    @staticmethod
+    def channels(x, y, raw_ind=None):
+        """Spike sorting channels with the given coordinates, in raw index order by default"""
+        raw_ind = np.arange(len(x)) if raw_ind is None else np.asarray(raw_ind)
+        geom = ChannelGeometry(Bunch(localCoordinates=np.c_[x, y], rawInd=raw_ind))
+        geom.split_sites_per_shank()
+        return geom
+
+    @staticmethod
+    def electrodes(np_type):
+        """The electrodes of an ap.meta fixture"""
+        meta_file = next(FIXTURE_PATH.joinpath(np_type).glob('*.ap.meta'))
+        geom = MetaGeometry(spikeglx.read_meta_data(meta_file))
+        geom.split_sites_per_shank()
+        return geom
+
+    def shank(self, sites, folder='/ephys', missing=('ephysTimeRmsAP',), from_meta=False):
+        geom = SimpleNamespace(
+            electrodes=sites if from_meta else None, channels=None if from_meta else sites
+        )
+        data = SimpleNamespace(ephys_path=Path(folder), objects_without_raw_ind=list(missing))
+        return MagicMock(loaders={'geom': geom, 'data': data})
+
+    def notice(self, shanks):
+        model = SimpleNamespace(
+            shanks={label: {'default': shank} for label, shank in shanks.items()},
+            configs=['default'],
+        )
+        model.is_out_of_depth_order = lambda *args: ProbeHandler.is_out_of_depth_order(
+            model, *args
+        )
+        return ProbeHandler.get_channel_order_notice(model)
+
+    def test_depth_order_not_reported(self):
+        """Files in shank and depth order are correct, also with the pairs of a row swapped"""
+        cases = {
+            'pairs of a row': self.channels([27, 59, 27, 59], [0, 0, 15, 15]),
+            'swapped pairs of a row': self.channels([59, 27, 59, 27], [0, 0, 15, 15]),
+            'one shank after the other': self.channels([0, 0, 250, 250], [0, 15, 0, 15]),
+        }
+        for case, sites in cases.items():
+            with (
+                self.subTest(case=case),
+                self.assertNoLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING'),
+            ):
+                self.assertIsNone(self.notice({'probe00': self.shank(sites)}))
+
+    def test_out_of_depth_order_reported(self):
+        """Files whose channels jump in depth or between shanks are logged and shown"""
+        cases = {
+            # Blocks of channels out of depth order on one shank, as in an NP2.4 imro table
+            'blocks out of order': self.shank(self.channels([27] * 4, [0, 15, 2160, 30])),
+            # The channels of the shanks interleaved, from the ap.meta
+            'shanks interleaved': self.shank(self.electrodes('NP24'), from_meta=True),
+            # An NP2.4 recorded on one shank whose imro table wires the banks out of order
+            'one shank, banks out of order': self.shank(self.electrodes('NP21'), from_meta=True),
+            # The raw index, not the order of the channels object, gives the file order
+            'raw index': self.shank(self.channels([27] * 3, [0, 15, 30], raw_ind=[2, 0, 1])),
+        }
+        for case, shank in cases.items():
+            with (
+                self.subTest(case=case),
+                self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs,
+            ):
+                notice = self.notice({'probe00': shank})
+                self.assertIn('may be in the wrong order', notice)
+                self.assertIn('extract_ephys', logs.output[0])
+
+    def test_one_log_and_notice_for_shared_folder(self):
+        """Shanks that share a folder are logged once, listing every object, in one notice"""
+        sites = self.electrodes('NP24')
+        shanks = {
+            'shank_1': self.shank(sites, missing=['ephysTimeRmsAP'], from_meta=True),
+            'shank_2': self.shank(
+                sites, missing=['ephysTimeRmsAP', 'ephysTimeRmsLF'], from_meta=True
+            ),
+        }
+        with self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs:
+            notice = self.notice(shanks)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn('ephysTimeRmsAP, ephysTimeRmsLF', logs.output[0])
+        self.assertEqual(notice.count(str(Path('/ephys'))), 1)
+
+    def test_files_with_raw_ind_not_reported(self):
+        shank = self.shank(self.electrodes('NP24'), missing=(), from_meta=True)
+        with self.assertNoLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING'):
+            self.assertIsNone(self.notice({'shank_1': shank}))
+
+    def test_unknown_geometry_not_reported(self):
+        with self.assertNoLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING'):
+            self.assertIsNone(self.notice({'probe00': self.shank(None)}))
 
 
 class TestFindFeaturesFile(unittest.TestCase):

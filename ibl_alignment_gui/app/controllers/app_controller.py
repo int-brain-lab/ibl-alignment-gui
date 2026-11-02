@@ -1559,6 +1559,10 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
+        # Tell the user if the RMS and spectra may show the wrong channels
+        notice = self.model.get_channel_order_notice()
+        if notice:
+            QtWidgets.QMessageBox.warning(self.view, 'Recompute the RMS', notice)
         # Reclaim the previous session's figures/data now that its tabs have been cleared and
         # its shank controllers/views dereferenced (pyqtgraph leaves reference cycles behind)
         gc.collect()

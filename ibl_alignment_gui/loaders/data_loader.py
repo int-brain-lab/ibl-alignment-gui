@@ -48,9 +48,15 @@ class DataLoader(ABC):
     - `load_spikes_data`
     """
 
+    # Whether to note RMS and spectra saved without the raw index of each channel. The IBL
+    # pipeline saves them in file order without it, so only local data are checked.
+    check_channel_order: bool = False
+
     def __init__(self):
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
+        # The RMS and spectra objects that do not record the order of their channels
+        self.objects_without_raw_ind: list[str] = []
 
     def get_data(self, shank_sites: Bunch[str, Any]) -> Bunch[str, Any]:
         """
@@ -217,6 +223,7 @@ class DataLoader(ABC):
             RMS data
         """
         rms_data = self.load_ephys_data(alf_object)
+        self.note_channel_order(rms_data, alf_object)
         rms_data = self.filter_raw_by_chns(rms_data)
 
         if rms_data['exists']:
@@ -229,6 +236,20 @@ class DataLoader(ABC):
                 rms_data['xaxis'] = 'Time (s)'
 
         return rms_data
+
+    def note_channel_order(self, data: Bunch[str, Any], alf_object: str) -> None:
+        """
+        Note RMS or spectra data that do not record the order of their channels (rawInd).
+
+        Parameters
+        ----------
+        data : Bunch
+            The RMS or spectra data.
+        alf_object : str
+            The ALF object the data were loaded from.
+        """
+        if self.check_channel_order and data['exists'] and 'rawInd' not in data:
+            self.objects_without_raw_ind.append(alf_object)
 
     def get_psd_data(self, alf_object: str) -> Bunch[str, Any]:
         """
@@ -247,6 +268,7 @@ class DataLoader(ABC):
             PSD data
         """
         psd_data = self.load_ephys_data(alf_object)
+        self.note_channel_order(psd_data, alf_object)
         psd_data = self.filter_raw_by_chns(psd_data)
 
         if psd_data['exists'] and 'amps' in psd_data:
@@ -323,6 +345,9 @@ class DataLoader(ABC):
         """
         Filter ephys data to only include data relevant to channels present on selected shank.
 
+        The columns are taken to hold the raw channels in file order, unless the data give the
+        raw channel of each column as ``rawInd``.
+
         Parameters
         ----------
         data : dict
@@ -333,13 +358,22 @@ class DataLoader(ABC):
         data: Bunch
             Filtered ephys data
         """
+        columns = self.shank_sites['raw_ind']
+        raw_ind = data.pop('rawInd', None)
+        if raw_ind is not None:
+            # Find the column of each raw channel; channels not in the data get a column past
+            # the end, which _safe_take returns as NaN
+            raw_ind = np.ravel(raw_ind)
+            lookup = np.full(max(raw_ind.max(), columns.max(initial=0)) + 1, raw_ind.size)
+            lookup[raw_ind] = np.arange(raw_ind.size)
+            columns = lookup[columns]
+
         for key in data:
             if key == 'exists':
                 continue
             if data[key].ndim == 1:
                 continue
-            # data[key] = data[key][:, self.shank_sites['raw_ind']]
-            data[key] = self._safe_take(data[key], self.shank_sites['raw_ind'])
+            data[key] = self._safe_take(data[key], columns)
 
         return data
 
@@ -559,6 +593,7 @@ class DataLoaderLocal(DataLoader):
         self.probe_collection: str | None = self.spike_path.name if self.spike_path else None
 
         super().__init__()
+        self.check_channel_order = True
 
     @property
     def spike_sorting_path(self) -> Path:

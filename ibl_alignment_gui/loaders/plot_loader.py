@@ -13,6 +13,8 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     arrange_channels_into_banks,
     average_chns_at_same_depths,
     pad_data_to_full_chn_map,
+    pad_sites_to_full_depths,
+    select_shank_channels,
 )
 from iblutil.numerical import bincount2D
 from iblutil.util import Bunch
@@ -1165,7 +1167,11 @@ class PlotLoader:
         """
         raw_imgs = dict()
 
-        for i, (t, raw_img) in enumerate(self.data[f'raw_{band}_snippets']['images'].items()):
+        for i, (t, snippet) in enumerate(self.data[f'raw_{band}_snippets']['images'].items()):
+            # Only the channels of the shank, each at its depth
+            raw_img = pad_sites_to_full_depths(
+                self.shank_sites, select_shank_channels(self.shank_sites, snippet)
+            )
             x_range = (
                 np.array([0, raw_img.shape[0] - 1]) / self.data[f'raw_{band}_snippets']['fs'] * 1e3
             )
@@ -1249,6 +1255,28 @@ class PlotLoader:
 
         return {'Amplitude': line}
 
+    def _shank_channel_flags(self, key: str) -> Bunch[str, Any]:
+        """
+        Get a channel quality metric of the raw AP snippets on the channels of the shank.
+
+        Parameters
+        ----------
+        key : str
+            The metric, e.g. 'dead_channels'.
+
+        Returns
+        -------
+        Bunch
+            The values and flagged points on the sites of the shank, in depth order, and the
+            threshold lines.
+        """
+        data = self.data['raw_ap_snippets'][key]
+        return Bunch(
+            values=select_shank_channels(self.shank_sites, np.asarray(data['values'])),
+            points=select_shank_channels(self.shank_sites, np.asarray(data['points']), False),
+            lines=data['lines'],
+        )
+
     @skip_missing(['raw_ap_snippets'])
     def line_dead_channels(self) -> dict[str, Any]:
         """
@@ -1259,7 +1287,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Dead Channels'.
         """
-        data = self.data['raw_ap_snippets']['dead_channels']
+        data = self._shank_channel_flags('dead_channels')
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1291,7 +1319,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels Coherence'.
         """
-        data = self.data['raw_ap_snippets']['noisy_channels_coherence']
+        data = self._shank_channel_flags('noisy_channels_coherence')
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1323,7 +1351,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Noisy Channels PSD'.
         """
-        data = self.data['raw_ap_snippets']['noisy_channels_psd']
+        data = self._shank_channel_flags('noisy_channels_psd')
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])
@@ -1353,7 +1381,7 @@ class PlotLoader:
         Dict
             A dict containing a LineData object with key 'Outside Channels'.
         """
-        data = self.data['raw_ap_snippets']['outside_channels']
+        data = self._shank_channel_flags('outside_channels')
         min_level = np.min([np.min(data['lines']) * 1.1, np.nanmin(data['values'])])
         max_level = np.max([np.max(data['lines']) * 1.1, np.nanmax(data['values'])])
         levels = np.array([min_level, max_level])

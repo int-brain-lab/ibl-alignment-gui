@@ -737,11 +737,13 @@ class SpikeGLXLoader(ABC):
         Returns
         -------
         data: Bunch
-            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs). The
+            channels of the snippets and the channel quality metrics are in file order.
         """
         if self.cached_ap_path and self.cached_ap_path.exists():
             data = np.load(self.cached_ap_path, allow_pickle=True).item()
-            if 'dead_channels' in data:
+            # Older caches hold the channels sorted by position on the probe, so are rebuilt
+            if 'dead_channels' in data and data.get('channel_order') == 'file':
                 return data
 
         sr = self.load_ap_data()
@@ -795,6 +797,7 @@ class SpikeGLXLoader(ABC):
 
         data['exists'] = True
         data['fs'] = sr.fs
+        data['channel_order'] = 'file'
 
         if self.cached_ap_path:
             np.save(self.cached_ap_path, data)
@@ -816,11 +819,14 @@ class SpikeGLXLoader(ABC):
         Returns
         -------
         data: Bunch
-            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs). The
+            channels of the snippets are in file order.
         """
         if self.cached_lf_path and self.cached_lf_path.exists():
             data = np.load(self.cached_lf_path, allow_pickle=True).item()
-            return data
+            # Older caches hold the channels sorted by position on the probe, so are rebuilt
+            if data.get('channel_order') == 'file':
+                return data
 
         sr = self.load_lf_data()
         if not sr:
@@ -837,6 +843,7 @@ class SpikeGLXLoader(ABC):
 
         data['exists'] = True
         data['fs'] = sr.fs
+        data['channel_order'] = 'file'
 
         # TODO uncomment once we are happy with the snippet length
         # if self.cached_lf_path:
@@ -877,7 +884,12 @@ class SpikeGLXLoader(ABC):
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
-        return raw[:, window].T, channel_labels, channel_features
+
+        # The reader sorts the channels by position on the probe for the destriping, put them
+        # back in file order so they can be indexed with the raw channel indices
+        unsort = SpikeGLXLoader._unsort(sr, raw.shape[0])
+        channel_features = {k: np.asarray(v)[unsort] for k, v in channel_features.items()}
+        return raw[unsort, window].T, channel_labels[unsort], channel_features
 
     @staticmethod
     def _get_lf_snippet(
@@ -917,7 +929,32 @@ class SpikeGLXLoader(ABC):
 
         # Extract a window in time (1–2 seconds)
         window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
-        return raw[:, window].T
+
+        # The reader sorts the channels by position on the probe for the destriping, put them
+        # back in file order so they can be indexed with the raw channel indices
+        return raw[SpikeGLXLoader._unsort(sr, raw.shape[0]), window].T
+
+    @staticmethod
+    def _unsort(sr: spikeglx.Reader | Streamer, n_channels: int) -> np.ndarray:
+        """
+        Get the index that puts the channels read from a reader back in file order.
+
+        Parameters
+        ----------
+        sr : spikeglx.Reader or Streamer
+            The raw data reader, which returns the channels in its raw_channel_order.
+        n_channels : int
+            The number of channels read, without the sync channels.
+
+        Returns
+        -------
+        np.ndarray
+            The index of the channels read, in file order.
+        """
+        order = getattr(sr, 'raw_channel_order', None)
+        if order is None:
+            return np.arange(n_channels)
+        return np.argsort(order[:n_channels])
 
     @staticmethod
     def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:

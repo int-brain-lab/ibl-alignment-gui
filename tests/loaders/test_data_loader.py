@@ -610,16 +610,44 @@ class TestSpikeGLXLoader(unittest.TestCase):
             snippets = loader.get_time_snippets(self.mock_spikeglx, n=2)
             np.testing.assert_array_equal(snippets, np.array([200, 400]))
 
+    def _sorted_reader(self, fs):
+        """A reader that returns the channels sorted, each holding its file channel number."""
+        rng = np.random.default_rng(0)
+        order = np.r_[rng.permutation(384), 384]
+        self.mock_spikeglx.fs = fs
+        self.mock_spikeglx.nsync = 1
+        self.mock_spikeglx.raw_channel_order = order
+        traces = np.tile(order[:-1], (fs * 5, 1)).astype(float)
+        self.mock_spikeglx.__getitem__.return_value = traces
+        return order
+
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
     def test_get_ap_snippet(self, mock_destripe, mock_bad_channels):
-        """Test the _get_ap_snippet method"""
-        mock_bad_channels.return_value = (np.zeros(384), None)
-        mock_destripe.return_value = np.ones((384, 30000))
+        """The sorted channels are destriped, then the snippet and flags are put in file order"""
+        order = self._sorted_reader(30000)
+        mock_destripe.side_effect = lambda raw, **kwargs: raw
+        mock_bad_channels.return_value = (order[:-1], {'xcor_hf': order[:-1]})
 
         loader = self._mock_loaders(None)
-        snippet, *_ = loader._get_ap_snippet(self.mock_spikeglx, t=0, twin=1)
+        snippet, labels, features = loader._get_ap_snippet(self.mock_spikeglx, t=0, twin=1)
+
         self.assertEqual(snippet.shape, (1500, 384))
+        np.testing.assert_array_equal(snippet[0], np.arange(384))
+        np.testing.assert_array_equal(labels, np.arange(384))
+        np.testing.assert_array_equal(features['xcor_hf'], np.arange(384))
+
+    @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
+    def test_get_lf_snippet(self, mock_destripe):
+        """The LF snippet is put in file order after destriping"""
+        self._sorted_reader(2500)
+        mock_destripe.side_effect = lambda raw, **kwargs: raw
+
+        loader = self._mock_loaders(None)
+        snippet = loader._get_lf_snippet(self.mock_spikeglx, t=0, twin=3)
+
+        self.assertEqual(snippet.shape, (5000, 384))
+        np.testing.assert_array_equal(snippet[0], np.arange(384))
 
     @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader.get_time_snippets')
     @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader._get_ap_snippet')
@@ -673,6 +701,15 @@ class TestSpikeGLXLoader(unittest.TestCase):
             mock_snippet.reset_mock()
             _ = loader.load_ap_snippets()
             mock_times.assert_not_called()
+
+        # A cache from before the channels were put in file order is rebuilt
+        with self.subTest('Old cache without channel order'):
+            old_cache = loader.load_ap_snippets()
+            old_cache.pop('channel_order')
+            np.save(loader.cached_ap_path, old_cache)
+            data = loader.load_ap_snippets()
+            mock_times.assert_called_once()
+            self.assertEqual(data['channel_order'], 'file')
 
 
 class TestSpikeGLXLoaderOne(unittest.TestCase):

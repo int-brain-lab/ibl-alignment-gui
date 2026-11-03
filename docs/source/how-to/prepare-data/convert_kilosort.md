@@ -8,7 +8,9 @@ from a SpikeGLX recording sorted with kilosort, pykilosort or iblsorter.
 
 - The `ibl` extra installed (see {ref}`howto-install-extras`).
 - The spike sorting output folder from kilosort, pykilosort or iblsorter, and the folder with the
-  SpikeGLX `.ap.bin`, `.lf.bin` and `.meta` files.
+  SpikeGLX `.ap.bin` (or `.ap.cbin`) and `.meta` files. Neuropixels 1.0 recordings also need the
+  `.lf.bin`; Neuropixels 2.0 probes record the LF band in the AP file, so it is computed from
+  there.
 
 ## Steps
 
@@ -31,6 +33,18 @@ from a SpikeGLX recording sorted with kilosort, pykilosort or iblsorter.
    out_path = Path('/path/to/output')
 
    extract_data(ks_path, ephys_path, out_path)
+   ```
+
+   The RMS and power spectra are computed on samples taken through the recording, in parallel
+   threads, so an hour-long recording takes a few minutes. To read the whole recording instead,
+   or to use fewer threads on a shared machine, compute them with `extract_rmsmap` after
+   `extract_data`:
+
+   ```python
+   from ibl_alignment_gui.convertors.extract_ephys import extract_rmsmap
+
+   ap_file = ephys_path / 'my_recording_g0_t0.imec0.ap.bin'
+   extract_rmsmap(ap_file, out_folder=out_path, spectra=False, sample_spacing_secs=None, n_workers=2)
    ```
 
 3. Check that the output folder holds `spikes.*`, `clusters.*` and `channels.*` files, and the

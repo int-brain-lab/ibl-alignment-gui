@@ -19,7 +19,10 @@ writes are described in {ref}`ref-output-files`.
 
 ## Spike sorting
 
-Read from the `spike_sorting` folder.
+Read from the `spike_sorting` folder. `spikes.amps`, `spikes.clusters`, `spikes.depths` and
+`spikes.times` are all needed: if any of them is missing, the spike sorting is treated as absent
+and a warning names the missing files. Kilosort output that has not been converted (with
+`spikes.samples` but no `spikes.times`) is in this case.
 
 `spikes.amps`
 : **Units** V · **Type** double · **Dimensions** [number of spikes] · **Format** npy
@@ -85,11 +88,15 @@ Read from the `spike_sorting` folder.
 Read from the `processed_ephys` folder. If no `processed_ephys` path is given, it is read from the
 `raw_ephys` folder, or from the `spike_sorting` folder if there is no `raw_ephys`.
 
+The channels of each object are the columns of its arrays. Column *i* is taken to hold channel *i*
+of the raw recording file, unless the object has a `rawInd` attribute giving the raw channel of
+each column (see {ref}`ref-probe-geometry` for the channel order).
+
 `_iblqc_ephysSpectralDensityLF.power`
 : **Units** V²/Hz · **Type** float32 · **Dimensions** [number of frequencies, number of channels]
   · **Format** npy
 
-  Power spectral density of the LF band of every channel.
+  Power spectral density of the LF band of every channel, averaged over the time windows.
 
 `_iblqc_ephysSpectralDensityLF.freqs`
 : **Units** Hz · **Type** float32 · **Dimensions** [number of frequencies] · **Format** npy
@@ -100,7 +107,9 @@ Read from the `processed_ephys` folder. If no `processed_ephys` path is given, i
 : **Units** V · **Type** float32 · **Dimensions** [number of time windows, number of channels] ·
   **Format** npy
 
-  RMS amplitude of the AP band over time.
+  RMS amplitude of the AP band over time. `extract_ephys` destripes the AP band first:
+  high-pass at 300 Hz, as Neuropixels 2.0 probes record it with the LFP, ADC sample shift
+  correction and the median of each shank subtracted.
 
 `_iblqc_ephysTimeRmsAP.timestamps`
 : **Units** s · **Type** float32 · **Dimensions** [number of time windows] · **Format** npy
@@ -111,12 +120,22 @@ Read from the `processed_ephys` folder. If no `processed_ephys` path is given, i
 : **Units** V · **Type** float32 · **Dimensions** [number of time windows, number of channels] ·
   **Format** npy
 
-  RMS amplitude of the LF band over time.
+  RMS amplitude of the LF band over time. For Neuropixels 2.0 probes without an LF file,
+  `extract_ephys` computes the LF band from the AP band, decimated to 2.5 kHz.
 
 `_iblqc_ephysTimeRmsLF.timestamps`
 : **Units** s · **Type** float32 · **Dimensions** [number of time windows] · **Format** npy
 
   Times of the LF RMS windows, relative to the raw binary file.
+
+`_iblqc_ephysTimeRmsAP.rawInd`, `_iblqc_ephysTimeRmsLF.rawInd`,
+`_iblqc_ephysSpectralDensityLF.rawInd`
+: **Units** index · **Type** int32 · **Dimensions** [1, number of channels] · **Format** npy
+
+  Optional. Index in the raw recording file of the channel in each column, counting from 0.
+  Written by `extract_ephys`. Without it the columns are taken to be in file order; a local file
+  without it is reported when the raw file does not store the channels in shank and depth order,
+  as it may then show the wrong channels (see {ref}`howto-convert-kilosort`).
 
 ## Raw electrophysiology
 
@@ -132,7 +151,9 @@ not available.
 `*.ap.bin`, `*.lf.bin`
 : **Format** SpikeGLX binary
 
-  Raw AP and LF recordings. Short snippets are read to display the raw data plots.
+  Raw AP and LF recordings. Short snippets are read to display the raw data plots, each shank
+  showing its own channels. The snippets are cached in the same folder, in
+  `alignment_gui_raw_data_snippets.npy`; caches made by older versions are rebuilt.
 
 ## Histology
 

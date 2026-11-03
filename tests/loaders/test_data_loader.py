@@ -43,6 +43,18 @@ class TestDataLoader(unittest.TestCase):
         self.loader = DataLoader(self.sorting, self.ephys_qc, self.passive)
         self.loader.shank_sites = Bunch(spikes_ind=np.array([0, 1]), raw_ind=np.array([0, 1]))
 
+    @staticmethod
+    def make_spikes(clusters: np.ndarray) -> Bunch:
+        """Spikes with all the attributes the plots need"""
+        n = clusters.size
+        return Bunch(
+            clusters=clusters,
+            times=np.arange(n),
+            depths=np.arange(n),
+            amps=np.ones(n),
+            exists=True,
+        )
+
     def test_get_passive_data_from_source(self):
         """The RF map, stimuli and gabors come from the passive source"""
         result = self.loader.get_passive_data()
@@ -85,7 +97,7 @@ class TestDataLoader(unittest.TestCase):
 
     def test_get_spikes_data_on_shank_channels(self):
         """Spikes of clusters off the shank's channels are removed"""
-        self.sorting.load_spikes.return_value = Bunch(clusters=np.array([0, 1, 2]), exists=True)
+        self.sorting.load_spikes.return_value = self.make_spikes(np.array([0, 1, 2]))
         self.sorting.load_clusters.return_value = Bunch(channels=np.array([0, 3, 1]), exists=True)
         self.sorting.load_channels.return_value = Bunch(rawInd=np.arange(4), exists=True)
         spikes, clusters, channels = self.loader.get_spikes_data()
@@ -95,7 +107,7 @@ class TestDataLoader(unittest.TestCase):
 
     def test_get_spikes_data_rate_filter(self):
         """With filter set, low firing clusters are removed before the channel filter"""
-        spikes = Bunch(clusters=np.array([0]), exists=True)
+        spikes = self.make_spikes(np.array([0]))
         clusters = Bunch(channels=np.array([0]), exists=True)
         self.sorting.load_spikes.return_value = spikes
         self.sorting.load_clusters.return_value = clusters
@@ -115,6 +127,19 @@ class TestDataLoader(unittest.TestCase):
         self.assertFalse(spikes['exists'])
         self.assertFalse(clusters['exists'])
         self.assertFalse(channels['exists'])
+
+    def test_get_spikes_data_incomplete(self):
+        """Spikes without the attributes the plots need are treated as missing"""
+        # Kilosort output not converted with extract_ephys has spike samples, not times
+        self.sorting.load_spikes.return_value = Bunch(
+            clusters=np.zeros(5, dtype=int), samples=np.arange(5), exists=True
+        )
+        with self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs:
+            spikes, *_ = self.loader.get_spikes_data()
+        self.assertEqual(spikes, {'exists': False})
+        self.assertTrue(
+            any('spikes.depths, spikes.amps, spikes.times' in msg for msg in logs.output)
+        )
 
     def test_filter_spikes_by_chns(self):
         """Only spikes of clusters on the shank's channels are kept"""
@@ -256,6 +281,69 @@ class TestDataLoaderLocal(unittest.TestCase):
         self.assertEqual(loader.passive.raw_reader.path, self.collections.raw_task)
 
 
+class TestChannelOrder(unittest.TestCase):
+    """The RMS and spectra are put in file order, and files without rawInd are noted."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.ephys_path = Path(self.temp_dir.name)
+        self.shank_sites = Bunch(raw_ind=np.array([0, 5]))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def write_rms(self, raw_ind=None):
+        """Save an RMS object whose value on each column is the raw channel it holds"""
+        columns = np.arange(8) if raw_ind is None else raw_ind
+        rms = np.tile(columns.astype(float), (3, 1))
+        np.save(self.ephys_path.joinpath('_iblqc_ephysTimeRmsAP.rms.npy'), rms)
+        np.save(self.ephys_path.joinpath('_iblqc_ephysTimeRmsAP.timestamps.npy'), np.arange(3.0))
+        if raw_ind is not None:
+            np.save(self.ephys_path.joinpath('_iblqc_ephysTimeRmsAP.rawInd.npy'), raw_ind[None])
+
+    def local_loader(self):
+        loader = DataLoaderLocal(DatasetPaths(processed_ephys=self.ephys_path))
+        loader.shank_sites = self.shank_sites
+        return loader
+
+    def test_raw_ind_selects_raw_channels(self):
+        """Columns saved in any order are picked by their raw index"""
+        self.write_rms(raw_ind=np.array([7, 6, 5, 4, 3, 2, 1, 0]))
+        loader = self.local_loader()
+
+        data = loader.get_rms_data('ephysTimeRmsAP')
+
+        np.testing.assert_array_equal(data['rms'][0], [0, 5])
+        self.assertNotIn('rawInd', data)
+        self.assertEqual(loader.objects_without_raw_ind, [])
+
+    def test_raw_ind_subset(self):
+        """Raw channels that are not in the data are NaN"""
+        self.write_rms(raw_ind=np.array([0, 2, 4, 6]))
+        loader = self.local_loader()
+        loader.shank_sites = Bunch(raw_ind=np.array([4, 5]))
+
+        data = loader.get_rms_data('ephysTimeRmsAP')
+
+        np.testing.assert_array_equal(data['rms'][0], [4, np.nan])
+
+    def test_without_raw_ind_noted(self):
+        """Local data without rawInd are used as they are, and noted"""
+        self.write_rms()
+        loader = self.local_loader()
+
+        data = loader.get_rms_data('ephysTimeRmsAP')
+
+        np.testing.assert_array_equal(data['rms'][0], [0, 5])
+        self.assertEqual(loader.objects_without_raw_ind, ['ephysTimeRmsAP'])
+
+    def test_one_without_raw_ind_not_noted(self):
+        """The IBL pipeline saves in file order without rawInd, so ONE data are not noted"""
+        loader = DataLoaderOne({'session': 'eid', 'name': 'probe00'}, MagicMock())
+        loader.note_channel_order(Bunch(rms=np.ones((3, 8)), exists=True), 'ephysTimeRmsAP')
+        self.assertEqual(loader.objects_without_raw_ind, [])
+
+
 class TestLoadersWithoutDatasets(unittest.TestCase):
     """A session can have no spike sorting, and no raw data."""
 
@@ -284,6 +372,7 @@ class TestRawDataLoader(unittest.TestCase):
         self.ap.fs = 30000
         self.ap.duration = 2000
         self.ap.geometry = Bunch({'x': np.arange(384), 'y': np.arange(384)})
+        self.ap.channel_order = np.arange(384)
         self.ap.get_traces.return_value = np.ones((30000, 384))
         self.loader = RawDataLoader(self.ap, None, self.temp_path)
 
@@ -305,11 +394,22 @@ class TestRawDataLoader(unittest.TestCase):
             snippets = self.loader.get_time_snippets(self.ap, n=2)
             np.testing.assert_array_equal(snippets, np.array([200, 400]))
 
+        with self.subTest('snippet ends inside the file'):
+            # Without padding the last time point would be the end of the file
+            self.ap.duration = 30
+            snippets = self.loader.get_time_snippets(self.ap, twin=5)
+            np.testing.assert_array_equal(snippets, np.array([10, 20, 25]))
+
+        with self.subTest('long recordings unchanged'):
+            self.ap.duration = 2000
+            snippets = self.loader.get_time_snippets(self.ap, twin=5)
+            np.testing.assert_array_equal(snippets, np.array([533, 1066, 1599]))
+
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
     def test_get_ap_snippet(self, mock_destripe, mock_bad_channels):
         """A second of traces is read at t, destriped with the geometry, and 50 ms kept"""
-        mock_bad_channels.return_value = (np.zeros(384), None)
+        mock_bad_channels.return_value = (np.zeros(384), {})
         mock_destripe.return_value = np.ones((384, 30000))
 
         snippet, *_ = self.loader._get_ap_snippet(self.ap, t=2, twin=1)
@@ -317,6 +417,40 @@ class TestRawDataLoader(unittest.TestCase):
         self.assertEqual(snippet.shape, (1500, 384))
         self.ap.get_traces.assert_called_once_with(60000, 30000)
         self.assertIs(mock_destripe.call_args.kwargs['h'], self.ap.geometry)
+
+    def sorted_source(self, fs):
+        """A source that returns the channels sorted, each holding its file channel number."""
+        order = np.random.default_rng(0).permutation(384)
+        self.ap.fs = fs
+        self.ap.channel_order = order
+        self.ap.get_traces.return_value = np.tile(order, (fs * 5, 1)).astype(float)
+        return order
+
+    @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
+    @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
+    def test_get_ap_snippet_file_order(self, mock_destripe, mock_bad_channels):
+        """The sorted channels are destriped, then the snippet and flags are put in file order"""
+        order = self.sorted_source(30000)
+        mock_destripe.side_effect = lambda raw, **kwargs: raw
+        mock_bad_channels.return_value = (order, {'xcor_hf': order})
+
+        snippet, labels, features = self.loader._get_ap_snippet(self.ap, t=0, twin=1)
+
+        self.assertEqual(snippet.shape, (1500, 384))
+        np.testing.assert_array_equal(snippet[0], np.arange(384))
+        np.testing.assert_array_equal(labels, np.arange(384))
+        np.testing.assert_array_equal(features['xcor_hf'], np.arange(384))
+
+    @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
+    def test_get_lf_snippet_file_order(self, mock_destripe):
+        """The LF snippet is put in file order after destriping"""
+        self.sorted_source(2500)
+        mock_destripe.side_effect = lambda raw, **kwargs: raw
+
+        snippet = self.loader._get_lf_snippet(self.ap, t=0, twin=3)
+
+        self.assertEqual(snippet.shape, (5000, 384))
+        np.testing.assert_array_equal(snippet[0], np.arange(384))
 
     @patch('ibl_alignment_gui.loaders.data_loader.RawDataLoader.get_time_snippets')
     @patch('ibl_alignment_gui.loaders.data_loader.RawDataLoader._get_ap_snippet')
@@ -351,7 +485,7 @@ class TestRawDataLoader(unittest.TestCase):
             ]:
                 with self.subTest(key=key):
                     self.assertEqual(set(data[key]), {'values', 'lines', 'points'})
-            mock_times.assert_called_once_with(self.ap)
+            mock_times.assert_called_once_with(self.ap, twin=1)
 
         # Second time data is loaded from disk, so the recording is not read
         with self.subTest('Load existing raw data snippets'):
@@ -360,6 +494,15 @@ class TestRawDataLoader(unittest.TestCase):
             _ = self.loader.load_ap_snippets()
             mock_times.assert_not_called()
             mock_snippet.assert_not_called()
+
+        # A cache from before the channels were put in file order is rebuilt
+        with self.subTest('Old cache without channel order'):
+            old_cache = self.loader.load_ap_snippets()
+            old_cache.pop('channel_order')
+            np.save(self.loader.cached_ap_path, old_cache)
+            data = self.loader.load_ap_snippets()
+            mock_times.assert_called_once()
+            self.assertEqual(data['channel_order'], 'file')
 
 
 class TestSpikeGLXLoader(unittest.TestCase):

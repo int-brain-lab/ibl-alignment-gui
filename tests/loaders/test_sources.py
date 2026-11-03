@@ -279,3 +279,14 @@ class TestRawSourceSpikeGLX(unittest.TestCase):
         traces = self.source.get_traces(100, 50)
         self.assertIs(traces, self.reader.__getitem__.return_value)
         self.reader.__getitem__.assert_called_once_with((slice(100, 150), slice(None, -1)))
+
+    def test_channel_order(self):
+        """The file channel of each column is the reader's order, without the sync channel"""
+        self.reader.nc = 5
+        with self.subTest('Sorted by the reader'):
+            self.reader.raw_channel_order = np.array([1, 0, 3, 2, 4])
+            np.testing.assert_array_equal(self.source.channel_order, [1, 0, 3, 2])
+
+        with self.subTest('Reader without an order'):
+            del self.reader.raw_channel_order
+            np.testing.assert_array_equal(self.source.channel_order, np.arange(4))

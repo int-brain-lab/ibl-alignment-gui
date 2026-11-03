@@ -339,6 +339,82 @@ class ProbeHandler(ABC):
         config = config or self.default_config
         return getattr(self.shanks[shank][config].loaders['plots'], plot).get(key, None)
 
+    def is_out_of_depth_order(self, shank: str, config: str) -> bool:
+        """
+        Whether the raw file does not store the channels of a probe in shank and depth order.
+
+        Older versions of ``extract_ephys`` saved the RMS and spectra with the channels sorted
+        by shank and depth, which only matches the file order when the file stores them that
+        way. Channels at the same depth (the two of a row) may come in either order.
+
+        Parameters
+        ----------
+        shank : str
+            The shank label.
+        config : str
+            The configuration.
+
+        Returns
+        -------
+        bool
+            Read from the ap.meta electrodes, or the spike sorting channels when there is no
+            metadata; False when neither is known.
+        """
+        geom = self.shanks[shank][config].loaders['geom']
+        sites = geom.electrodes if geom.electrodes is not None else geom.channels
+        if sites is None or sites.shank_groups is None:
+            return False
+
+        shank_ids = np.zeros(sites.chn_ind.size)
+        for ishank, idx in sites.shank_groups.items():
+            shank_ids[idx] = ishank
+        # The shank and depth of each channel in the order the file stores them
+        order = np.argsort(sites.chn_ind, kind='stable')
+        shank_step = np.diff(shank_ids[order])
+        depth_step = np.diff(sites.y_coords[order])
+        return bool(np.any((shank_step < 0) | ((shank_step == 0) & (depth_step < 0))))
+
+    def get_channel_order_notice(self) -> str | None:
+        """
+        Report the RMS and spectra whose channels may be in the wrong order.
+
+        Older versions of ``extract_ephys`` saved the channels sorted by shank and depth. Such
+        files do not record their channel order (rawInd), so they are reported, once per
+        folder in the log and together in the returned notice, when the raw file stores the
+        channels in another order, which is when the plots would show the wrong channels.
+
+        Returns
+        -------
+        str or None
+            The notice to show the user, or None when there are no such files.
+        """
+        objects = defaultdict(list)
+        for shank in self.shanks:
+            for config in self.configs:
+                loader = self.shanks[shank][config].loaders['data']
+                missing = getattr(loader, 'objects_without_raw_ind', [])
+                if missing and self.is_out_of_depth_order(shank, config):
+                    objects[loader.ephys_path] += missing
+
+        if not objects:
+            return None
+
+        for folder, names in objects.items():
+            logger.warning(
+                'The channels of %s in %s may be in the wrong order, as the files do not record '
+                'it (rawInd). If you extracted them with the extract_ephys script, we recommend '
+                'running it again to verify',
+                ', '.join(dict.fromkeys(names)),
+                folder,
+            )
+
+        folders = '\n'.join(str(folder) for folder in objects)
+        return (
+            f'The channels of these RMS and power spectrum files may be in the wrong order:\n\n'
+            f'{folders}\n\nIf you extracted them using the extract_ephys script, we recommend '
+            f'running it again (ibl_alignment_gui.convertors.extract_ephys) to verify.'
+        )
+
     def get_plot_keys(self, plot: str) -> list[str]:
         """
         Find a list of available keys across all shanks and configurations for a given plot type.
@@ -1342,7 +1418,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
     def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
-        data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
+        # The paths are given per yaml probe; a single probe can hold several shanks
+        data_paths = self.data_paths[self.selected_config][self.probes[0]]
         return make_slice_loader(data_paths.histology, self.brain_atlas, self.histology_space)
 
     def initialise_shanks(self) -> None:
@@ -1482,7 +1559,8 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
 
     def _make_atlas(self) -> BrainAtlas:
         """Return the appropriate atlas based on the histology space in the YAML config."""
-        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
+        # The paths are given per yaml probe; a single probe can hold several shanks
+        histology_path = self.data_paths[self.selected_config][self.probes[0]].histology
         if self.histology_space == 'anatomical' and histology_path:
             return build_anatomical_atlas(histology_path)
         return AllenAtlas()

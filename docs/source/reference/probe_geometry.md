@@ -23,6 +23,18 @@ columns of sites, and every channel must lie within the depth range of the metad
 shank. If they disagree, a warning is logged and the spike sorting channels are used for
 everything, since the spike sorting data is indexed by them.
 
+## Channel order
+
+Channels are numbered by their position in the raw recording file, counting from 0, which is not
+always their order along the probe. On Neuropixels 2.0 probes the file can hold the channels in
+blocks out of depth order, or interleave the shanks.
+
+Spike sorting can list its channels in another order: data read with `ibl-neuropixel` is sorted by
+shank, row and column, which on Neuropixels 2.0 swaps the two channels of each row.
+`channels.rawInd` gives the raw file channel of each spike sorting channel, and the `rawInd`
+attribute of the RMS and power spectrum files does the same for their columns, so the data of each
+channel is found whatever order it is stored in.
+
 ## Which one is used
 
 | Used for | Geometry |

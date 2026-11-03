@@ -301,6 +301,11 @@ class RawSource(ABC):
     def geometry(self) -> dict[str, np.ndarray]:
         """The channel header used to destripe: x, y, shank, row, col, adc and sample_shift."""
 
+    @property
+    @abstractmethod
+    def channel_order(self) -> np.ndarray:
+        """The raw file channel of each column returned by get_traces."""
+
     @abstractmethod
     def get_traces(self, start: int, n_samples: int) -> np.ndarray:
         """
@@ -795,6 +800,15 @@ class RawSourceSpikeGLX(RawSource):
     def geometry(self) -> dict[str, np.ndarray]:
         """The channel header used to destripe, read from the metadata."""
         return self.reader.geometry
+
+    @property
+    def channel_order(self) -> np.ndarray:
+        """The raw file channel of each column; the reader sorts them by position on the probe."""
+        n_channels = self.reader.nc - self.reader.nsync
+        order = getattr(self.reader, 'raw_channel_order', None)
+        if order is None:
+            return np.arange(n_channels)
+        return np.asarray(order[:n_channels])
 
     def get_traces(self, start: int, n_samples: int) -> np.ndarray:
         """

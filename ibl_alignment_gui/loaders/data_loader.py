@@ -64,12 +64,18 @@ class DataLoader:
         The source of the passive stimulus data.
     """
 
+    # Whether to note RMS and spectra saved without the raw index of each channel. The IBL
+    # pipeline saves them in file order without it, so only local data are checked.
+    check_channel_order: bool = False
+
     def __init__(self, sorting: SortingSource, ephys_qc: EphysQCSource, passive: PassiveSource):
         self.sorting: SortingSource = sorting
         self.ephys_qc: EphysQCSource = ephys_qc
         self.passive: PassiveSource = passive
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
+        # The RMS and spectra objects that do not record the order of their channels
+        self.objects_without_raw_ind: list[str] = []
 
     def get_data(self, shank_sites: Bunch[str, Any]) -> Bunch[str, Any]:
         """
@@ -134,7 +140,23 @@ class DataLoader:
         rms_data : Bunch
             RMS data
         """
-        return self.filter_raw_by_chns(self.ephys_qc.load_rms(alf_object))
+        rms_data = self.ephys_qc.load_rms(alf_object)
+        self.note_channel_order(rms_data, alf_object)
+        return self.filter_raw_by_chns(rms_data)
+
+    def note_channel_order(self, data: Bunch[str, Any], alf_object: str) -> None:
+        """
+        Note RMS or spectra data that do not record the order of their channels (rawInd).
+
+        Parameters
+        ----------
+        data : Bunch
+            The RMS or spectra data.
+        alf_object : str
+            The ALF object the data were loaded from.
+        """
+        if self.check_channel_order and data['exists'] and 'rawInd' not in data:
+            self.objects_without_raw_ind.append(alf_object)
 
     def get_psd_data(self, alf_object: str) -> Bunch[str, Any]:
         """
@@ -152,7 +174,9 @@ class DataLoader:
         psd_data: Bunch
             PSD data
         """
-        return self.filter_raw_by_chns(self.ephys_qc.load_psd(alf_object))
+        psd_data = self.ephys_qc.load_psd(alf_object)
+        self.note_channel_order(psd_data, alf_object)
+        return self.filter_raw_by_chns(psd_data)
 
     def get_spikes_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
@@ -170,6 +194,17 @@ class DataLoader:
             channels data
         """
         spikes = self.sorting.load_spikes()
+        # A spikes object without all of them cannot be plotted, so it is treated as missing
+        attributes = ['depths', 'amps', 'times', 'clusters']
+        missing = [f'spikes.{attribute}' for attribute in attributes if attribute not in spikes]
+        if spikes['exists'] and missing:
+            logger.warning(
+                'The spike sorting has no %s, so the spike plots will not display. Convert it '
+                'with extract_ephys',
+                ', '.join(missing),
+            )
+            spikes = Bunch(exists=False)
+
         clusters = self.sorting.load_clusters()
         channels = self.sorting.load_channels()
 
@@ -213,6 +248,9 @@ class DataLoader:
         """
         Filter ephys data to only include data relevant to channels present on selected shank.
 
+        The columns are taken to hold the raw channels in file order, unless the data give the
+        raw channel of each column as ``rawInd``.
+
         Parameters
         ----------
         data : dict
@@ -223,12 +261,21 @@ class DataLoader:
         data: Bunch
             Filtered ephys data
         """
+        columns = self.shank_sites['raw_ind']
+        raw_ind = data.pop('rawInd', None)
+        if raw_ind is not None:
+            # Find the column of each raw channel; channels not in the data get a column past
+            # the end, which _safe_take returns as NaN
+            raw_ind = np.ravel(raw_ind)
+            lookup = np.full(max(raw_ind.max(), columns.max(initial=0)) + 1, raw_ind.size)
+            lookup[raw_ind] = np.arange(raw_ind.size)
+            columns = lookup[columns]
+
         for key in data:
             # Skip the exists flag, labels and 1D arrays such as timestamps
             if not isinstance(data[key], np.ndarray) or data[key].ndim == 1:
                 continue
-            # data[key] = data[key][:, self.shank_sites['raw_ind']]
-            data[key] = self._safe_take(data[key], self.shank_sites['raw_ind'])
+            data[key] = self._safe_take(data[key], columns)
 
         return data
 
@@ -404,6 +451,7 @@ class DataLoaderLocal(DataLoader):
             EphysQCSourceAlf(_local_reader(self.ephys_path)),
             PassiveSourceAlf(_local_reader(self.task_path), _local_reader(self.raw_task_path)),
         )
+        self.check_channel_order = True
 
     @property
     def spike_sorting_path(self) -> Path:
@@ -482,17 +530,19 @@ class RawDataLoader:
         Returns
         -------
         data: Bunch
-            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs). The
+            channels of the snippets and the channel quality metrics are in file order.
         """
         if self.cached_ap_path and self.cached_ap_path.exists():
             data = np.load(self.cached_ap_path, allow_pickle=True).item()
-            if 'dead_channels' in data:
+            # Older caches hold the channels sorted by position on the probe, so are rebuilt
+            if 'dead_channels' in data and data.get('channel_order') == 'file':
                 return data
 
         if self.ap is None:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(self.ap)
+        times = self.get_time_snippets(self.ap, twin=twin)
 
         # Thresholds for channel quality detection
         detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
@@ -541,6 +591,7 @@ class RawDataLoader:
 
         data['exists'] = True
         data['fs'] = self.ap.fs
+        data['channel_order'] = 'file'
 
         if self.cached_ap_path:
             np.save(self.cached_ap_path, data)
@@ -562,16 +613,19 @@ class RawDataLoader:
         Returns
         -------
         data: Bunch
-            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs). The
+            channels of the snippets are in file order.
         """
         if self.cached_lf_path and self.cached_lf_path.exists():
             data = np.load(self.cached_lf_path, allow_pickle=True).item()
-            return data
+            # Older caches hold the channels sorted by position on the probe, so are rebuilt
+            if data.get('channel_order') == 'file':
+                return data
 
         if self.lf is None:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(self.lf)
+        times = self.get_time_snippets(self.lf, twin=twin)
 
         data = defaultdict(Bunch)
 
@@ -582,6 +636,7 @@ class RawDataLoader:
 
         data['exists'] = True
         data['fs'] = self.lf.fs
+        data['channel_order'] = 'file'
 
         # TODO uncomment once we are happy with the snippet length
         # if self.cached_lf_path:
@@ -621,7 +676,13 @@ class RawDataLoader:
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * fs), int(0.5 * fs))
-        return raw[:, window].T, channel_labels, channel_features
+
+        # The source can return the channels sorted by position on the probe for the
+        # destriping, put them back in file order so they can be indexed with the raw channel
+        # indices
+        unsort = np.argsort(source.channel_order)
+        channel_features = {k: np.asarray(v)[unsort] for k, v in channel_features.items()}
+        return raw[unsort, window].T, channel_labels[unsort], channel_features
 
     @staticmethod
     def _get_lf_snippet(
@@ -660,10 +721,16 @@ class RawDataLoader:
 
         # Extract a window in time (1–2 seconds)
         window = slice(int(0.5 * fs), int(2.5 * fs))
-        return raw[:, window].T
+
+        # The source can return the channels sorted by position on the probe for the
+        # destriping, put them back in file order so they can be indexed with the raw channel
+        # indices
+        return raw[np.argsort(source.channel_order), window].T
 
     @staticmethod
-    def get_time_snippets(source: RawSource, n: int = 3, pad: int = 200) -> np.ndarray:
+    def get_time_snippets(
+        source: RawSource, n: int = 3, pad: int = 200, twin: float = 0
+    ) -> np.ndarray:
         """
         Return n time points across the file duration, excluding pad seconds from start and end.
 
@@ -675,6 +742,9 @@ class RawDataLoader:
             Number of time points to extract.
         pad : int
             Time (seconds) to exclude from beginning and end.
+        twin : float
+            The length (seconds) of the snippet read from each time point. The time points are
+            kept early enough for the snippet to end inside the file.
 
         Returns
         -------
@@ -685,7 +755,9 @@ class RawDataLoader:
         pad = pad if file_duration > 500 else 0
         usable_time = file_duration - 2 * pad
         intervals = usable_time // n
-        return intervals * (np.arange(n) + 1)
+        times = intervals * (np.arange(n) + 1)
+        # Without padding the last time point is the end of the file
+        return np.minimum(times, max(file_duration - twin, 0))
 
 
 class SpikeGLXLoader(RawDataLoader, ABC):

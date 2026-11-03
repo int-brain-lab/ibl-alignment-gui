@@ -18,6 +18,8 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     average_chns_at_same_depths,
     find_geometry_mismatches,
     pad_data_to_full_chn_map,
+    pad_sites_to_full_depths,
+    select_shank_channels,
 )
 from ibl_alignment_gui.loaders.sources import AlfReaderLocal, SortingSource, SortingSourceAlf
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
@@ -296,6 +298,19 @@ class TestChannelGeometry(unittest.TestCase):
         groups = geom._get_shank_groups()
         np.testing.assert_array_equal(groups[0], [0, 2])
         np.testing.assert_array_equal(groups[1], [1, 3])
+
+    def test_orig_raw_ind(self):
+        """Each site keeps its raw channel in the order of the site coordinates"""
+        channels = Bunch(
+            localCoordinates=np.c_[[0, 0, 0], [40, 0, 20]], rawInd=np.array([7, 3, 5])
+        )
+        geom = ChannelGeometry(channels)
+        geom.split_sites_per_shank()
+        shank = geom.shanks[0]
+        np.testing.assert_array_equal(shank['orig_raw_ind'], [7, 3, 5])
+        np.testing.assert_array_equal(shank['sites_coords'][:, 1], [40, 0, 20])
+        # The raw indices sorted by depth are unchanged
+        np.testing.assert_array_equal(shank['raw_ind'], [3, 5, 7])
 
     def test_get_n_shanks_and_get_shank_groups(self):
         """Test the _get_n_shanks and _get_shank_groups methods"""
@@ -1085,3 +1100,37 @@ class TestFindGeometryMismatches(unittest.TestCase):
             mismatches = find_geometry_mismatches(electrodes, channels)
             self.assertEqual(len(mismatches), 1)
             self.assertIn('2 of 4 channel sites fall outside', mismatches[0])
+
+
+class TestSelectShankChannels(unittest.TestCase):
+    """Test the select_shank_channels function"""
+
+    def test_channels_in_site_order(self):
+        """The shank's raw channels are taken in the order of its sites"""
+        shank = Bunch(raw_ind=np.array([4, 0, 2]))
+        data = np.arange(12).reshape(2, 6)
+        np.testing.assert_array_equal(select_shank_channels(shank, data), [[4, 0, 2], [10, 6, 8]])
+
+    def test_missing_channels_filled(self):
+        """Raw channels past the end of the data get the fill value"""
+        shank = Bunch(raw_ind=np.array([1, 7]))
+        np.testing.assert_array_equal(select_shank_channels(shank, np.arange(4.0)), [1, np.nan])
+        flags = select_shank_channels(shank, np.array([True, True, False, False]), False)
+        np.testing.assert_array_equal(flags, [True, False])
+
+
+class TestPadSitesToFullDepths(unittest.TestCase):
+    """Test the pad_sites_to_full_depths function"""
+
+    def test_both_sites_of_a_depth_kept_and_gaps_empty(self):
+        """Two sites per depth are kept left to right, and a depth without sites is NaN"""
+        # Depths 0 and 40 have two sites, the one at depth 0 given right first; 20 has none
+        shank = Bunch(
+            sites_x=np.array([59, 27, 27, 59]),
+            sites_y=np.array([0, 0, 40, 40]),
+            sites_min=0,
+            sites_pitch=20,
+            sites_full=np.array([0, 20, 40]),
+        )
+        padded = pad_sites_to_full_depths(shank, np.array([[1.0, 2.0, 3.0, 4.0]]))
+        np.testing.assert_array_equal(padded, [[2, 1, np.nan, np.nan, 3, 4]])

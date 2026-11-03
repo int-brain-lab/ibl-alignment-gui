@@ -46,6 +46,12 @@ MODELS = (*DECODER_SPECS.values(), spatial.ENCODER_SPEC)
 MODEL_FOR_OPTION = {option: spec for spec in MODELS for option in spec.options}
 
 
+def panel_title(option: str) -> str:
+    """Return the title shown above a prediction panel, e.g. 'XGBoost prediction'."""
+    spec = MODEL_FOR_OPTION.get(option)
+    return option if spec is None else spec.panel_title(option)
+
+
 def has_torch() -> bool:
     """Return whether torch is installed, without importing it."""
     return importlib.util.find_spec('torch') is not None
@@ -535,9 +541,9 @@ def _draw(items: 'ShankController', option: str, fig=None) -> None:
     fig = items.view.fig_pred if fig is None else fig
     pred = _cache(items).get(option)
     if pred is None:  # e.g. the prediction failed on this shank
-        items.view.clear_prediction(fig, option)
+        items.view.clear_prediction(fig, panel_title(option))
     else:
-        items.view.plot_prediction(fig, pred, option)
+        items.view.plot_prediction(fig, pred, panel_title(option))
 
 
 def _draw_all(shanks: list['ShankController'], option: str) -> None:
@@ -554,6 +560,6 @@ def _draw_all_predictions(
         for option, fig in items.view.fig_preds.items():
             spec = MODEL_FOR_OPTION.get(option)
             if spec is None or not is_model_loaded(controller, spec.key):
-                items.view.clear_prediction(fig, option, NOT_LOADED_MESSAGE)
+                items.view.clear_prediction(fig, panel_title(option), NOT_LOADED_MESSAGE)
             else:
                 _draw(items, option, fig)

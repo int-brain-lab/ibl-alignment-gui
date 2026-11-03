@@ -73,6 +73,8 @@ class Geometry(ABC):
               Indices of sites relative to raw data ordering.
             site_coords: np.ndarray
               (x, y) coordinates of the shank sites.
+            orig_raw_ind: np.ndarray
+              Indices of the sites relative to raw data ordering, in the order of site_coords.
             sites_min/ sites_max: float
               Minimum and maximum y coordinate values.
             sites_pitch: float
@@ -97,6 +99,7 @@ class Geometry(ABC):
             # These are unsorted and are used to save the channels for the alignment
             # in the original order
             info['orig_idx'] = orig_idx
+            info['orig_raw_ind'] = self.chn_ind[orig_idx]
             info['sites_coords'] = np.c_[x_coords, y_coords]
             # These are sorted by depth and are used for plotting
             y_sort = np.argsort(y_coords)
@@ -641,3 +644,67 @@ def pad_data_to_full_chn_map(shank_geom: Bunch[str, Any], data: np.ndarray) -> n
     padded_data[:, shank_geom['idx_full']] = data
 
     return padded_data
+
+
+def select_shank_channels(
+    shank_geom: Bunch[str, Any], data: np.ndarray, fill: Any = np.nan
+) -> np.ndarray:
+    """
+    Select the channels of a shank, in depth order, from data on every raw channel.
+
+    Parameters
+    ----------
+    shank_geom: Bunch
+        A bunch containing channel geometry information for a shank, returned
+        from `Geometry.get_chns_for_shank()`.
+    data : np.ndarray
+        Array with the raw channels in file order along its last axis.
+    fill : Any
+        The value given to channels of the shank that are not in the data.
+
+    Returns
+    -------
+    np.ndarray
+        The data on the sites of the shank, in the order of the sites.
+    """
+    raw_ind = np.asarray(shank_geom['raw_ind'])
+    valid = raw_ind < data.shape[-1]
+    selected = np.full((*data.shape[:-1], raw_ind.size), fill, dtype=np.result_type(data, fill))
+    selected[..., valid] = data[..., raw_ind[valid]]
+
+    return selected
+
+
+def pad_sites_to_full_depths(shank_geom: Bunch[str, Any], data: np.ndarray) -> np.ndarray:
+    """
+    Place the sites of a shank at their depth, keeping the sites that share a depth.
+
+    Each depth of the full channel map gets as many rows as the most sites at one depth (two on
+    Neuropixels), filled with its sites from left to right. Depths without sites are NaN.
+
+    Parameters
+    ----------
+    shank_geom: Bunch
+        A bunch containing channel geometry information for a shank, returned
+        from `Geometry.get_chns_for_shank()`.
+    data : np.ndarray
+        2D array of data with shape (time x sites), with the sites in the order of the shank.
+
+    Returns
+    -------
+    np.ndarray
+        2D array with shape (time x depths of the full map * sites per depth).
+    """
+    sites_x = shank_geom['sites_x']
+    sites_y = shank_geom['sites_y']
+    n_per_depth = np.unique(sites_y, return_counts=True)[1].max()
+
+    # The depth of each site on the full map, and its place from left to right at that depth
+    depth = np.round((sites_y - shank_geom['sites_min']) / shank_geom['sites_pitch']).astype(int)
+    same_depth = sites_y[:, np.newaxis] == sites_y[np.newaxis, :]
+    place = np.sum(same_depth & (sites_x[np.newaxis, :] < sites_x[:, np.newaxis]), axis=1)
+
+    padded = np.full((data.shape[0], shank_geom['sites_full'].size * n_per_depth), np.nan)
+    padded[:, depth * n_per_depth + place] = data
+
+    return padded

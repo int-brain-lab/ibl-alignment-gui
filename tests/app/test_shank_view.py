@@ -208,5 +208,40 @@ class TestAllPredictionsLayout(unittest.TestCase):
                 self.assertIn(fig, layout.items)
 
 
+class TestSliceChannels(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _setup_qt(cls)
+
+    def test_channels_without_value_are_grey(self):
+        """Each channel gets a colour, and those the probe plot has no value for are grey"""
+        from ibl_alignment_gui.loaders.plot_loader import ProbeData  # noqa: PLC0415
+
+        view = ShankView('a', 0, 'default')
+        fig = pg.ViewBox()
+        probe = ProbeData(
+            img=np.zeros((1, 1)),
+            scale=np.ones(2),
+            levels=[0, 1],
+            default_levels=[0, 1],
+            offset=np.zeros(2),
+            xrange=np.zeros(2),
+            cmap='viridis',
+            title='',
+        )
+        data = Bunch(
+            xyz_channels=np.zeros((3, 3)),
+            values=np.array([0.0, np.nan, 1.0]),
+            track_lines=[],
+            tip=np.zeros(3),
+        )
+        view.plot_channels(fig, data, probe)
+
+        brushes = [point.brush().color() for point in view.slice_chns.points()]
+        self.assertEqual(len(brushes), 3)
+        self.assertEqual(brushes[1], pg.mkColor('grey'))
+        self.assertNotEqual(brushes[0], pg.mkColor('grey'))
+
+
 if __name__ == '__main__':
     unittest.main()

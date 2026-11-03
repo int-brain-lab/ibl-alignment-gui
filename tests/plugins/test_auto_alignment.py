@@ -283,10 +283,10 @@ class TestAlignmentInputs(unittest.TestCase):
 
 class TestAlignmentInputsVintage(unittest.TestCase):
     def test_missing_feature_suggests_features_vintage(self):
-        """With the table's vintage known, the error suggests that release of the model"""
+        """With the table's vintage known, the error suggests a release trained on it"""
         df = _features_table().drop(columns='b')
         df.attrs['features_version'] = '2026_W26'
-        with self.assertRaisesRegex(PredictionError, 'load a 2026_W26 release of the model'):
+        with self.assertRaisesRegex(PredictionError, 'trained on features of vintage 2026_W26'):
             spatial_encoder.alignment_inputs(_fake_model(), df)
 
 
@@ -318,7 +318,7 @@ class TestAlign(unittest.TestCase):
         """The features come from the table of the model's vintage, reporting progress"""
         self.align()
         self.features_for_vintage.assert_called_once_with(
-            self.controller, self.items, '2026_W39', _no_progress
+            self.controller, self.items, '2026_W39', _no_progress, None
         )
 
     def test_aligns_with_session_pid(self):

@@ -1,7 +1,8 @@
 # Install the hooks once with `uv run pre-commit install`; run them on demand with
 # `uv run pre-commit run --all-files`. CI runs the same ruff checks, so the hooks are a
 # convenience for catching problems before pushing rather than the source of truth.
-exclude: ^tests/fixtures/
+# IMRO tables are kept byte for byte as SpikeGLX wrote them (one line, no final newline).
+exclude: ^tests/fixtures/|\.imro$
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

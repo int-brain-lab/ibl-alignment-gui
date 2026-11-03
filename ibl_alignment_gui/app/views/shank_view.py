@@ -52,9 +52,8 @@ class ShankView:
                 }
                 """,
     }
-    # Characters per line, and font size, of the title above a prediction figure
+    # Characters per line of the title above a prediction figure
     PRED_TITLE_WIDTH = 24
-    PRED_TITLE_SIZE = '8pt'
 
     def __init__(
         self, name: str, index: int, config: str, prediction_keys: list[str] | tuple = ()
@@ -789,18 +788,28 @@ class ShankView:
         fig_slice : pg.ViewBox
             The fig slice to plot the channels and reference lines on
         data : Bunch
-            A Bunch object containing the channels data
+            A Bunch object containing the channels data, and the values of the probe plot on
+            each channel ('values'), NaN for channels it has no value for
+        data_feature : ProbeData or None
+            The probe plot whose colour map and levels colour the channels
         colour : str
             The colour to use to plot the channels
         """
         self.clear_channels(fig_slice)
 
-        if data_feature is None or data_feature.data is None:
+        values = data.get('values')
+        if data_feature is None or values is None:
             brush = pg.mkBrush(colour)
             pen = pg.mkPen(colour, width=0.2)
         else:
             cbar = ColorBar(data_feature.cmap)
-            brush = cbar.get_brush(data_feature.data, levels=list(data_feature.levels))
+            levels = list(data_feature.levels)
+            brush = cbar.get_brush(np.nan_to_num(values, nan=levels[0]), levels=levels)
+            # Channels the probe plot has no value for are grey
+            brush = [
+                QtGui.QColor('grey') if np.isnan(value) else b
+                for value, b in zip(values, brush, strict=True)
+            ]
             pen = None
 
         self.slice_chns = pg.ScatterPlotItem(
@@ -1296,10 +1305,9 @@ class ShankView:
         """
         label = self.pred_labels[fig]
         if title:
-            # The prediction figures are narrow: wrap long titles over more lines, in small text
+            # The prediction figures are narrow: wrap long titles over more lines
             title = '<br>'.join(textwrap.wrap(title, width=self.PRED_TITLE_WIDTH))
-            axis = set_axis(label, 'top', pen='k', ticks=False)
-            axis.setLabel(title, **{'font-size': self.PRED_TITLE_SIZE})
+            set_axis(label, 'top', pen='k', label=title, ticks=False)
         else:
             set_axis(label, 'top', pen='w', label=' ', ticks=False)
 

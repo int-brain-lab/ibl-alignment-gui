@@ -1,4 +1,6 @@
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +10,7 @@ from scipy import signal
 from tqdm import tqdm
 
 import one.alf.io as alfio
-from ibldsp import fourier, utils
+from ibldsp import fourier, utils, voltage
 from ibllib.ephys import ephysqc
 
 _logger = logging.getLogger(__name__)
@@ -16,9 +18,24 @@ _logger = logging.getLogger(__name__)
 
 RMS_WIN_LENGTH_SECS = 3
 WELCH_WIN_LENGTH_SAMPLES = 1024
+# The RMS and spectra are computed on a sample of the recording taken every
+# SAMPLE_SPACING_SECS, of AP_SAMPLE_LENGTH_SECS for the AP band and LF_SAMPLE_LENGTH_SECS for
+# the LF band, which is enough for the plots and reads a fraction of the file
+SAMPLE_SPACING_SECS = 10
+AP_SAMPLE_LENGTH_SECS = 1
+LF_SAMPLE_LENGTH_SECS = 3
+# Data read either side of each sample so that the filters settle before it. The 300 Hz
+# high-pass of the AP band settles within milliseconds, the 1 Hz high-pass of the LF band needs
+# much longer.
+AP_PAD_SECS = 0.1
+LF_PAD_SECS = 0.5
+# The LF band of NP2 probes, which record wideband, is the AP band decimated from 30 to 2.5 kHz
+LF_DECIMATION = 12
+# The windows are processed in parallel, by up to this many threads
+N_WORKERS = min(8, os.cpu_count() or 1)
 
 
-def rmsmap(fbin, spectra=True):
+def rmsmap(fbin, spectra=True, sample_spacing_secs=None, lfp_from_ap=False, n_workers=N_WORKERS):
     """
     Compute the RMS map in the time domain and the spectra for each channel of the probe.
 
@@ -28,61 +45,234 @@ def rmsmap(fbin, spectra=True):
         Binary file in SpikeGLX format; the attached metadata is looked up alongside it.
     spectra : bool
         Whether to compute the power spectrum, which is only needed for LF data.
+    sample_spacing_secs : float or None
+        When given, the RMS and spectra are computed on a sample taken every
+        ``sample_spacing_secs`` seconds, of ``AP_SAMPLE_LENGTH_SECS`` for the AP band and
+        ``LF_SAMPLE_LENGTH_SECS`` for the LF band. When None, the whole recording is read in
+        windows of about ``RMS_WIN_LENGTH_SECS``.
+    lfp_from_ap : bool
+        Whether to compute the LF band from an AP file, for NP2 probes that record wideband
+        and have no LF file. The AP data are decimated to the LF sampling rate.
+    n_workers : int
+        The number of threads the windows are shared between, each with its own reader. The
+        filtering and FFTs release the GIL, so the threads run in parallel.
 
     Returns
     -------
     dict
         The RMS amplitudes in channel-time space, the spectral density in channel-frequency
-        space, and the time and frequency scales.
+        space averaged over the windows, the time and frequency scales, and the raw file index
+        of each channel.
+
+    Notes
+    -----
+    The channels are returned in the order they are stored in the binary file, whatever the
+    channel order of the reader, so that they can be indexed with the raw channel indices
+    (``channels.rawInd``) used by the GUI.
+
+    The AP band is destriped before computing the RMS: high-passed at 300 Hz, corrected for the
+    sample shift of the ADCs and re-referenced to the median of the channels of each shank. The
+    LF band is high-passed at 1 Hz.
     """
-    if not isinstance(fbin, spikeglx.Reader):
-        sglx = spikeglx.Reader(fbin)
+    opened = not isinstance(fbin, spikeglx.Reader)
+    sglx = spikeglx.Reader(fbin, sort=False) if opened else fbin
+    if not sglx.is_open:
         sglx.open()
-    rms_win_length_samples = 2 ** np.ceil(np.log2(sglx.fs * RMS_WIN_LENGTH_SECS))
-    # the window generator will generates window indices
-    wingen = utils.WindowGenerator(ns=sglx.ns, nswin=rms_win_length_samples, overlap=0)
+
+    lf_band = lfp_from_ap or sglx.type == 'lf'
+    fs = sglx.fs / (LF_DECIMATION if lfp_from_ap else 1)
+    length_secs = LF_SAMPLE_LENGTH_SECS if lf_band else AP_SAMPLE_LENGTH_SECS
+    windows = _rms_windows(sglx.ns, sglx.fs, sample_spacing_secs, length_secs)
+
     # pre-allocate output dictionary of numpy arrays
     win = {
-        'TRMS': np.zeros((wingen.nwin, sglx.nc)),
-        'nsamples': np.zeros((wingen.nwin,)),
-        'fscale': fourier.fscale(WELCH_WIN_LENGTH_SAMPLES, 1 / sglx.fs, one_sided=True),
-        'tscale': wingen.tscale(fs=sglx.fs),
+        'TRMS': np.zeros((len(windows), sglx.nc)),
+        'nsamples': np.zeros((len(windows),)),
+        'fscale': fourier.fscale(WELCH_WIN_LENGTH_SAMPLES, 1 / fs, one_sided=True),
+        # the middle of each window
+        'tscale': np.array([first + (last - first - 1) / 2 for first, last in windows]) / sglx.fs,
+        'raw_ind': np.arange(sglx.nc),
     }
     win['spectral_density'] = np.zeros((len(win['fscale']), sglx.nc))
-    # loop through the whole session
-    with tqdm(total=wingen.nwin) as pbar:
-        for first, last in wingen.firstlast:
-            data = sglx.read_samples(first_sample=first, last_sample=last)[0].transpose()
-            # remove low frequency noise below 1 Hz
-            data = fourier.hp(data, 1 / sglx.fs, [0, 1])
-            iw = wingen.iw
-            win['TRMS'][iw, :] = utils.rms(data)
-            win['nsamples'][iw] = data.shape[1]
-            if spectra:
-                # the last window may be smaller than what is needed for welch
-                if last - first < WELCH_WIN_LENGTH_SAMPLES:
-                    continue
-                # compute a smoothed spectrum using welch method
-                _, w = signal.welch(
-                    data,
-                    fs=sglx.fs,
-                    window='hann',
-                    nperseg=WELCH_WIN_LENGTH_SAMPLES,
-                    detrend='constant',
-                    return_onesided=True,
-                    scaling='density',
-                    axis=-1,
-                )
-                win['spectral_density'] += w.T
-            # print at least every 20 windows
-            if (iw % min(20, max(int(np.floor(wingen.nwin / 75)), 1))) == 0:
-                pbar.update(iw)
+    n_spectra = 0
 
-    sglx.close()
+    # A few batches per thread, so that the threads finish together
+    batches = [b for b in np.array_split(np.arange(len(windows)), n_workers * 4) if b.size]
+    kwargs = {'spectra': spectra, 'lfp_from_ap': lfp_from_ap}
+    with tqdm(total=len(windows)) as pbar:
+        if n_workers == 1:
+            results = (
+                (batch, _process_windows(sglx, [windows[i] for i in batch], **kwargs))
+                for batch in batches
+            )
+        else:
+            pool = ThreadPoolExecutor(n_workers)
+            futures = {
+                pool.submit(
+                    _process_windows, sglx.file_bin, [windows[i] for i in batch], **kwargs
+                ): batch
+                for batch in batches
+            }
+            results = ((futures[future], future.result()) for future in as_completed(futures))
+        for batch, (rms, nsamples, spectral_density, n) in results:
+            win['TRMS'][batch, :] = rms
+            win['nsamples'][batch] = nsamples
+            win['spectral_density'] += spectral_density
+            n_spectra += n
+            pbar.update(batch.size)
+        if n_workers > 1:
+            pool.shutdown()
+
+    # The spectral density is averaged, so it does not depend on the number of windows
+    win['spectral_density'] /= max(n_spectra, 1)
+    if opened:
+        sglx.close()
     return win
 
 
-def extract_rmsmap(fbin, out_folder=None, spectra=True):
+def _process_windows(fbin, windows, spectra=True, lfp_from_ap=False):
+    """
+    Compute the RMS and the summed spectral density of windows of a recording.
+
+    Parameters
+    ----------
+    fbin : str, pathlib.Path or spikeglx.Reader
+        Binary file in SpikeGLX format, or an open reader of it.
+    windows : list of tuple of int
+        The first and last (exclusive) sample of each window.
+    spectra : bool
+        Whether to compute the power spectrum.
+    lfp_from_ap : bool
+        Whether to compute the LF band from an AP file.
+
+    Returns
+    -------
+    rms : np.ndarray
+        The RMS of each channel in each window, (windows, channels).
+    nsamples : np.ndarray
+        The number of samples of each window.
+    spectral_density : np.ndarray
+        The spectral density summed over the windows, (frequencies, channels).
+    n_spectra : int
+        The number of windows summed into the spectral density.
+    """
+    opened = not isinstance(fbin, spikeglx.Reader)
+    sglx = spikeglx.Reader(fbin, sort=False) if opened else fbin
+    # A reader returns its channels in raw_channel_order, which sorts them by position on the
+    # probe by default. Request them so that they come back in file order.
+    file_order = np.argsort(getattr(sglx, 'raw_channel_order', np.arange(sglx.nc)))
+    # The channel geometry in file order, for the destriping
+    geometry = spikeglx.geometry_from_meta(sglx.meta, sort=False)
+    n_channels = sglx.nc - sglx.nsync
+
+    lf_band = lfp_from_ap or sglx.type == 'lf'
+    decimation = LF_DECIMATION if lfp_from_ap else 1
+    fs = sglx.fs / decimation
+    # The padding is a whole number of decimated samples
+    pad_secs = LF_PAD_SECS if lf_band else AP_PAD_SECS
+    pad = int(pad_secs * sglx.fs) // decimation * decimation
+    # The sync channels are only high-passed, as destriping applies to the probe channels
+    sos_sync = signal.butter(3, 300 / sglx.fs * 2, btype='highpass', output='sos')
+
+    rms = np.zeros((len(windows), sglx.nc))
+    nsamples = np.zeros(len(windows))
+    n_freqs = fourier.fscale(WELCH_WIN_LENGTH_SAMPLES, 1 / fs, one_sided=True).size
+    spectral_density = np.zeros((n_freqs, sglx.nc))
+    n_spectra = 0
+    for iw, (first, last) in enumerate(windows):
+        start, stop = max(first - pad, 0), min(last + pad, sglx.ns)
+        data, _ = sglx.read_samples(first_sample=start, last_sample=stop, channels=file_order)
+        data = data.transpose()
+        if lfp_from_ap:
+            # The FIR filter of decimate keeps the AP band out of the LF band
+            data = signal.decimate(data, decimation, ftype='fir', zero_phase=True, axis=-1)
+        if lf_band:
+            # remove low frequency noise below 1 Hz
+            data = fourier.hp(data.astype(np.float32), 1 / fs, [0, 1])
+        else:
+            sync = signal.sosfiltfilt(sos_sync, data[n_channels:])
+            destriped = voltage.destripe(data[:n_channels], fs=sglx.fs, h=geometry, k_filter=False)
+            data = np.r_[destriped, sync]
+        # Drop the padding, now that the filters have settled
+        data = data[:, (first - start) // decimation : (last - start) // decimation]
+        rms[iw, :] = utils.rms(data)
+        nsamples[iw] = data.shape[1]
+        # the last window may be smaller than what is needed for welch
+        if spectra and data.shape[1] >= WELCH_WIN_LENGTH_SAMPLES:
+            # compute a smoothed spectrum using welch method
+            _, w = signal.welch(
+                data,
+                fs=fs,
+                window='hann',
+                nperseg=WELCH_WIN_LENGTH_SAMPLES,
+                detrend='constant',
+                return_onesided=True,
+                scaling='density',
+                axis=-1,
+            )
+            spectral_density += w.T
+            n_spectra += 1
+
+    if opened:
+        sglx.close()
+    return rms, nsamples, spectral_density, n_spectra
+
+
+def _rms_windows(ns, fs, sample_spacing_secs=None, length_secs=AP_SAMPLE_LENGTH_SECS):
+    """
+    Get the first and last sample of each window the RMS is computed on.
+
+    Parameters
+    ----------
+    ns : int
+        The number of samples in the recording.
+    fs : float
+        The sampling frequency (Hz).
+    sample_spacing_secs : float or None
+        The time between the starts of the samples. When None, the recording is split into
+        consecutive windows of about ``RMS_WIN_LENGTH_SECS``.
+    length_secs : float
+        The length of each sample.
+
+    Returns
+    -------
+    list of tuple of int
+        The first and last (exclusive) sample of each window.
+    """
+    if sample_spacing_secs is None:
+        nswin = 2 ** np.ceil(np.log2(fs * RMS_WIN_LENGTH_SECS))
+        return list(utils.WindowGenerator(ns=ns, nswin=nswin, overlap=0).firstlast)
+    length = min(int(length_secs * fs), ns)
+    starts = np.arange(0, ns - length + 1, int(sample_spacing_secs * fs))
+    return [(int(first), int(first) + length) for first in starts]
+
+
+def _is_np2(bin_file):
+    """
+    Whether a SpikeGLX file was recorded with a Neuropixels 2.0 probe, read from its metadata.
+
+    Parameters
+    ----------
+    bin_file : str or pathlib.Path
+        The binary file, with its metadata alongside it.
+
+    Returns
+    -------
+    bool
+        True for NP2 probes, which record the AP and LF bands together in the AP file.
+    """
+    meta = spikeglx.read_meta_data(Path(bin_file).with_suffix('.meta'))
+    return str(spikeglx._get_neuropixel_version_from_meta(meta)).startswith('NP2')
+
+
+def extract_rmsmap(
+    fbin,
+    out_folder=None,
+    spectra=True,
+    sample_spacing_secs=SAMPLE_SPACING_SECS,
+    lfp_from_ap=False,
+    n_workers=N_WORKERS,
+):
     """
     Write the _ibl_ephysRmsMap and _ibl_ephysSpectra ALF files for a binary file.
 
@@ -94,25 +284,57 @@ def extract_rmsmap(fbin, out_folder=None, spectra=True):
         Folder to write the ALF files to. Defaults to the folder the ``fbin`` file lives in.
     spectra : bool
         Whether to compute the power spectrum, which is only needed for LF data.
+    sample_spacing_secs : float or None
+        The RMS and spectra are computed on a sample taken every ``sample_spacing_secs``
+        seconds, which is enough for the plots and reads a fraction of the file. None reads the
+        whole recording.
+    lfp_from_ap : bool
+        Whether to compute the LF band from an AP file, for NP2 probes that have no LF file.
+    n_workers : int
+        The number of threads the windows are shared between.
+
+    Raises
+    ------
+    ValueError
+        If ``lfp_from_ap`` is set for a file that is not from an NP2 probe, whose AP band holds
+        no LFP.
     """
+    if lfp_from_ap and not _is_np2(fbin):
+        raise ValueError(f'{fbin} is not from an NP2 probe, so its AP band holds no LFP')
     _logger.info(f'Computing QC for {fbin}')
     sglx = spikeglx.Reader(fbin)
     # check if output ALF files exist already:
     out_folder = Path(fbin).parent if out_folder is None else Path(out_folder)
-    alf_object_time = f'ephysTimeRms{sglx.type.upper()}'
-    alf_object_freq = f'ephysSpectralDensity{sglx.type.upper()}'
+    band = 'LF' if lfp_from_ap else sglx.type.upper()
+    alf_object_time = f'ephysTimeRms{band}'
+    alf_object_freq = f'ephysSpectralDensity{band}'
 
     # crunch numbers
-    rms = rmsmap(fbin, spectra=spectra)
+    rms = rmsmap(
+        fbin,
+        spectra=spectra,
+        sample_spacing_secs=sample_spacing_secs,
+        lfp_from_ap=lfp_from_ap,
+        n_workers=n_workers,
+    )
     # output ALF files, single precision with the optional label as suffix before extension
     if not out_folder.exists():
         out_folder.mkdir()
-    tdict = {'rms': rms['TRMS'].astype(np.single), 'timestamps': rms['tscale'].astype(np.single)}
+    # The raw index of each channel is saved with the data, (1, channels) so that it broadcasts
+    # over the windows and frequencies. It records that the channels are in file order, which
+    # older versions of this function did not write them in.
+    raw_ind = rms['raw_ind'][np.newaxis, :].astype(np.int32)
+    tdict = {
+        'rms': rms['TRMS'].astype(np.single),
+        'timestamps': rms['tscale'].astype(np.single),
+        'rawInd': raw_ind,
+    }
     alfio.save_object_npy(out_folder, object=alf_object_time, dico=tdict, namespace='iblqc')
     if spectra:
         fdict = {
             'power': rms['spectral_density'].astype(np.single),
             'freqs': rms['fscale'].astype(np.single),
+            'rawInd': raw_ind,
         }
         alfio.save_object_npy(out_folder, object=alf_object_freq, dico=fdict, namespace='iblqc')
 
@@ -172,7 +394,8 @@ def extract_data(ks_path, ephys_path, out_path):
     Convert a Kilosort output and its raw data into the datasets the alignment GUI reads.
 
     Writes the ALF spike sorting datasets, and the RMS and spectral density files for each AP and
-    LF binary file found alongside them.
+    LF binary file found alongside them. For NP2 recordings without an LF file, as told by their
+    metadata, the LF RMS and spectral density are computed from the AP file.
 
     Parameters
     ----------
@@ -199,6 +422,9 @@ def extract_data(ks_path, ephys_path, out_path):
             )
 
             extract_rmsmap(efile.ap, out_folder=out_path, spectra=False)
+            # NP2 probes record wideband, without an LF file, so the LF band is the AP band
+            if not (efile.get('lf') and efile.lf.exists()) and _is_np2(efile.ap):
+                extract_rmsmap(efile.ap, out_folder=out_path, lfp_from_ap=True)
         if efile.get('lf') and efile.lf.exists():
             extract_rmsmap(efile.lf, out_folder=out_path)
 

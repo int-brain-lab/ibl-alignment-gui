@@ -297,7 +297,17 @@ class DataLoader(ABC):
         channels: Bunch
             channels data
         """
-        spikes = self.load_spikes_data('spikes', ['depths', 'amps', 'times', 'clusters'])
+        attributes = ['depths', 'amps', 'times', 'clusters']
+        spikes = self.load_spikes_data('spikes', attributes)
+        # A spikes object without all of them cannot be plotted, so it is treated as missing
+        missing = [f'spikes.{attribute}' for attribute in attributes if attribute not in spikes]
+        if spikes['exists'] and missing:
+            logger.warning(
+                'The spike sorting has no %s, so the spike plots will not display. Convert it '
+                'with extract_ephys',
+                ', '.join(missing),
+            )
+            spikes = Bunch(exists=False)
 
         clusters = self.load_spikes_data(
             'clusters', ['metrics', 'peakToTrough', 'waveforms', 'channels']

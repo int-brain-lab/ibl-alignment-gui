@@ -68,5 +68,34 @@ class TestRawSnippetsPerShank(unittest.TestCase):
                     np.testing.assert_array_equal(plot.mask, raw_ind % 2 == 0)
 
 
+class TestFilterUnits(unittest.TestCase):
+    """A filter that fails falls back to all units, and all units failing raises."""
+
+    def setUp(self):
+        self.loader = PlotLoader()
+        self.loader.data = Bunch(
+            spikes=Bunch(
+                clusters=np.array([0, 1, 1]),
+                depths=np.array([10.0, 20.0, 30.0]),
+                amps=np.ones(3),
+                exists=True,
+            ),
+            clusters=Bunch(channels=np.array([0, 1]), metrics={}, exists=True),
+        )
+
+    def test_failed_filter_falls_back_to_all(self):
+        """Without the metrics a filter needs, all units are kept"""
+        with self.assertLogs('ibl_alignment_gui.loaders.plot_loader', 'WARNING'):
+            self.loader.filter_units('IBL good')
+        np.testing.assert_array_equal(self.loader.cluster_idx, [0, 1])
+        np.testing.assert_array_equal(self.loader.spike_idx, [0, 1, 2])
+
+    def test_all_failing_raises(self):
+        """When all units cannot be kept the error is raised rather than retried forever"""
+        del self.loader.data['spikes']['depths']
+        with self.assertRaises(KeyError):
+            self.loader.filter_units('All')
+
+
 if __name__ == '__main__':
     unittest.main()

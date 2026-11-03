@@ -266,7 +266,15 @@ class TestDataLoader(unittest.TestCase):
     @patch('ibl_alignment_gui.loaders.data_loader.DataLoader.filter_spikes_by_fr')
     def test_get_spikes_data(self, mock_fr):
         """Test the get_spikes_data method"""
-        mock_spikes = Bunch({'clusters': np.array([0, 1, 2]), 'exists': True})
+        mock_spikes = Bunch(
+            {
+                'clusters': np.array([0, 1, 2]),
+                'times': np.array([0.1, 0.2, 0.3]),
+                'depths': np.array([10.0, 20.0, 30.0]),
+                'amps': np.ones(3),
+                'exists': True,
+            }
+        )
 
         mock_clusters = Bunch(
             {
@@ -528,6 +536,27 @@ class TestChannelOrder(unittest.TestCase):
         loader = DataLoaderOne({'session': 'eid', 'name': 'probe00'}, MagicMock())
         loader.note_channel_order(Bunch(rms=np.ones((3, 8)), exists=True), 'ephysTimeRmsAP')
         self.assertEqual(loader.objects_without_raw_ind, [])
+
+
+class TestIncompleteSpikes(unittest.TestCase):
+    """Spikes without the attributes the plots need are treated as missing."""
+
+    def test_missing_attributes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            # Kilosort output not converted with extract_ephys has spike samples, not times
+            np.save(folder.joinpath('spikes.clusters.npy'), np.zeros(5, dtype=int))
+            np.save(folder.joinpath('spikes.samples.npy'), np.arange(5))
+            loader = DataLoaderLocal(DatasetPaths(spike_sorting=folder))
+            loader.shank_sites = Bunch(spikes_ind=np.arange(4), raw_ind=np.arange(4))
+
+            with self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs:
+                spikes, *_ = loader.get_spikes_data()
+
+        self.assertEqual(spikes, {'exists': False})
+        self.assertTrue(
+            any('spikes.depths, spikes.amps, spikes.times' in msg for msg in logs.output)
+        )
 
 
 class TestLoadersWithoutDatasets(unittest.TestCase):

@@ -663,6 +663,9 @@ class PlotLoader:
                 & ~np.isnan(self.data['spikes']['amps'][self.spike_idx])
             )[0]
         except Exception:
+            # Falling back to 'All' cannot help when 'All' itself fails
+            if filter_type == 'All':
+                raise
             logger.warning(f'{filter_type} metrics not found will return all units instead')
             self.filter_units('All')
 

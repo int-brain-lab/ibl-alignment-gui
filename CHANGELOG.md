@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started at the end of the file.
 - The image, scatter and probe plots are shown for a session without xyz picks; before, only the
   line plots were drawn.
+- Spike sorting whose `spikes` object lacks `times`, `depths` or `amps` (e.g. Kilosort output not
+  converted with `extract_ephys`) is treated as missing and logged, rather than the load failing
+  with a `RecursionError` in the unit filter.
 
 ## [0.1.0a2] - 2026-10-30
 

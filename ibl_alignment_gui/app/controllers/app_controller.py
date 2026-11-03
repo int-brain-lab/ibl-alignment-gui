@@ -939,11 +939,13 @@ class AlignmentGUIController:
             return
 
         if self.model.selected_config == 'both':
-            results = self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
+            results = self._plot_panels(
+                plot_key, plot_type, plot_func, data_only=data_only, **kwargs
+            )
             if dual_cb_name:
                 self.plot_dual_colorbar(results, dual_cb_name)
         else:
-            self._plot_panels(plot_key, plot_type, plot_func, data_only, **kwargs)
+            self._plot_panels(plot_key, plot_type, plot_func, data_only=data_only, **kwargs)
 
         # Optional plugin event
         if plugin_event:
@@ -1559,6 +1561,10 @@ class AlignmentGUIController:
         # Change colour of data button to indicate data has been loaded
         self.view.deactivate_selection_button()
         self.view.focus()
+        # Tell the user if the RMS and spectra may show the wrong channels
+        notice = self.model.get_channel_order_notice()
+        if notice:
+            QtWidgets.QMessageBox.warning(self.view, 'Recompute the RMS', notice)
         # Reclaim the previous session's figures/data now that its tabs have been cleared and
         # its shank controllers/views dereferenced (pyqtgraph leaves reference cycles behind)
         gc.collect()

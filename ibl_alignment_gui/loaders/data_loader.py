@@ -48,9 +48,15 @@ class DataLoader(ABC):
     - `load_spikes_data`
     """
 
+    # Whether to note RMS and spectra saved without the raw index of each channel. The IBL
+    # pipeline saves them in file order without it, so only local data are checked.
+    check_channel_order: bool = False
+
     def __init__(self):
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
+        # The RMS and spectra objects that do not record the order of their channels
+        self.objects_without_raw_ind: list[str] = []
 
     def get_data(self, shank_sites: Bunch[str, Any]) -> Bunch[str, Any]:
         """
@@ -217,6 +223,7 @@ class DataLoader(ABC):
             RMS data
         """
         rms_data = self.load_ephys_data(alf_object)
+        self.note_channel_order(rms_data, alf_object)
         rms_data = self.filter_raw_by_chns(rms_data)
 
         if rms_data['exists']:
@@ -229,6 +236,20 @@ class DataLoader(ABC):
                 rms_data['xaxis'] = 'Time (s)'
 
         return rms_data
+
+    def note_channel_order(self, data: Bunch[str, Any], alf_object: str) -> None:
+        """
+        Note RMS or spectra data that do not record the order of their channels (rawInd).
+
+        Parameters
+        ----------
+        data : Bunch
+            The RMS or spectra data.
+        alf_object : str
+            The ALF object the data were loaded from.
+        """
+        if self.check_channel_order and data['exists'] and 'rawInd' not in data:
+            self.objects_without_raw_ind.append(alf_object)
 
     def get_psd_data(self, alf_object: str) -> Bunch[str, Any]:
         """
@@ -247,6 +268,7 @@ class DataLoader(ABC):
             PSD data
         """
         psd_data = self.load_ephys_data(alf_object)
+        self.note_channel_order(psd_data, alf_object)
         psd_data = self.filter_raw_by_chns(psd_data)
 
         if psd_data['exists'] and 'amps' in psd_data:
@@ -275,7 +297,17 @@ class DataLoader(ABC):
         channels: Bunch
             channels data
         """
-        spikes = self.load_spikes_data('spikes', ['depths', 'amps', 'times', 'clusters'])
+        attributes = ['depths', 'amps', 'times', 'clusters']
+        spikes = self.load_spikes_data('spikes', attributes)
+        # A spikes object without all of them cannot be plotted, so it is treated as missing
+        missing = [f'spikes.{attribute}' for attribute in attributes if attribute not in spikes]
+        if spikes['exists'] and missing:
+            logger.warning(
+                'The spike sorting has no %s, so the spike plots will not display. Convert it '
+                'with extract_ephys',
+                ', '.join(missing),
+            )
+            spikes = Bunch(exists=False)
 
         clusters = self.load_spikes_data(
             'clusters', ['metrics', 'peakToTrough', 'waveforms', 'channels']
@@ -323,6 +355,9 @@ class DataLoader(ABC):
         """
         Filter ephys data to only include data relevant to channels present on selected shank.
 
+        The columns are taken to hold the raw channels in file order, unless the data give the
+        raw channel of each column as ``rawInd``.
+
         Parameters
         ----------
         data : dict
@@ -333,13 +368,22 @@ class DataLoader(ABC):
         data: Bunch
             Filtered ephys data
         """
+        columns = self.shank_sites['raw_ind']
+        raw_ind = data.pop('rawInd', None)
+        if raw_ind is not None:
+            # Find the column of each raw channel; channels not in the data get a column past
+            # the end, which _safe_take returns as NaN
+            raw_ind = np.ravel(raw_ind)
+            lookup = np.full(max(raw_ind.max(), columns.max(initial=0)) + 1, raw_ind.size)
+            lookup[raw_ind] = np.arange(raw_ind.size)
+            columns = lookup[columns]
+
         for key in data:
             if key == 'exists':
                 continue
             if data[key].ndim == 1:
                 continue
-            # data[key] = data[key][:, self.shank_sites['raw_ind']]
-            data[key] = self._safe_take(data[key], self.shank_sites['raw_ind'])
+            data[key] = self._safe_take(data[key], columns)
 
         return data
 
@@ -559,6 +603,7 @@ class DataLoaderLocal(DataLoader):
         self.probe_collection: str | None = self.spike_path.name if self.spike_path else None
 
         super().__init__()
+        self.check_channel_order = True
 
     @property
     def spike_sorting_path(self) -> Path:
@@ -702,18 +747,20 @@ class SpikeGLXLoader(ABC):
         Returns
         -------
         data: Bunch
-            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs). The
+            channels of the snippets and the channel quality metrics are in file order.
         """
         if self.cached_ap_path and self.cached_ap_path.exists():
             data = np.load(self.cached_ap_path, allow_pickle=True).item()
-            if 'dead_channels' in data:
+            # Older caches hold the channels sorted by position on the probe, so are rebuilt
+            if 'dead_channels' in data and data.get('channel_order') == 'file':
                 return data
 
         sr = self.load_ap_data()
         if not sr:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr)
+        times = self.get_time_snippets(sr, twin=twin)
 
         # Thresholds for channel quality detection
         detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
@@ -760,6 +807,7 @@ class SpikeGLXLoader(ABC):
 
         data['exists'] = True
         data['fs'] = sr.fs
+        data['channel_order'] = 'file'
 
         if self.cached_ap_path:
             np.save(self.cached_ap_path, data)
@@ -781,17 +829,20 @@ class SpikeGLXLoader(ABC):
         Returns
         -------
         data: Bunch
-            Snippets of raw data for three timepoints in addition to metadata (exists, fs).
+            Snippets of raw data for three timepoints in addition to metadata (exists, fs). The
+            channels of the snippets are in file order.
         """
         if self.cached_lf_path and self.cached_lf_path.exists():
             data = np.load(self.cached_lf_path, allow_pickle=True).item()
-            return data
+            # Older caches hold the channels sorted by position on the probe, so are rebuilt
+            if data.get('channel_order') == 'file':
+                return data
 
         sr = self.load_lf_data()
         if not sr:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr)
+        times = self.get_time_snippets(sr, twin=twin)
 
         data = defaultdict(Bunch)
 
@@ -802,6 +853,7 @@ class SpikeGLXLoader(ABC):
 
         data['exists'] = True
         data['fs'] = sr.fs
+        data['channel_order'] = 'file'
 
         # TODO uncomment once we are happy with the snippet length
         # if self.cached_lf_path:
@@ -842,7 +894,12 @@ class SpikeGLXLoader(ABC):
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
-        return raw[:, window].T, channel_labels, channel_features
+
+        # The reader sorts the channels by position on the probe for the destriping, put them
+        # back in file order so they can be indexed with the raw channel indices
+        unsort = SpikeGLXLoader._unsort(sr, raw.shape[0])
+        channel_features = {k: np.asarray(v)[unsort] for k, v in channel_features.items()}
+        return raw[unsort, window].T, channel_labels[unsort], channel_features
 
     @staticmethod
     def _get_lf_snippet(
@@ -882,10 +939,37 @@ class SpikeGLXLoader(ABC):
 
         # Extract a window in time (1–2 seconds)
         window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
-        return raw[:, window].T
+
+        # The reader sorts the channels by position on the probe for the destriping, put them
+        # back in file order so they can be indexed with the raw channel indices
+        return raw[SpikeGLXLoader._unsort(sr, raw.shape[0]), window].T
 
     @staticmethod
-    def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:
+    def _unsort(sr: spikeglx.Reader | Streamer, n_channels: int) -> np.ndarray:
+        """
+        Get the index that puts the channels read from a reader back in file order.
+
+        Parameters
+        ----------
+        sr : spikeglx.Reader or Streamer
+            The raw data reader, which returns the channels in its raw_channel_order.
+        n_channels : int
+            The number of channels read, without the sync channels.
+
+        Returns
+        -------
+        np.ndarray
+            The index of the channels read, in file order.
+        """
+        order = getattr(sr, 'raw_channel_order', None)
+        if order is None:
+            return np.arange(n_channels)
+        return np.argsort(order[:n_channels])
+
+    @staticmethod
+    def get_time_snippets(
+        sr: spikeglx.Reader, n: int = 3, pad: int = 200, twin: float = 0
+    ) -> np.ndarray:
         """
         Return n time points across the file duration, excluding pad seconds from start and end.
 
@@ -897,6 +981,9 @@ class SpikeGLXLoader(ABC):
             Number of time points to extract.
         pad : int
             Time (seconds) to exclude from beginning and end.
+        twin : float
+            The length (seconds) of the snippet read from each time point. The time points are
+            kept early enough for the snippet to end inside the file.
 
         Returns
         -------
@@ -907,7 +994,9 @@ class SpikeGLXLoader(ABC):
         pad = pad if file_duration > 500 else 0
         usable_time = file_duration - 2 * pad
         intervals = usable_time // n
-        return intervals * (np.arange(n) + 1)
+        times = intervals * (np.arange(n) + 1)
+        # Without padding the last time point is the end of the file
+        return np.minimum(times, max(file_duration - twin, 0))
 
 
 class SpikeGLXLoaderOne(SpikeGLXLoader):

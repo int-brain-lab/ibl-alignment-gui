@@ -6,6 +6,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0a4] - 2026-11-03
+
+### Added
+- `extract_ephys` computes the LF RMS and power spectrum of NP2 recordings without an LF file
+  from the AP file.
+
+### Changed
+- `extract_ephys` computes the RMS and power spectra on samples of the recording, in parallel,
+  destripes the AP band before its RMS (which removes the LFP from the AP band of NP2 probes),
+  and averages the power spectrum over windows rather than summing it.
+
+### Fixed
+- `extract_ephys` saved the RMS and power spectra with the channels sorted by position on the
+  probe rather than in file order, so NP2 plots showed the wrong channels. It now saves them in
+  file order with a `rawInd`; recompute older files. Local files without `rawInd` that may be
+  affected are reported when the session loads.
+- The raw data snippets and channel plots show each shank's own channels, at their depth.
+- The image, scatter and probe plots are shown for sessions without xyz picks.
+- Colouring the slice channels by a probe plot failed, or used the wrong channels, when the spike
+  sorting had fewer channels than the recording or listed them in another order.
+- Loading failed for a session YAML with a single multi-shank probe, for recordings shorter than
+  500 s, and for spike sorting without `spikes.times`, `depths` or `amps`.
+
 ## [0.1.0a3] - 2026-11-02
 
 ### Changed

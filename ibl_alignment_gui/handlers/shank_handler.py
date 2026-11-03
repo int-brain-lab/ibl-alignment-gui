@@ -259,6 +259,34 @@ class ShankHandler:
         """
         return self.loaders['plots'].probe_plots
 
+    def values_on_channels(self, probe: ProbeData | None) -> np.ndarray | None:
+        """
+        Get the values of a probe plot on the channels shown on the histology slice.
+
+        The probe plots can be on other sites than the channels, e.g. all the electrodes of the
+        metadata when the spike sorting has fewer channels, and in another order, so the values
+        are matched to the channels by their raw channel.
+
+        Parameters
+        ----------
+        probe : ProbeData or None
+            The probe plot.
+
+        Returns
+        -------
+        np.ndarray or None
+            A value per channel, in the order of xyz_channels, NaN where the plot has none. None
+            when the plot has no values, or they cannot be matched to the channels.
+        """
+        if probe is None or probe.data is None:
+            return None
+        channels = self.chn_sites['orig_raw_ind']
+        if probe.raw_ind is None:
+            # Without the raw channel of each value, they can only be taken in order
+            return probe.data if probe.data.size == channels.size else None
+        values = dict(zip(np.ravel(probe.raw_ind).tolist(), np.ravel(probe.data), strict=True))
+        return np.array([values.get(channel, np.nan) for channel in channels.tolist()])
+
     @property
     def slice_plots(self) -> Bunch[str, Bunch]:
         """

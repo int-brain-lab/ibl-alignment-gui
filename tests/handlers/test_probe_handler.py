@@ -302,7 +302,8 @@ class TestProbeHandlerLocalYaml(unittest.TestCase):
 
         self.assertEqual(model.get_shanks(None), ['shank_1', 'shank_2', 'shank_3'])
         model.download_histology()
-        self.assertEqual(mock_slice_loader.call_args.args[0], self.root.joinpath('hist'))
+        # The yaml paths are resolved, which on Windows expands short (8.3) folder names
+        self.assertEqual(mock_slice_loader.call_args.args[0], self.root.resolve().joinpath('hist'))
 
     def test_two_configs(self):
         yaml_file = self.write_yaml(

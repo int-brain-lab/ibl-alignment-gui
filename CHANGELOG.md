@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Spike sorting whose `spikes` object lacks `times`, `depths` or `amps` (e.g. Kilosort output not
   converted with `extract_ephys`) is treated as missing and logged, rather than the load failing
   with a `RecursionError` in the unit filter.
+- Colouring the channels on the histology slice by a probe plot failed when the spike sorting had
+  fewer channels than the recording (`Number of brushes does not match number of points`), and
+  could give channels the colour of another when they were stored out of depth order. The
+  values are now matched to the channels by raw channel, and channels without one are grey.
 
 ## [0.1.0a2] - 2026-10-30
 

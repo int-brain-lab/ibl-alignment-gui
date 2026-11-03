@@ -225,6 +225,9 @@ class ProbeData:
         An array of the data along the depth of probe (for 3D view)
     boundaries : np.ndarray or None
         Array of boundaries for banks or regions.
+    raw_ind : np.ndarray or None
+        The raw channel of each value in data, used to match them to the channels shown on the
+        histology slice.
     """
 
     img: np.ndarray
@@ -237,6 +240,7 @@ class ProbeData:
     title: str
     data: np.ndarray | None = None
     boundaries: np.ndarray | None = None
+    raw_ind: np.ndarray | None = None
 
 
 FILTER_MATCH = {
@@ -1469,6 +1473,7 @@ class PlotLoader:
             xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
             title=band + ' RMS (uV)',
             data=rms_avg,
+            raw_ind=self.shank_sites['raw_ind'],
         )
 
         return {key: probe}
@@ -1509,6 +1514,7 @@ class PlotLoader:
                 xrange=np.array([0 * BNK_SIZE, (self.shank_sites['n_banks']) * BNK_SIZE]),
                 title=f'{freq[0]}-{freq[1]} Hz (dB)',
                 data=lfp_power,
+                raw_ind=self.shank_sites['raw_ind'],
             )
             data_probe.update({f'{freq[0]} - {freq[1]} Hz': probe})
 
@@ -1657,6 +1663,7 @@ class PlotLoader:
             xrange=np.array([0, 10 * sites['n_banks']]),
             title=feature,
             data=feature_norm,
+            raw_ind=feature_data['channel'].values if 'channel' in feature_data else None,
         )
 
     @skip_missing(['features'])

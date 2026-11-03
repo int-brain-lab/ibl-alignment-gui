@@ -789,18 +789,28 @@ class ShankView:
         fig_slice : pg.ViewBox
             The fig slice to plot the channels and reference lines on
         data : Bunch
-            A Bunch object containing the channels data
+            A Bunch object containing the channels data, and the values of the probe plot on
+            each channel ('values'), NaN for channels it has no value for
+        data_feature : ProbeData or None
+            The probe plot whose colour map and levels colour the channels
         colour : str
             The colour to use to plot the channels
         """
         self.clear_channels(fig_slice)
 
-        if data_feature is None or data_feature.data is None:
+        values = data.get('values')
+        if data_feature is None or values is None:
             brush = pg.mkBrush(colour)
             pen = pg.mkPen(colour, width=0.2)
         else:
             cbar = ColorBar(data_feature.cmap)
-            brush = cbar.get_brush(data_feature.data, levels=list(data_feature.levels))
+            levels = list(data_feature.levels)
+            brush = cbar.get_brush(np.nan_to_num(values, nan=levels[0]), levels=levels)
+            # Channels the probe plot has no value for are grey
+            brush = [
+                QtGui.QColor('grey') if np.isnan(value) else b
+                for value, b in zip(values, brush, strict=True)
+            ]
             pen = None
 
         self.slice_chns = pg.ScatterPlotItem(

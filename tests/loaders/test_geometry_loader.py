@@ -285,6 +285,19 @@ class TestGeometry(unittest.TestCase):
 class TestChannelGeometry(unittest.TestCase):
     """Test the ChannelGeometry class"""
 
+    def test_orig_raw_ind(self):
+        """Each site keeps its raw channel in the order of the site coordinates"""
+        channels = Bunch(
+            localCoordinates=np.c_[[0, 0, 0], [40, 0, 20]], rawInd=np.array([7, 3, 5])
+        )
+        geom = ChannelGeometry(channels)
+        geom.split_sites_per_shank()
+        shank = geom.shanks[0]
+        np.testing.assert_array_equal(shank['orig_raw_ind'], [7, 3, 5])
+        np.testing.assert_array_equal(shank['sites_coords'][:, 1], [40, 0, 20])
+        # The raw indices sorted by depth are unchanged
+        np.testing.assert_array_equal(shank['raw_ind'], [3, 5, 7])
+
     def test_get_n_shanks_and_get_shank_groups(self):
         """Test the _get_n_shanks and _get_shank_groups methods"""
         with self.subTest('Single shank'):

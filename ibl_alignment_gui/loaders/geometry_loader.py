@@ -68,6 +68,8 @@ class Geometry(ABC):
               Indices of sites relative to raw data ordering.
             site_coords: np.ndarray
               (x, y) coordinates of the shank sites.
+            orig_raw_ind: np.ndarray
+              Indices of the sites relative to raw data ordering, in the order of site_coords.
             sites_min/ sites_max: float
               Minimum and maximum y coordinate values.
             sites_pitch: float
@@ -92,6 +94,7 @@ class Geometry(ABC):
             # These are unsorted and are used to save the channels for the alignment
             # in the original order
             info['orig_idx'] = orig_idx
+            info['orig_raw_ind'] = self.chn_ind[orig_idx]
             info['sites_coords'] = np.c_[x_coords, y_coords]
             # These are sorted by depth and are used for plotting
             y_sort = np.argsort(y_coords)

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from ibl_alignment_gui.handlers.shank_handler import ShankHandler
+from ibl_alignment_gui.loaders.plot_loader import ProbeData
 from iblutil.util import Bunch
 
 
@@ -247,3 +248,52 @@ class TestShankHandler(unittest.TestCase):
         features = self.shank_handler.load_ephys_features(None)
         self.assertEqual(features, Bunch(exists=False))
         self.assertIs(self.shank_handler.raw_data['features'], features)
+
+
+class TestValuesOnChannels(unittest.TestCase):
+    """The values of a probe plot are matched to the slice channels by raw channel."""
+
+    @staticmethod
+    def probe(data, raw_ind=None):
+        return ProbeData(
+            img=np.zeros((1, 1)),
+            scale=np.ones(2),
+            levels=[0, 1],
+            default_levels=[0, 1],
+            offset=np.zeros(2),
+            xrange=np.zeros(2),
+            cmap='viridis',
+            title='',
+            data=np.asarray(data, dtype=float),
+            raw_ind=None if raw_ind is None else np.asarray(raw_ind),
+        )
+
+    def values(self, channels, probe):
+        model = Bunch(chn_sites=Bunch(orig_raw_ind=np.asarray(channels)))
+        return ShankHandler.values_on_channels(model, probe)
+
+    def test_matched_by_raw_channel(self):
+        """Values in another order than the channels go to their own channel"""
+        probe = self.probe([30, 10, 0, 20], raw_ind=[3, 1, 0, 2])
+        np.testing.assert_array_equal(self.values([0, 1, 2, 3], probe), [0, 10, 20, 30])
+
+    def test_fewer_channels_than_sites(self):
+        """A plot on all the electrodes colours the channels the spike sorting kept"""
+        probe = self.probe(np.arange(384) * 10, raw_ind=np.arange(384))
+        channels = [300, 5, 17]
+        np.testing.assert_array_equal(self.values(channels, probe), [3000, 50, 170])
+
+    def test_channel_without_value(self):
+        """A channel the plot has no value for is NaN"""
+        probe = self.probe([1, 2], raw_ind=[0, 1])
+        np.testing.assert_array_equal(self.values([1, 5], probe), [2, np.nan])
+
+    def test_without_raw_channels(self):
+        """Without raw channels the values are taken in order, when they are as many"""
+        with self.subTest('as many'):
+            np.testing.assert_array_equal(self.values([4, 2], self.probe([1, 2])), [1, 2])
+        with self.subTest('not as many'):
+            self.assertIsNone(self.values([4, 2, 3], self.probe([1, 2])))
+
+    def test_no_plot(self):
+        self.assertIsNone(self.values([0], None))

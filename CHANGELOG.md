@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   made before had the channels sorted by position on the probe, so on NP2 probes the plots showed
   the wrong channels; recompute them with `extract_ephys`. Passing an open `spikeglx.Reader` to
   `rmsmap` no longer fails.
+- `extract_ephys` high-passes the AP band at 300 Hz before computing its RMS, as the IBL
+  destriping does. NP2 probes record the AP band wideband, so their AP RMS included the LFP.
 - The RMS and power spectra are read in the channel order given by their `rawInd`. Local files
   without it may be in the wrong order when the raw file does not store the channels in shank
   and depth order: they are then logged, and a dialog recommends running `extract_ephys` again to

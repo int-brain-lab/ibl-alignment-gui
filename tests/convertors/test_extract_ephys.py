@@ -11,7 +11,9 @@ from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures')
 
 
-def write_spikeglx(folder: Path, np_type: str, band: str, duration: float) -> Path:
+def write_spikeglx(
+    folder: Path, np_type: str, band: str, duration: float, freq: float | None = None
+) -> Path:
     """
     Write a SpikeGLX file whose channels have an amplitude set by their index in the file.
 
@@ -25,6 +27,8 @@ def write_spikeglx(folder: Path, np_type: str, band: str, duration: float) -> Pa
         'ap' or 'lf'.
     duration : float
         The duration of the recording (s).
+    freq : float or None
+        The frequency (Hz) of the sine on each channel; by default 1 kHz for AP, 100 Hz for LF.
 
     Returns
     -------
@@ -50,7 +54,7 @@ def write_spikeglx(folder: Path, np_type: str, band: str, duration: float) -> Pa
     bin_file.with_suffix('.meta').write_text('\n'.join(lines) + '\n')
 
     # A 1 kHz (AP) or 100 Hz (LF) sine with an amplitude of 20 * (file index + 1)
-    freq = 1000 if band == 'ap' else 100
+    freq = freq or (1000 if band == 'ap' else 100)
     sine = np.sin(2 * np.pi * freq * np.arange(ns) / fs)
     data = sine[:, np.newaxis] * (np.arange(nc) + 1)[np.newaxis, :] * 20
     data.astype(np.int16).tofile(bin_file)
@@ -84,6 +88,31 @@ class TestRmsmap(unittest.TestCase):
                 win = rmsmap(bin_file, spectra=False)
                 self.assert_file_order(win['TRMS'])
                 np.testing.assert_array_equal(win['raw_ind'], np.arange(385))
+
+    def test_ap_high_passed(self):
+        """The AP RMS keeps the spike band and removes the LFP, as NP2 records it wideband"""
+        from ibl_alignment_gui.convertors.extract_ephys import rmsmap  # noqa: PLC0415
+
+        rms = {}
+        for freq in (50, 1000):
+            folder = self.folder.joinpath(str(freq))
+            folder.mkdir()
+            bin_file = write_spikeglx(folder, 'NP24', 'ap', 0.5, freq=freq)
+            rms[freq] = rmsmap(bin_file, spectra=False)['TRMS'].mean(axis=0)[:-1]
+        # The 1 kHz sine keeps its RMS and the 50 Hz one is removed. The first channels hold
+        # sines of a few counts, whose rounding to int16 leaves broadband noise, so they are left
+        # out of the comparison
+        self.assertTrue(np.all(rms[50][100:] < 0.01 * rms[1000][100:]))
+
+    def test_lf_not_high_passed_at_300_hz(self):
+        """The LF RMS keeps the LFP band"""
+        from ibl_alignment_gui.convertors.extract_ephys import rmsmap  # noqa: PLC0415
+
+        bin_file = write_spikeglx(self.folder, 'NP24', 'lf', 2.0, freq=50)
+        rms = rmsmap(bin_file, spectra=False)['TRMS'].mean(axis=0)[:-1]
+        # A sine of amplitude A has an RMS of A / sqrt(2), here in V for channel 0
+        s2v = spikeglx.Reader(bin_file).sample2volts[0]
+        self.assertGreater(rms[0], 0.5 * 20 / np.sqrt(2) * s2v)
 
     def test_open_sorted_reader(self):
         """An open reader that sorts the channels still gives them in file order"""

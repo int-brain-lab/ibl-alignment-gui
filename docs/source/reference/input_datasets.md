@@ -107,7 +107,8 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
 : **Units** V · **Type** float32 · **Dimensions** [number of time windows, number of channels] ·
   **Format** npy
 
-  RMS amplitude of the AP band over time.
+  RMS amplitude of the AP band over time. `extract_ephys` high-passes the AP band at 300 Hz
+  first, as Neuropixels 2.0 probes record it with the LFP.
 
 `_iblqc_ephysTimeRmsAP.timestamps`
 : **Units** s · **Type** float32 · **Dimensions** [number of time windows] · **Format** npy

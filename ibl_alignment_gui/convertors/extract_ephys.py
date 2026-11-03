@@ -16,6 +16,8 @@ _logger = logging.getLogger(__name__)
 
 RMS_WIN_LENGTH_SECS = 3
 WELCH_WIN_LENGTH_SAMPLES = 1024
+# High-pass cutoff of the AP band, as in the destriping of ibldsp.voltage.destripe
+AP_HIGHPASS_HZ = 300
 
 
 def rmsmap(fbin, spectra=True):
@@ -40,6 +42,8 @@ def rmsmap(fbin, spectra=True):
     The channels are returned in the order they are stored in the binary file, whatever the
     channel order of the reader, so that they can be indexed with the raw channel indices
     (``channels.rawInd``) used by the GUI.
+
+    The AP band is high-passed at 300 Hz and the LF band at 1 Hz before computing the RMS.
     """
     opened = not isinstance(fbin, spikeglx.Reader)
     sglx = spikeglx.Reader(fbin, sort=False) if opened else fbin
@@ -48,6 +52,8 @@ def rmsmap(fbin, spectra=True):
     # A reader returns its channels in raw_channel_order, which sorts them by position on the
     # probe by default. Request them so that they come back in file order.
     file_order = np.argsort(getattr(sglx, 'raw_channel_order', np.arange(sglx.nc)))
+    # NP2 probes record the AP band wideband, so it holds the LFP unless it is high-passed
+    sos_ap = signal.butter(3, AP_HIGHPASS_HZ / sglx.fs * 2, btype='highpass', output='sos')
     rms_win_length_samples = 2 ** np.ceil(np.log2(sglx.fs * RMS_WIN_LENGTH_SECS))
     # the window generator will generates window indices
     wingen = utils.WindowGenerator(ns=sglx.ns, nswin=rms_win_length_samples, overlap=0)
@@ -65,8 +71,11 @@ def rmsmap(fbin, spectra=True):
         for first, last in wingen.firstlast:
             data, _ = sglx.read_samples(first_sample=first, last_sample=last, channels=file_order)
             data = data.transpose()
-            # remove low frequency noise below 1 Hz
-            data = fourier.hp(data, 1 / sglx.fs, [0, 1])
+            if sglx.type == 'ap':
+                data = signal.sosfiltfilt(sos_ap, data)
+            else:
+                # remove low frequency noise below 1 Hz
+                data = fourier.hp(data, 1 / sglx.fs, [0, 1])
             iw = wingen.iw
             win['TRMS'][iw, :] = utils.rms(data)
             win['nsamples'][iw] = data.shape[1]

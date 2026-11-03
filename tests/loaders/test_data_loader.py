@@ -610,6 +610,19 @@ class TestSpikeGLXLoader(unittest.TestCase):
             snippets = loader.get_time_snippets(self.mock_spikeglx, n=2)
             np.testing.assert_array_equal(snippets, np.array([200, 400]))
 
+        with self.subTest('snippet ends inside the file'):
+            # Without padding the last time point would be the end of the file
+            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 30})
+            loader = self._mock_loaders(None)
+            snippets = loader.get_time_snippets(self.mock_spikeglx, twin=5)
+            np.testing.assert_array_equal(snippets, np.array([10, 20, 25]))
+
+        with self.subTest('long recordings unchanged'):
+            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 2000})
+            loader = self._mock_loaders(None)
+            snippets = loader.get_time_snippets(self.mock_spikeglx, twin=5)
+            np.testing.assert_array_equal(snippets, np.array([533, 1066, 1599]))
+
     def _sorted_reader(self, fs):
         """A reader that returns the channels sorted, each holding its file channel number."""
         rng = np.random.default_rng(0)

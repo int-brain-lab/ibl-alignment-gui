@@ -750,7 +750,7 @@ class SpikeGLXLoader(ABC):
         if not sr:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr)
+        times = self.get_time_snippets(sr, twin=twin)
 
         # Thresholds for channel quality detection
         detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
@@ -832,7 +832,7 @@ class SpikeGLXLoader(ABC):
         if not sr:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr)
+        times = self.get_time_snippets(sr, twin=twin)
 
         data = defaultdict(Bunch)
 
@@ -957,7 +957,9 @@ class SpikeGLXLoader(ABC):
         return np.argsort(order[:n_channels])
 
     @staticmethod
-    def get_time_snippets(sr: spikeglx.Reader, n: int = 3, pad: int = 200) -> np.ndarray:
+    def get_time_snippets(
+        sr: spikeglx.Reader, n: int = 3, pad: int = 200, twin: float = 0
+    ) -> np.ndarray:
         """
         Return n time points across the file duration, excluding pad seconds from start and end.
 
@@ -969,6 +971,9 @@ class SpikeGLXLoader(ABC):
             Number of time points to extract.
         pad : int
             Time (seconds) to exclude from beginning and end.
+        twin : float
+            The length (seconds) of the snippet read from each time point. The time points are
+            kept early enough for the snippet to end inside the file.
 
         Returns
         -------
@@ -979,7 +984,9 @@ class SpikeGLXLoader(ABC):
         pad = pad if file_duration > 500 else 0
         usable_time = file_duration - 2 * pad
         intervals = usable_time // n
-        return intervals * (np.arange(n) + 1)
+        times = intervals * (np.arange(n) + 1)
+        # Without padding the last time point is the end of the file
+        return np.minimum(times, max(file_duration - twin, 0))
 
 
 class SpikeGLXLoaderOne(SpikeGLXLoader):

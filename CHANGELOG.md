@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each shank, at their depth, rather than every channel of the probe. Cached snippets from older
   versions are recomputed.
 - A session YAML with a single multi-shank probe failed to load (`KeyError` on `shank_1`).
+- The raw data snippets of recordings shorter than 500 s failed to load, as the last snippet
+  started at the end of the file.
 - The image, scatter and probe plots are shown for a session without xyz picks; before, only the
   line plots were drawn.
 

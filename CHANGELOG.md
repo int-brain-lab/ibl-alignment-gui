@@ -6,49 +6,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-- `extract_ephys` computes the RMS and power spectra on samples of the recording rather than on
-  all of it: 1 s every 10 s for the AP band and 3 s every 10 s for the LF band, so it reads a
-  fraction of the files, and processes the samples in parallel threads. `extract_rmsmap(...,
-  sample_spacing_secs=None)` reads the whole recording as before.
-- `extract_ephys` destripes the AP band before computing its RMS (300 Hz high-pass, ADC sample
-  shift correction and the median of each shank subtracted).
-- `extract_ephys` averages the power spectral density over the windows rather than summing it,
-  so it no longer depends on the length of the recording.
+## [0.1.0a4] - 2026-11-03
 
 ### Added
-- `extract_ephys` computes the LF RMS and power spectral density of NP2 recordings without an LF
-  file from the AP file, decimated to 2.5 kHz.
+- `extract_ephys` computes the LF RMS and power spectrum of NP2 recordings without an LF file
+  from the AP file.
+
+### Changed
+- `extract_ephys` computes the RMS and power spectra on samples of the recording, in parallel,
+  destripes the AP band before its RMS (which removes the LFP from the AP band of NP2 probes),
+  and averages the power spectrum over windows rather than summing it.
 
 ### Fixed
-- `extract_ephys` writes the RMS and power spectral density with the channels in the order they
-  are stored in the raw file, and saves that order as `rawInd` with each `_iblqc_` object. Files
-  made before had the channels sorted by position on the probe, so on NP2 probes the plots showed
-  the wrong channels; recompute them with `extract_ephys`. Passing an open `spikeglx.Reader` to
-  `rmsmap` no longer fails.
-- The AP RMS of `extract_ephys` included the LFP for NP2 probes, which record the AP band
-  wideband; the AP band is now high-passed at 300 Hz as part of the destriping.
-- The RMS and power spectra are read in the channel order given by their `rawInd`. Local files
-  without it may be in the wrong order when the raw file does not store the channels in shank
-  and depth order: they are then logged, and a dialog recommends running `extract_ephys` again to
-  verify them.
-- The raw data snippets and the dead, noisy and outside channel plots show only the channels of
-  each shank, at their depth, rather than every channel of the probe. Cached snippets from older
-  versions are recomputed.
-- A session YAML with a single multi-shank probe failed to load (`KeyError` on `shank_1`).
-- The raw data snippets of recordings shorter than 500 s failed to load, as the last snippet
-  started at the end of the file.
-- The image, scatter and probe plots are shown for a session without xyz picks; before, only the
-  line plots were drawn.
-- Spike sorting whose `spikes` object lacks `times`, `depths` or `amps` (e.g. Kilosort output not
-  converted with `extract_ephys`) is treated as missing and logged, rather than the load failing
-  with a `RecursionError` in the unit filter.
-- Colouring the channels on the histology slice by a probe plot failed when the spike sorting had
-  fewer channels than the recording (`Number of brushes does not match number of points`), and
-  could give channels the colour of another when they were stored out of depth order. The
-  values are now matched to the channels by raw channel, and channels without one are grey.
+- `extract_ephys` saved the RMS and power spectra with the channels sorted by position on the
+  probe rather than in file order, so NP2 plots showed the wrong channels. It now saves them in
+  file order with a `rawInd`; recompute older files. Local files without `rawInd` that may be
+  affected are reported when the session loads.
+- The raw data snippets and channel plots show each shank's own channels, at their depth.
+- The image, scatter and probe plots are shown for sessions without xyz picks.
+- Colouring the slice channels by a probe plot failed, or used the wrong channels, when the spike
+  sorting had fewer channels than the recording or listed them in another order.
+- Loading failed for a session YAML with a single multi-shank probe, for recordings shorter than
+  500 s, and for spike sorting without `spikes.times`, `depths` or `amps`.
 
 ## [0.1.0a3] - 2026-11-02
 

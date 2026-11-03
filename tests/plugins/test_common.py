@@ -105,12 +105,17 @@ class TestFeaturesForVintage(unittest.TestCase):
                     features_for_vintage(controller, items, '2026_W39')
         load.assert_called_once()
         message = str(raised.exception)
-        self.assertIn('No 2026_W39 features are available', message)
-        self.assertIn(
-            'load a 2026_W26 release of the model (Plugins -> Channel Prediction -> Load ... '
-            'model, release tag 2026_W26)',
-            message,
+        self.assertTrue(
+            message.startswith(
+                'You have features of vintage 2026_W26, but the selected release of the model '
+                'requires features of vintage 2026_W39. No features of vintage 2026_W39 are '
+                'available for this insertion.\n\n'
+            )
         )
+        self.assertIn(
+            '1. Load a release of the model trained on features of vintage 2026_W26', message
+        )
+        self.assertIn('2. Re-extract your features with vintage 2026_W39.', message)
 
     def test_progress_only_when_loading(self):
         """Loading the vintage table is reported; the cached table and GUI features are not"""
@@ -157,21 +162,46 @@ class TestFeaturesForVintage(unittest.TestCase):
         controller = SimpleNamespace(plugins={PLUGIN_KEY: Bunch()})
         return controller, items, df
 
-    def test_other_features_version_warning_queued_each_call(self):
-        """Local features of another version than the model's queue a warning each time used"""
-        controller, items, df = self._local_features({'features_version': '2026_W42'})
-        with patch.object(QtWidgets.QMessageBox, 'warning') as warning:
-            for _ in range(2):  # e.g. two models trained on the same vintage
-                self.assertIs(features_for_vintage(controller, items, '2026_W39'), df)
+    def test_other_features_version_refused(self):
+        """Local features of another version than the model's are refused, with the advice"""
+        controller, items, _ = self._local_features({'features_version': '2026_W42'})
+        with (
+            patch.object(QtWidgets.QMessageBox, 'warning') as warning,
+            self.assertRaises(PredictionError) as raised,
+        ):
+            features_for_vintage(controller, items, '2026_W39')
         warning.assert_not_called()  # this may run on a background thread: no Qt here
-        messages = controller.plugins[PLUGIN_KEY]['pending_warnings']
-        self.assertEqual(len(messages), 2)
-        for message in messages:
-            self.assertIn('2026_W42', message)
-            self.assertIn('2026_W39', message)
+        message = str(raised.exception)
+        self.assertTrue(
+            message.startswith(
+                'You have features of vintage 2026_W42, but the selected release of the model '
+                'requires features of vintage 2026_W39.\n\n'
+            )
+        )
+        self.assertIn('trained on features of vintage 2026_W42', message)
+        self.assertIn('2. Re-extract your features with vintage 2026_W39.', message)
+        self.assertNotIn('pending_warnings', controller.plugins[PLUGIN_KEY])
+
+    def test_other_features_version_names_the_release(self):
+        """The refusal names the selected release and links its manifest"""
+        controller, items, _ = self._local_features({'features_version': '2026_W42'})
+        release = ('int-brain-lab/ea-encoder-channel', '2026_W45')
+        with self.assertRaises(PredictionError) as raised:
+            features_for_vintage(controller, items, '2026_W39', None, release)
+        message = str(raised.exception)
+        self.assertIn(
+            'but the selected release 2026_W45 of the model int-brain-lab/ea-encoder-channel '
+            'requires features of vintage 2026_W39',
+            message,
+        )
+        self.assertIn(
+            'https://huggingface.co/int-brain-lab/ea-encoder-channel/blob/2026_W45/'
+            'ephysatlas_model.json',
+            message,
+        )
 
     def test_same_or_unknown_features_version_no_warning(self):
-        """Local features of the model's version, or without a version, queue nothing"""
+        """Local features of the model's version, or without a version, are used as is"""
         for attrs in ({'features_version': '2026_W39'}, {}):
             with self.subTest(attrs=attrs):
                 controller, items, df = self._local_features(attrs)
@@ -229,18 +259,29 @@ class TestModelVintage(unittest.TestCase):
 
 class TestMissingFeaturesError(unittest.TestCase):
     def test_message(self):
-        """The error names the missing columns and the vintage"""
+        """The error names the missing columns, the vintage required and the two ways out"""
         message = str(missing_features_error(['a', 'b'], '2026_W39'))
-        self.assertIn("missing required column(s): ['a', 'b']", message)
-        self.assertIn('features computed with the 2026_W39 feature set', message)
+        self.assertEqual(
+            message,
+            "Features file is missing required column(s): ['a', 'b']\n\n"
+            'The selected release of the model requires features of vintage 2026_W39.\n\n'
+            'You can either:\n\n'
+            '1. Load a release of the model trained on the vintage of your features: Plugins -> '
+            'Channel Prediction -> Load ... model. The vintage each release requires is the '
+            "'vintage' in its ephysatlas_model.json.\n\n"
+            '2. Re-extract your features with vintage 2026_W39.',
+        )
 
     def test_suggests_features_vintage(self):
-        """With the features' vintage known, it suggests loading that release of the model"""
+        """With the features' vintage known, it suggests a release trained on that vintage"""
         message = str(missing_features_error(['a'], '2026_W39', '2026_W26'))
         self.assertIn(
-            'Alternatively, load a 2026_W26 release of the model (Plugins -> Channel Prediction '
-            '-> Load ... model, release tag 2026_W26) to match your features.',
+            'You have features of vintage 2026_W26, but the selected release of the model '
+            'requires features of vintage 2026_W39.',
             message,
+        )
+        self.assertIn(
+            '1. Load a release of the model trained on features of vintage 2026_W26', message
         )
 
     def test_generic_suggestion(self):
@@ -249,10 +290,31 @@ class TestMissingFeaturesError(unittest.TestCase):
             with self.subTest(data_vintage=data_vintage):
                 message = str(missing_features_error(['a'], '2026_W39', data_vintage))
                 self.assertIn(
-                    'Alternatively, load a release of the model whose vintage matches your '
-                    'features',
+                    '1. Load a release of the model trained on the vintage of your features',
                     message,
                 )
+
+    def test_names_the_release(self):
+        """A Hub release is named by tag and repository, with its manifest's Hub page"""
+        release = ('int-brain-lab/ea-decoder-channel-xgboost', '2026_W42')
+        message = str(missing_features_error(['a'], '2026_W42', '2026_W26', release))
+        self.assertIn(
+            'the selected release 2026_W42 of the model int-brain-lab/ea-decoder-channel-xgboost '
+            'requires features of vintage 2026_W42',
+            message,
+        )
+        self.assertIn(
+            'e.g. https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost/blob/2026_W42/'
+            'ephysatlas_model.json.',
+            message,
+        )
+
+    def test_names_a_local_release(self):
+        """A local release is named by its directory, with its manifest's path"""
+        with tempfile.TemporaryDirectory() as folder:
+            message = str(missing_features_error(['a'], '2026_W42', None, (folder, 'main')))
+        self.assertIn(f'The selected release of the model in {folder} requires', message)
+        self.assertIn(f'e.g. {Path(folder) / "ephysatlas_model.json"}.', message)
 
     def test_features_vintage_from_file(self):
         """A file's features_version attribute is kept in the parquet file and read back"""

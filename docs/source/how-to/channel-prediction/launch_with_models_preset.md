@@ -18,8 +18,8 @@ prediction straight away.
    ```console
    python examples/launch_with_local_prediction.py \
        --yaml /path/to/session.yaml \
-       --model-dir /path/to/ea-decoder-channel-xgboost/<vintage> \
-       --model-dir /path/to/ea-encoder-channel/<vintage>
+       --model-dir /path/to/ea-decoder-channel-xgboost/<release> \
+       --model-dir /path/to/ea-encoder-channel/<release>
    ```
 
    Each `--model-dir` is a release directory holding an `ephysatlas_model.json`, which says which

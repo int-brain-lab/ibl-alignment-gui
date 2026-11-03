@@ -50,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could give channels the colour of another when they were stored out of depth order. The
   values are now matched to the channels by raw channel, and channels without one are grey.
 
+## [0.1.0a3] - 2026-11-02
+
+### Changed
+- The alignment model loads its own release (`2026_W45`) by default instead of the feature vintage
+  it was trained on; the vintage now comes only from the release's `ephysatlas_model.json`.
+- A local features file of another vintage than the model's is refused, as Alyx features already
+  were. The error names both vintages and how to resolve the mismatch.
+- The prediction panels have short titles, such as `XGBoost prediction`, in the GUI's usual font.
+
 ## [0.1.0a2] - 2026-10-30
 
 ### Added

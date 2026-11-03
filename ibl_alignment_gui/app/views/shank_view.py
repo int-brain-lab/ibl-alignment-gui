@@ -52,9 +52,8 @@ class ShankView:
                 }
                 """,
     }
-    # Characters per line, and font size, of the title above a prediction figure
+    # Characters per line of the title above a prediction figure
     PRED_TITLE_WIDTH = 24
-    PRED_TITLE_SIZE = '8pt'
 
     def __init__(
         self, name: str, index: int, config: str, prediction_keys: list[str] | tuple = ()
@@ -1306,10 +1305,9 @@ class ShankView:
         """
         label = self.pred_labels[fig]
         if title:
-            # The prediction figures are narrow: wrap long titles over more lines, in small text
+            # The prediction figures are narrow: wrap long titles over more lines
             title = '<br>'.join(textwrap.wrap(title, width=self.PRED_TITLE_WIDTH))
-            axis = set_axis(label, 'top', pen='k', ticks=False)
-            axis.setLabel(title, **{'font-size': self.PRED_TITLE_SIZE})
+            set_axis(label, 'top', pen='k', label=title, ticks=False)
         else:
             set_axis(label, 'top', pen='w', label=' ', ticks=False)
 

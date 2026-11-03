@@ -4,7 +4,8 @@ Automatic probe alignment with the Ephys Atlas channel-level model (channel-pred
 The model and the alignment method live in ``ephysatlas.alignment`` (ibleatools); this module is
 only their GUI. The released model is loaded with ``ephysatlas.load_pretrained`` (through
 ``ephysatlas.alignment.ChannelModel``) from the Hugging Face Hub or a local release, and run with
-its ``predict``. The shank's recorded channel features are then warped along its histology track
+its ``predict``, which predicts the way the release says. The shank's recorded channel features are
+then warped along its histology track
 (the GUI's ``xyz_samples``, top to bottom of the brain) onto the model's predictions along it,
 behind a progress dialog. The result figure opens in a pop-up window, and the prediction panel
 shows either the atlas region of each channel where the alignment placed it, or the alignment
@@ -40,6 +41,7 @@ from ibl_alignment_gui.plugins.ephys_atlas._common import (
     features_for_vintage,
     features_vintage,
     missing_features_error,
+    model_release,
     model_vintage,
     update_results_action,
 )
@@ -75,9 +77,12 @@ ENCODER_NOTE = (
 # -----------------------------------------------------------------------------
 def _default_source() -> tuple[str, str]:
     """Return the alignment model's default repository and release tag, from ephysatlas."""
-    from ephysatlas.alignment import CHANNEL_MODEL_REPO_ID, VINTAGE  # noqa: PLC0415 - heavy, lazy
+    from ephysatlas.alignment import (  # noqa: PLC0415 - heavy, lazy
+        CHANNEL_MODEL_REPO_ID,
+        CHANNEL_MODEL_REVISION,
+    )
 
-    return CHANNEL_MODEL_REPO_ID, VINTAGE
+    return CHANNEL_MODEL_REPO_ID, CHANNEL_MODEL_REVISION
 
 
 def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:
@@ -227,7 +232,10 @@ def alignment_inputs(model: ChannelModel, df: pd.DataFrame) -> dict:
     missing = [c for c in model.features if c not in df.columns]
     if missing:
         raise missing_features_error(
-            missing, model_vintage(getattr(model.encoder, 'index', None)), features_vintage(df)
+            missing,
+            model_vintage(getattr(model.encoder, 'index', None)),
+            features_vintage(df),
+            model_release(model),
         )
     df = df.sort_values(
         ['axial_um', 'channel'] if 'channel' in df else ['axial_um'], ascending=False
@@ -271,7 +279,7 @@ def _align(
         If Cancel was pressed, at the alignment's next progress report.
     """
     vintage = model_vintage(getattr(model.encoder, 'index', None))
-    df = features_for_vintage(controller, items, vintage, progress)
+    df = features_for_vintage(controller, items, vintage, progress, model_release(model))
     if df is None:
         raise PredictionError(NO_FEATURES_MESSAGE)
     probe = alignment_inputs(model, df)
@@ -476,4 +484,8 @@ ENCODER_SPEC = ModelSpec(
     needs_torch=True,
     model_class='NeighborInpaintingModel',
     on_computed=_show_result,
+    panel_titles={
+        AUTO_ALIGNMENT_KEY: 'Auto-alignment prediction',
+        AUTO_ALIGNMENT_CONFIDENCE_KEY: 'Auto-alignment confidence',
+    },
 )

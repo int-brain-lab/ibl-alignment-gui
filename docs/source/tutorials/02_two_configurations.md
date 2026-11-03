@@ -102,6 +102,10 @@ At the end of the experiment, a short recording of about 5 minutes was also made
 channel map, spanning the whole length of each shank. It is the same probe in the same tissue, so it can be
 aligned together with the dense recording. The GUI calls each recording a configuration.
 
+The channel map of this recording is the SpikeGLX IMRO table
+{download}`NPtype2014_quarterDensity_ref1Tip0.imro <../_static/tutorials/02_two_configurations/NPtype2014_quarterDensity_ref1Tip0.imro>`,
+if you want to record with it yourself.
+
 1. Open `sample_data_2_dense_sparse.yaml` in a text editor. It lists both recordings under
    `configurations`, each with its own `probes`:
 

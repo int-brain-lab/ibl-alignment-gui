@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without it may be in the wrong order when the raw file does not store the channels in shank
   and depth order: they are then logged, and a dialog recommends running `extract_ephys` again to
   verify them.
+- A session YAML with a single multi-shank probe failed to load (`KeyError` on `shank_1`).
 
 ## [0.1.0a2] - 2026-10-30
 

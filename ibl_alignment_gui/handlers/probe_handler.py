@@ -1364,7 +1364,8 @@ class ProbeHandlerLocalYaml(ProbeHandler):
 
     def download_histology(self) -> SliceLoader:
         """Load in the histology slice data."""
-        data_paths = self.data_paths[self.selected_config][self.shank_labels[0]]
+        # The paths are given per yaml probe; a single probe can hold several shanks
+        data_paths = self.data_paths[self.selected_config][self.probes[0]]
         return make_slice_loader(data_paths.histology, self.brain_atlas, self.histology_space)
 
     def initialise_shanks(self) -> None:
@@ -1504,7 +1505,8 @@ class ProbeHandlerAllenYaml(ProbeHandlerLocalYaml):
 
     def _make_atlas(self) -> BrainAtlas:
         """Return the appropriate atlas based on the histology space in the YAML config."""
-        histology_path = self.data_paths[self.selected_config][self.shank_labels[0]].histology
+        # The paths are given per yaml probe; a single probe can hold several shanks
+        histology_path = self.data_paths[self.selected_config][self.probes[0]].histology
         if self.histology_space == 'anatomical' and histology_path:
             return build_anatomical_atlas(histology_path)
         return AllenAtlas()

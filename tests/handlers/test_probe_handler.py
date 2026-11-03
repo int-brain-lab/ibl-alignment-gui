@@ -281,6 +281,29 @@ class TestProbeHandlerLocalYaml(unittest.TestCase):
         self.assertEqual(model.possible_configs, ['default'])
         self.assertEqual(model.selected_config, 'default')
 
+    @patch('ibl_alignment_gui.handlers.probe_handler.make_slice_loader')
+    def test_single_probe_with_several_shanks(self, mock_slice_loader):
+        """The shanks of a single probe read the histology given for that probe"""
+        # The metadata of a 4-shank probe recorded on 3 shanks
+        meta = next(Path(__file__).parents[1].joinpath('fixtures', 'NP24').glob('*.ap.meta'))
+        raw = self.root.joinpath('raw')
+        raw.mkdir()
+        raw.joinpath(meta.name).write_text(meta.read_text())
+        yaml_file = self.write_yaml(
+            'probes:\n'
+            '  probe00:\n'
+            '    datasets:\n'
+            '      raw_ephys:\n        path: raw\n'
+            '      picks:\n        path: picks\n'
+            '      histology:\n        path: hist\n'
+            '      output:\n        path: out\n'
+        )
+        model = ProbeHandlerLocalYaml(yaml_file)
+
+        self.assertEqual(model.get_shanks(None), ['shank_1', 'shank_2', 'shank_3'])
+        model.download_histology()
+        self.assertEqual(mock_slice_loader.call_args.args[0], self.root.joinpath('hist'))
+
     def test_two_configs(self):
         yaml_file = self.write_yaml(
             'configurations:\n'

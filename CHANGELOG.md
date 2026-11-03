@@ -8,14 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `extract_ephys` computes the RMS and power spectra on samples of the recording rather than on
+  all of it: 1 s every 10 s for the AP band and 3 s every 10 s for the LF band, so it reads a
+  fraction of the files, and processes the samples in parallel threads. `extract_rmsmap(...,
+  sample_spacing_secs=None)` reads the whole recording as before.
+- `extract_ephys` destripes the AP band before computing its RMS (300 Hz high-pass, ADC sample
+  shift correction and the median of each shank subtracted).
+- `extract_ephys` averages the power spectral density over the windows rather than summing it,
+  so it no longer depends on the length of the recording.
+
+### Added
+- `extract_ephys` computes the LF RMS and power spectral density of NP2 recordings without an LF
+  file from the AP file, decimated to 2.5 kHz.
+
 ### Fixed
 - `extract_ephys` writes the RMS and power spectral density with the channels in the order they
   are stored in the raw file, and saves that order as `rawInd` with each `_iblqc_` object. Files
   made before had the channels sorted by position on the probe, so on NP2 probes the plots showed
   the wrong channels; recompute them with `extract_ephys`. Passing an open `spikeglx.Reader` to
   `rmsmap` no longer fails.
-- `extract_ephys` high-passes the AP band at 300 Hz before computing its RMS, as the IBL
-  destriping does. NP2 probes record the AP band wideband, so their AP RMS included the LFP.
+- The AP RMS of `extract_ephys` included the LFP for NP2 probes, which record the AP band
+  wideband; the AP band is now high-passed at 300 Hz as part of the destriping.
 - The RMS and power spectra are read in the channel order given by their `rawInd`. Local files
   without it may be in the wrong order when the raw file does not store the channels in shank
   and depth order: they are then logged, and a dialog recommends running `extract_ephys` again to

@@ -96,7 +96,7 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
 : **Units** V²/Hz · **Type** float32 · **Dimensions** [number of frequencies, number of channels]
   · **Format** npy
 
-  Power spectral density of the LF band of every channel.
+  Power spectral density of the LF band of every channel, averaged over the time windows.
 
 `_iblqc_ephysSpectralDensityLF.freqs`
 : **Units** Hz · **Type** float32 · **Dimensions** [number of frequencies] · **Format** npy
@@ -107,8 +107,10 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
 : **Units** V · **Type** float32 · **Dimensions** [number of time windows, number of channels] ·
   **Format** npy
 
-  RMS amplitude of the AP band over time. `extract_ephys` high-passes the AP band at 300 Hz
-  first, as Neuropixels 2.0 probes record it with the LFP.
+  RMS amplitude of the AP band over time. `extract_ephys` destripes the AP band first
+  (high-pass at 300 Hz, as Neuropixels 2.0 probes record it with the LFP, ADC sample shift
+  correction and the median of each shank subtracted), and computes the RMS on 1 s of data every
+  10 s.
 
 `_iblqc_ephysTimeRmsAP.timestamps`
 : **Units** s · **Type** float32 · **Dimensions** [number of time windows] · **Format** npy
@@ -119,7 +121,9 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
 : **Units** V · **Type** float32 · **Dimensions** [number of time windows, number of channels] ·
   **Format** npy
 
-  RMS amplitude of the LF band over time.
+  RMS amplitude of the LF band over time. `extract_ephys` computes it on 3 s of data every
+  10 s. For Neuropixels 2.0 probes without an LF file, the LF band is the AP band decimated to
+  2.5 kHz.
 
 `_iblqc_ephysTimeRmsLF.timestamps`
 : **Units** s · **Type** float32 · **Dimensions** [number of time windows] · **Format** npy

@@ -228,7 +228,7 @@ class ElectrodeGeometry(Geometry):
         channel.
     """
 
-    def __init__(self, electrodes: Bunch[str, np.ndarray]) -> None:
+    def __init__(self, electrodes: dict[str, np.ndarray]) -> None:
         self.electrodes = electrodes
         elec_x = self.electrodes['x']
         elec_y = self.electrodes['y']

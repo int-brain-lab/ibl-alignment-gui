@@ -490,6 +490,28 @@ def _local_reader(path: Path | None) -> AlfReaderLocal | None:
     return AlfReaderLocal(path) if path is not None else None
 
 
+def sort_by_position(geometry: dict[str, np.ndarray]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """
+    Sort channels by shank, row and -col, the order destriping needs.
+
+    This is the order spikeglx.Reader returns the channels in.
+
+    Parameters
+    ----------
+    geometry : dict
+        The channel header in file order, with shank, row and col.
+
+    Returns
+    -------
+    order : np.ndarray
+        The file channels in sorted order.
+    h : dict
+        The channel header in sorted order.
+    """
+    order = np.lexsort((-geometry['col'], geometry['row'], geometry['shank']))
+    return order, {k: np.asarray(v)[order] for k, v in geometry.items()}
+
+
 class RawDataLoader:
     """
     Load snippets of a probe's raw AP and LF data and flag its bad channels.
@@ -668,19 +690,19 @@ class RawDataLoader:
         fs = source.fs
         raw = source.get_traces(int(t * fs), int(twin * fs)).T
 
-        # Detect bad channels and destripe
+        # Detect bad channels and destripe with the channels sorted by position on the probe,
+        # then put them back in file order
+        order, h = sort_by_position(source.geometry)
+        unsort = np.argsort(order)
+        raw = raw[order]
         channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, fs, **kwargs)
         raw = ibldsp.voltage.destripe(
-            raw, fs=fs, h=source.geometry, channel_labels=channel_labels, k_filter=False
+            raw, fs=fs, h=h, channel_labels=channel_labels, k_filter=False
         )
 
         # Extract a window in time (450–500 ms)
         window = slice(int(0.45 * fs), int(0.5 * fs))
 
-        # The source can return the channels sorted by position on the probe for the
-        # destriping, put them back in file order so they can be indexed with the raw channel
-        # indices
-        unsort = np.argsort(source.channel_order)
         channel_features = {k: np.asarray(v)[unsort] for k, v in channel_features.items()}
         return raw[unsort, window].T, channel_labels[unsort], channel_features
 
@@ -709,23 +731,22 @@ class RawDataLoader:
         raw = source.get_traces(int(t * fs), int(twin * fs)).T
 
         butter_kwargs = {'N': 3, 'Wn': 2 / fs * 2, 'btype': 'highpass'}
-        # Detect bad channels and destripe
+        # Detect bad channels and destripe with the channels sorted by position on the probe,
+        # then put them back in file order
+        order, h = sort_by_position(source.geometry)
         raw = ibldsp.voltage.destripe(
-            raw,
+            raw[order],
             fs=fs,
             channel_labels=True,
             butter_kwargs=butter_kwargs,
-            h=source.geometry,
+            h=h,
             k_filter=None,
         )
 
         # Extract a window in time (1–2 seconds)
         window = slice(int(0.5 * fs), int(2.5 * fs))
 
-        # The source can return the channels sorted by position on the probe for the
-        # destriping, put them back in file order so they can be indexed with the raw channel
-        # indices
-        return raw[np.argsort(source.channel_order), window].T
+        return raw[np.argsort(order), window].T
 
     @staticmethod
     def get_time_snippets(

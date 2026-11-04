@@ -18,6 +18,7 @@ import logging
 import re
 import traceback
 from abc import ABC, abstractmethod
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -284,7 +285,12 @@ class PassiveSource(ABC):
 
 
 class RawSource(ABC):
-    """Abstract base class for one band (AP or LF) of a probe's raw recording."""
+    """
+    Abstract base class for one band (AP or LF) of a probe's raw recording.
+
+    The channels are given in file order: column i of the traces and entry i of the geometry
+    are channel i of the raw file.
+    """
 
     @property
     @abstractmethod
@@ -299,12 +305,7 @@ class RawSource(ABC):
     @property
     @abstractmethod
     def geometry(self) -> dict[str, np.ndarray]:
-        """The channel header used to destripe: x, y, shank, row, col, adc and sample_shift."""
-
-    @property
-    @abstractmethod
-    def channel_order(self) -> np.ndarray:
-        """The raw file channel of each column returned by get_traces."""
+        """The channel header in file order: x, y, shank, row, col, adc and sample_shift."""
 
     @abstractmethod
     def get_traces(self, start: int, n_samples: int) -> np.ndarray:
@@ -321,7 +322,7 @@ class RawSource(ABC):
         Returns
         -------
         np.ndarray
-            The traces (time, channels) in V, without the sync channels.
+            The traces (time, channels) in V, in file order and without the sync channels.
         """
 
 
@@ -796,19 +797,19 @@ class RawSourceSpikeGLX(RawSource):
         """The duration of the recording (s)."""
         return self.reader.meta['fileTimeSecs']
 
-    @property
-    def geometry(self) -> dict[str, np.ndarray]:
-        """The channel header used to destripe, read from the metadata."""
-        return self.reader.geometry
-
-    @property
-    def channel_order(self) -> np.ndarray:
-        """The raw file channel of each column; the reader sorts them by position on the probe."""
+    @cached_property
+    def _file_order(self) -> np.ndarray:
+        """The reader's columns in file order; the reader sorts them by position on the probe."""
         n_channels = self.reader.nc - self.reader.nsync
         order = getattr(self.reader, 'raw_channel_order', None)
         if order is None:
             return np.arange(n_channels)
-        return np.asarray(order[:n_channels])
+        return np.argsort(order[:n_channels])
+
+    @property
+    def geometry(self) -> dict[str, np.ndarray]:
+        """The channel header in file order, read from the metadata."""
+        return {k: np.asarray(v)[self._file_order] for k, v in self.reader.geometry.items()}
 
     def get_traces(self, start: int, n_samples: int) -> np.ndarray:
         """
@@ -824,6 +825,7 @@ class RawSourceSpikeGLX(RawSource):
         Returns
         -------
         np.ndarray
-            The traces (time, channels) in V, without the sync channels.
+            The traces (time, channels) in V, in file order and without the sync channels.
         """
-        return self.reader[start : start + n_samples, : -self.reader.nsync]
+        traces = self.reader[start : start + n_samples, : -self.reader.nsync]
+        return traces[:, self._file_order]

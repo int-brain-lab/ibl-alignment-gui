@@ -371,13 +371,24 @@ class TestRawDataLoader(unittest.TestCase):
         self.ap = MagicMock(spec=RawSource)
         self.ap.fs = 30000
         self.ap.duration = 2000
-        self.ap.geometry = Bunch({'x': np.arange(384), 'y': np.arange(384)})
-        self.ap.channel_order = np.arange(384)
+        self.ap.geometry = self.geometry(np.arange(384))
         self.ap.get_traces.return_value = np.ones((30000, 384))
         self.loader = RawDataLoader(self.ap, None, self.temp_path)
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    @staticmethod
+    def geometry(rows):
+        """A single column probe with each file channel on the given row"""
+        n = len(rows)
+        return {
+            'x': np.zeros(n),
+            'y': rows * 20.0,
+            'row': rows,
+            'col': np.zeros(n),
+            'shank': np.zeros(n),
+        }
 
     def test_get_time_snippets(self):
         """Snippets are spread over the duration, padded by 200 s in recordings over 500 s"""
@@ -416,39 +427,49 @@ class TestRawDataLoader(unittest.TestCase):
 
         self.assertEqual(snippet.shape, (1500, 384))
         self.ap.get_traces.assert_called_once_with(60000, 30000)
-        self.assertIs(mock_destripe.call_args.kwargs['h'], self.ap.geometry)
+        np.testing.assert_equal(mock_destripe.call_args.kwargs['h'], self.ap.geometry)
 
-    def sorted_source(self, fs):
-        """A source that returns the channels sorted, each holding its file channel number."""
-        order = np.random.default_rng(0).permutation(384)
+    def shuffled_source(self, fs):
+        """A source in file order whose channels are not in depth order, each holding its number"""
+        rows = np.random.default_rng(0).permutation(384)
         self.ap.fs = fs
-        self.ap.channel_order = order
-        self.ap.get_traces.return_value = np.tile(order, (fs * 5, 1)).astype(float)
-        return order
+        self.ap.geometry = self.geometry(rows)
+        self.ap.get_traces.return_value = np.tile(np.arange(384.0), (fs * 5, 1))
+        # The file channels from the shallowest to the deepest
+        return np.argsort(rows)
 
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
-    def test_get_ap_snippet_file_order(self, mock_destripe, mock_bad_channels):
-        """The sorted channels are destriped, then the snippet and flags are put in file order"""
-        order = self.sorted_source(30000)
+    def test_get_ap_snippet_sorted_for_destriping(self, mock_destripe, mock_bad_channels):
+        """Channels are destriped in depth order, then the snippet and flags are in file order"""
+        by_depth = self.shuffled_source(30000)
         mock_destripe.side_effect = lambda raw, **kwargs: raw
-        mock_bad_channels.return_value = (order, {'xcor_hf': order})
+        # Each channel's label and feature is the file channel it was given
+        mock_bad_channels.side_effect = lambda raw, fs, **kwargs: (
+            raw[:, 0],
+            {'xcor_hf': raw[:, 0]},
+        )
 
         snippet, labels, features = self.loader._get_ap_snippet(self.ap, t=0, twin=1)
 
+        np.testing.assert_array_equal(mock_bad_channels.call_args.args[0][:, 0], by_depth)
+        np.testing.assert_array_equal(mock_destripe.call_args.args[0][:, 0], by_depth)
+        np.testing.assert_array_equal(mock_destripe.call_args.kwargs['h']['row'], np.arange(384))
         self.assertEqual(snippet.shape, (1500, 384))
         np.testing.assert_array_equal(snippet[0], np.arange(384))
         np.testing.assert_array_equal(labels, np.arange(384))
         np.testing.assert_array_equal(features['xcor_hf'], np.arange(384))
 
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
-    def test_get_lf_snippet_file_order(self, mock_destripe):
-        """The LF snippet is put in file order after destriping"""
-        self.sorted_source(2500)
+    def test_get_lf_snippet_sorted_for_destriping(self, mock_destripe):
+        """The LF is destriped in depth order, then the snippet is in file order"""
+        by_depth = self.shuffled_source(2500)
         mock_destripe.side_effect = lambda raw, **kwargs: raw
 
         snippet = self.loader._get_lf_snippet(self.ap, t=0, twin=3)
 
+        np.testing.assert_array_equal(mock_destripe.call_args.args[0][:, 0], by_depth)
+        np.testing.assert_array_equal(mock_destripe.call_args.kwargs['h']['row'], np.arange(384))
         self.assertEqual(snippet.shape, (5000, 384))
         np.testing.assert_array_equal(snippet[0], np.arange(384))
 

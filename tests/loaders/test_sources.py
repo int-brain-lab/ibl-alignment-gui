@@ -261,8 +261,14 @@ class TestRawSourceSpikeGLX(unittest.TestCase):
     def setUp(self):
         self.reader = MagicMock()
         self.reader.fs = 30000
+        self.reader.nc = 5
         self.reader.nsync = 1
         self.reader.meta = {'fileTimeSecs': 600}
+        # The reader sorts the channels by position: its column k is file channel order[k]
+        self.order = np.array([1, 0, 3, 2])
+        self.reader.raw_channel_order = np.r_[self.order, 4]
+        self.reader.geometry = {'x': self.order * 10.0, 'shank': np.zeros(4)}
+        self.reader.__getitem__.return_value = np.tile(self.order, (50, 1))
         self.open_reader = MagicMock(return_value=self.reader)
         self.source = RawSourceSpikeGLX(self.open_reader)
 
@@ -271,22 +277,24 @@ class TestRawSourceSpikeGLX(unittest.TestCase):
         self.open_reader.assert_not_called()
         self.assertEqual(self.source.fs, 30000)
         self.assertEqual(self.source.duration, 600)
-        self.assertIs(self.source.geometry, self.reader.geometry)
+        _ = self.source.geometry
+        self.source.get_traces(0, 50)
         self.open_reader.assert_called_once()
 
-    def test_traces_without_sync(self):
-        """A block of samples is read on every channel but the sync channel"""
+    def test_traces_in_file_order_without_sync(self):
+        """A block of samples is read on every channel but the sync channel, in file order"""
         traces = self.source.get_traces(100, 50)
-        self.assertIs(traces, self.reader.__getitem__.return_value)
         self.reader.__getitem__.assert_called_once_with((slice(100, 150), slice(None, -1)))
+        np.testing.assert_array_equal(traces[0], [0, 1, 2, 3])
 
-    def test_channel_order(self):
-        """The file channel of each column is the reader's order, without the sync channel"""
-        self.reader.nc = 5
-        with self.subTest('Sorted by the reader'):
-            self.reader.raw_channel_order = np.array([1, 0, 3, 2, 4])
-            np.testing.assert_array_equal(self.source.channel_order, [1, 0, 3, 2])
+    def test_geometry_in_file_order(self):
+        """The reader's sorted geometry is put back in file order"""
+        np.testing.assert_array_equal(self.source.geometry['x'], [0, 10, 20, 30])
+        np.testing.assert_array_equal(self.source.geometry['shank'], np.zeros(4))
 
-        with self.subTest('Reader without an order'):
-            del self.reader.raw_channel_order
-            np.testing.assert_array_equal(self.source.channel_order, np.arange(4))
+    def test_reader_without_order(self):
+        """A reader that does not sort its channels is read as it is"""
+        del self.reader.raw_channel_order
+        self.reader.geometry = {'x': np.arange(4.0)}
+        np.testing.assert_array_equal(self.source.geometry['x'], np.arange(4))
+        np.testing.assert_array_equal(self.source.get_traces(0, 50)[0], self.order)

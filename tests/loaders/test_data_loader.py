@@ -15,7 +15,6 @@ from ibl_alignment_gui.loaders.data_loader import (
     DataLoaderOne,
     FeatureLoaderOne,
     RawDataLoader,
-    SpikeGLXLoader,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
 )
@@ -29,7 +28,6 @@ from ibl_alignment_gui.loaders.sources import (
 from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFObjectNotFound
 from tests.loaders._alf_session import write_session
 
 
@@ -354,7 +352,6 @@ class TestLoadersWithoutDatasets(unittest.TestCase):
 
     def test_no_raw_data(self):
         loader = SpikeGLXLoaderLocal(None)
-        self.assertIsNone(loader.load_meta_data())
         self.assertIsNone(loader.ap)
         self.assertIsNone(loader.lf)
         self.assertEqual(loader.load_ap_snippets(), {'exists': False})
@@ -526,32 +523,6 @@ class TestRawDataLoader(unittest.TestCase):
             self.assertEqual(data['channel_order'], 'file')
 
 
-class TestSpikeGLXLoader(unittest.TestCase):
-    """Test the SpikeGLXLoader class."""
-
-    def _mock_loader(self, meta):
-        """Helper to make a SpikeGLXLoader that reads the given metadata."""
-
-        class MockSpikeGLXLoader(SpikeGLXLoader):
-            def load_meta_data(self):
-                return meta
-
-        return MockSpikeGLXLoader(None, None)
-
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.geometry_from_meta')
-    def test_get_meta_data(self, mock_geom):
-        """Test the get_meta_data method."""
-        with self.subTest('Meta data exists'):
-            mock_geom.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-            data = self._mock_loader(Bunch(adc=np.ones(10))).get_meta_data()
-            self.assertTrue(data.pop('exists'))
-            np.testing.assert_equal(dict(data), dict(mock_geom.return_value))
-
-        with self.subTest('Meta data does not exist'):
-            data = self._mock_loader(None).get_meta_data()
-            self.assertFalse(data['exists'])
-
-
 class TestSpikeGLXLoaderOne(unittest.TestCase):
     def setUp(self):
         self.mock_one = MagicMock()
@@ -561,23 +532,6 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
         self.insertion = {'id': uuid.uuid4(), 'session': uuid.uuid4(), 'name': 'probe00'}
 
         self.loader = SpikeGLXLoaderOne(self.insertion, self.mock_one)
-
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.read_meta_data')
-    def test_load_meta_data(self, mock_meta):
-        """Test the load_meta_data method"""
-        mock_meta.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-
-        with self.subTest('Meta data exists'):
-            self.mock_one.load_dataset.return_value = self.session_path.joinpath(
-                '_spikeglx.ap.meta'
-            )
-            data = self.loader.load_meta_data()
-            self.assertIs(data, mock_meta.return_value)
-
-        with self.subTest('Meta data does not exist'):
-            self.mock_one.load_dataset.side_effect = ALFObjectNotFound
-            data = self.loader.load_meta_data()
-            self.assertIsNone(data)
 
     @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('brainbox.io.spikeglx.Streamer')
@@ -603,27 +557,6 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
             '/mnt/s0/Data/Subjects/steinmetzlab/KM002/2024-09-16/001/alf/probe00'
         )
         self.loader = SpikeGLXLoaderLocal(self.probe_path.joinpath('meta'))
-
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.read_meta_data')
-    def test_load_meta_data(self, mock_meta):
-        """Test the load_meta_data method"""
-        mock_meta.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-
-        with (
-            self.subTest('Meta data exists'),
-            patch.object(
-                Path, 'glob', return_value=iter([self.probe_path.joinpath('spikeglx.ap.meta')])
-            ),
-        ):
-            data = self.loader.load_meta_data()
-            self.assertEqual(data, mock_meta.return_value)
-
-        with (
-            self.subTest('Meta data does not exist'),
-            patch.object(Path, 'glob', return_value=iter([])),
-        ):
-            data = self.loader.load_meta_data()
-            self.assertIsNone(data)
 
     @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.Reader')
     def test_sources_read_bin_files(self, mock_reader):

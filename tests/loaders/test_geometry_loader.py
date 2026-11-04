@@ -1,3 +1,5 @@
+import shutil
+import tempfile
 import unittest
 import uuid
 from pathlib import Path
@@ -9,11 +11,11 @@ import spikeglx
 import one.alf.io as alfio
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
+    ElectrodeGeometry,
     Geometry,
     GeometryLoader,
     GeometryLoaderLocal,
     GeometryLoaderOne,
-    MetaGeometry,
     arrange_channels_into_banks,
     average_chns_at_same_depths,
     find_geometry_mismatches,
@@ -21,7 +23,13 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     pad_sites_to_full_depths,
     select_shank_channels,
 )
-from ibl_alignment_gui.loaders.sources import AlfReaderLocal, SortingSource, SortingSourceAlf
+from ibl_alignment_gui.loaders.sources import (
+    AlfReaderLocal,
+    RawSource,
+    RawSourceSpikeGLX,
+    SortingSource,
+    SortingSourceAlf,
+)
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -33,9 +41,14 @@ def load_channel_fixtures(np_type):
     return alfio.load_object(FIXTURE_PATH.joinpath(np_type), 'channels')
 
 
-def load_meta_fixtures(np_type):
+def load_meta_source(np_type):
+    """The source reading the electrodes from the ap.meta fixture"""
     file = next(FIXTURE_PATH.joinpath(np_type).glob('*ap.meta'))
-    return spikeglx.read_meta_data(file)
+    return RawSourceSpikeGLX(lambda: spikeglx.Reader(file))
+
+
+def load_electrode_fixtures(np_type):
+    return load_meta_source(np_type).geometry
 
 
 def make_channel_geom(x, y):
@@ -55,14 +68,14 @@ def make_shank_geom(x, y):
 
 
 class FixtureGeometryLoader(GeometryLoader):
-    """GeometryLoader that reads its metadata and channels from the test fixtures"""
+    """GeometryLoader that reads its electrodes and channels from the test fixtures"""
 
     def __init__(self, np_type):
         self.np_type = np_type
         super().__init__(SortingSourceAlf(AlfReaderLocal(FIXTURE_PATH.joinpath(np_type))))
 
-    def load_meta_data(self):
-        return load_meta_fixtures(self.np_type)
+    def load_raw_source(self):
+        return load_meta_source(self.np_type)
 
 
 class TestGeometry(unittest.TestCase):
@@ -406,43 +419,33 @@ class TestChannelGeometry(unittest.TestCase):
         self.assertEqual(shank['n_banks'], 2)
 
 
-class TestMetaGeometry(unittest.TestCase):
-    """Test the MetaGeometry class"""
+class TestElectrodeGeometry(unittest.TestCase):
+    """Test the ElectrodeGeometry class"""
 
     def setUp(self):
-        # Create mock metadata with 4 electrodes on 2 shanks
-        self.mock_meta = Bunch(
+        # Mock electrodes, 4 on each of 2 shanks
+        self.electrodes = Bunch(
             x=np.array([0, 0, 100, 100, 0, 0, 100, 100]),
             y=np.array([10, 20, 10, 20, 40, 50, 40, 50]),
             shank=np.array([0, 0, 1, 1, 0, 0, 1, 1]),
         )
 
-    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.geometry_from_meta')
-    def test_init(self, mock_geom):
-        """Test that the coordinates and channel indices are taken from the metadata"""
-        mock_geom.return_value = self.mock_meta
-
-        geom = MetaGeometry(self.mock_meta)
-        mock_geom.assert_called_once_with(self.mock_meta, sort=False)
-        np.testing.assert_array_equal(geom.x_coords, self.mock_meta['x'])
-        np.testing.assert_array_equal(geom.y_coords, self.mock_meta['y'])
+    def test_init(self):
+        """Test that the coordinates are taken from the electrodes, indexed by file position"""
+        geom = ElectrodeGeometry(self.electrodes)
+        np.testing.assert_array_equal(geom.x_coords, self.electrodes['x'])
+        np.testing.assert_array_equal(geom.y_coords, self.electrodes['y'])
         np.testing.assert_array_equal(geom.chn_ind, np.arange(8))
 
-    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.geometry_from_meta')
-    def test_get_n_shanks(self, mock_geom):
+    def test_get_n_shanks(self):
         """Test the _get_n_shanks method"""
-        mock_geom.return_value = self.mock_meta
-
-        geom = MetaGeometry(self.mock_meta)
+        geom = ElectrodeGeometry(self.electrodes)
         n_shanks = geom._get_n_shanks()
         self.assertEqual(n_shanks, 2)
 
-    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.geometry_from_meta')
-    def test_get_shank_groups(self, mock_geom):
+    def test_get_shank_groups(self):
         """Test the _get_shank_groups method"""
-        mock_geom.return_value = self.mock_meta
-
-        geom = MetaGeometry(self.mock_meta)
+        geom = ElectrodeGeometry(self.electrodes)
         groups = geom._get_shank_groups()
         np.testing.assert_array_equal(groups[0], np.array([0, 1, 4, 5]))
         np.testing.assert_array_equal(groups[1], np.array([2, 3, 6, 7]))
@@ -538,8 +541,7 @@ class TestRealGeometries(unittest.TestCase):
 
     def test_np21_meta(self):
         """Test reading geometry from the ap.meta file of a NP2 single shank probe"""
-        meta = load_meta_fixtures('NP21')
-        geom = MetaGeometry(meta)
+        geom = ElectrodeGeometry(load_electrode_fixtures('NP21'))
         geom.split_sites_per_shank()
 
         self.assertEqual(geom.n_shanks, 1)
@@ -557,8 +559,7 @@ class TestRealGeometries(unittest.TestCase):
 
     def test_np24_meta(self):
         """Test reading geometry from the ap.meta file of a NP2 four shank probe"""
-        meta = load_meta_fixtures('NP24')
-        geom = MetaGeometry(meta)
+        geom = ElectrodeGeometry(load_electrode_fixtures('NP24'))
         geom.split_sites_per_shank()
 
         # Only three of the four shanks have recorded electrodes
@@ -625,17 +626,24 @@ class TestGeometryLoader(unittest.TestCase):
     """Test the GeometryLoader class"""
 
     def setUp(self):
-        self.mock_meta = Bunch(x=np.array([0, 10]), y=np.array([0, 10]), shank=np.array([0, 0]))
+        self.mock_electrodes = Bunch(
+            x=np.array([0, 10]), y=np.array([0, 10]), shank=np.array([0, 0])
+        )
         self.mock_channels = Bunch(
             localCoordinates=np.array([[0, 0], [10, 10]]), rawInd=np.array([0, 1]), exists=True
         )
 
-    def _mock_loaders(self, mock_channels, mock_meta):
-        """Helper to make a GeometryLoader that reads the given channels and metadata."""
+    def _mock_loaders(self, mock_channels, mock_electrodes):
+        """Helper to make a GeometryLoader that reads the given channels and electrodes."""
+        if mock_electrodes is None:
+            raw = None
+        else:
+            raw = MagicMock(spec=RawSource)
+            raw.geometry = mock_electrodes
 
         class MockGeometryLoader(GeometryLoader):
-            def load_meta_data(self):
-                return mock_meta
+            def load_raw_source(self):
+                return raw
 
         sorting = MagicMock(spec=SortingSource)
         sorting.load_channels.return_value = (
@@ -655,54 +663,56 @@ class TestGeometryLoader(unittest.TestCase):
 
     @patch('ibl_alignment_gui.loaders.geometry_loader.find_geometry_mismatches', return_value=[])
     @patch('ibl_alignment_gui.loaders.geometry_loader.ChannelGeometry')
-    @patch('ibl_alignment_gui.loaders.geometry_loader.MetaGeometry')
-    def test_get_geometry(self, mock_meta, mock_channels, _mock_mismatch):
+    @patch('ibl_alignment_gui.loaders.geometry_loader.ElectrodeGeometry')
+    def test_get_geometry(self, mock_electrodes, mock_channels, _mock_mismatch):
         """Test the get_geometry method
 
         The geometry comparison is stubbed out here so that this only covers which sources are
         loaded; the comparison itself is covered by TestFindGeometryMismatches and the mismatch
         handling by test_get_geometry_mismatch_uses_channels.
         """
-        mock_meta.return_value = MagicMock()
-        mock_meta.split_sites_per_shank.return_value = Bunch()
-        mock_meta._get_sites_per_shank.return_value = np.array([0])
+        mock_electrodes.return_value = MagicMock()
+        mock_electrodes.split_sites_per_shank.return_value = Bunch()
+        mock_electrodes._get_sites_per_shank.return_value = np.array([0])
         mock_channels.return_value = MagicMock()
         mock_channels.split_sites_per_shank.return_value = Bunch()
-        mock_meta._get_sites_per_shank.return_value = np.array([1])
+        mock_electrodes._get_sites_per_shank.return_value = np.array([1])
 
-        with self.subTest('Channels and meta exist'):
-            loader = self._mock_loaders(self.mock_channels, self.mock_meta)
+        with self.subTest('Channels and electrodes exist'):
+            loader = self._mock_loaders(self.mock_channels, self.mock_electrodes)
             loader.get_geometry()
             self.assertIsNotNone(loader.channels)
             self.assertIsNotNone(loader.electrodes)
-            mock_meta.assert_called_once_with(self.mock_meta)
+            mock_electrodes.assert_called_once_with(self.mock_electrodes)
             mock_channels.assert_called_once_with(self.mock_channels)
 
-        with self.subTest('Channels exists and meta does not'):
+        with self.subTest('Channels exist and electrodes do not'):
             loader = self._mock_loaders(self.mock_channels, None)
             loader.get_geometry()
             self.assertIsNotNone(loader.channels)
             self.assertIsNone(loader.electrodes)
 
-        with self.subTest('Meta exists and channels does not'):
+        with self.subTest('Electrodes exist and channels do not'):
             loader = self._mock_loaders(None, self.mock_channels)
             loader.get_geometry()
             self.assertIsNone(loader.channels)
             self.assertIsNotNone(loader.electrodes)
 
-        with self.subTest('Channels and meta do not exist'):
+        with self.subTest('Channels and electrodes do not exist'):
             loader = self._mock_loaders(None, None)
             with self.assertRaises(ValueError):
                 loader.get_geometry()
 
     @patch('ibl_alignment_gui.loaders.geometry_loader.ChannelGeometry')
-    @patch('ibl_alignment_gui.loaders.geometry_loader.MetaGeometry')
+    @patch('ibl_alignment_gui.loaders.geometry_loader.ElectrodeGeometry')
     @patch('ibl_alignment_gui.loaders.geometry_loader.find_geometry_mismatches')
-    def test_get_geometry_mismatch_uses_channels(self, mock_mismatch, mock_meta, mock_channels):
+    def test_get_geometry_mismatch_uses_channels(
+        self, mock_mismatch, mock_electrodes, mock_channels
+    ):
         """Test that a mismatch is warned about and the electrodes are dropped"""
         mock_mismatch.return_value = ['shank 0: the deepest site differs: 10 vs 20']
 
-        loader = self._mock_loaders(self.mock_channels, self.mock_meta)
+        loader = self._mock_loaders(self.mock_channels, self.mock_electrodes)
         with self.assertLogs('ibl_alignment_gui.loaders.geometry_loader', level='WARNING') as log:
             loader.get_geometry()
 
@@ -712,13 +722,15 @@ class TestGeometryLoader(unittest.TestCase):
         self.assertTrue(any('deepest site differs' in msg for msg in log.output))
 
     @patch('ibl_alignment_gui.loaders.geometry_loader.ChannelGeometry')
-    @patch('ibl_alignment_gui.loaders.geometry_loader.MetaGeometry')
+    @patch('ibl_alignment_gui.loaders.geometry_loader.ElectrodeGeometry')
     @patch('ibl_alignment_gui.loaders.geometry_loader.find_geometry_mismatches')
-    def test_get_geometry_match_keeps_electrodes(self, mock_mismatch, mock_meta, mock_channels):
+    def test_get_geometry_match_keeps_electrodes(
+        self, mock_mismatch, mock_electrodes, mock_channels
+    ):
         """Test that nothing is warned about and both are kept when they agree"""
         mock_mismatch.return_value = []
 
-        loader = self._mock_loaders(self.mock_channels, self.mock_meta)
+        loader = self._mock_loaders(self.mock_channels, self.mock_electrodes)
         with self.assertNoLogs('ibl_alignment_gui.loaders.geometry_loader', level='WARNING'):
             loader.get_geometry()
 
@@ -738,9 +750,9 @@ class TestGeometryLoader(unittest.TestCase):
         electrode_sites = np.array([0])
         channel_sites = np.array([1])
 
-        loader = self._mock_loaders(self.mock_channels, self.mock_meta)
+        loader = self._mock_loaders(self.mock_channels, self.mock_electrodes)
 
-        with self.subTest('Channels and meta exist'):
+        with self.subTest('Channels and electrodes exist'):
             loader.electrodes = MagicMock()
             loader.electrodes._get_sites_for_shank.return_value = electrode_sites
             loader.channels = MagicMock()
@@ -753,7 +765,7 @@ class TestGeometryLoader(unittest.TestCase):
             sites = loader.get_sites_for_shank(0, sites='channels')
             np.testing.assert_array_equal(sites, channel_sites)
 
-        with self.subTest('Channels exists and meta does not'):
+        with self.subTest('Channels exist and electrodes do not'):
             loader.electrodes = None
             sites = loader.get_sites_for_shank(0)
             np.testing.assert_array_equal(sites, channel_sites)
@@ -761,7 +773,7 @@ class TestGeometryLoader(unittest.TestCase):
             sites = loader.get_sites_for_shank(0, sites='channels')
             np.testing.assert_array_equal(sites, channel_sites)
 
-        with self.subTest('Meta exists and channels does not'):
+        with self.subTest('Electrodes exist and channels do not'):
             loader.electrodes = MagicMock()
             loader.electrodes._get_sites_for_shank.return_value = electrode_sites
             loader.channels = None
@@ -780,28 +792,31 @@ class TestGeometryLoaderOne(unittest.TestCase):
         self.session_path = Path('/mnt/s0/Data/Subjects/steinmetzlab/KM002/2024-09-16/001')
         self.mock_one.eid2path.return_value = self.session_path
 
-        self.mock_data = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-
         self.insertion = {'id': uuid.uuid4(), 'session': uuid.uuid4(), 'name': 'probe00'}
 
         self.loader = GeometryLoaderOne(self.insertion, self.mock_one)
 
-    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.read_meta_data')
-    def test_load_meta_data(self, mock_meta):
-        """Test the load_meta_data method"""
-        mock_meta.return_value = self.mock_data
+    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.Reader')
+    def test_load_raw_source(self, mock_reader):
+        """The electrodes are read from the downloaded ap.meta, without the raw data"""
+        meta_file = self.session_path.joinpath('raw_ephys_data/probe00/_spikeglx.ap.meta')
 
         with self.subTest('Meta data exists'):
-            self.mock_one.load_dataset.return_value = self.session_path.joinpath(
-                '_spikeglx.ap.meta'
+            self.mock_one.load_dataset.return_value = meta_file
+            source = self.loader.load_raw_source()
+            self.mock_one.load_dataset.assert_called_once_with(
+                self.insertion['session'],
+                '*.ap.meta',
+                collection='raw_ephys_data/probe00',
+                download_only=True,
             )
-            data = self.loader.load_meta_data()
-            self.assertIs(data, self.mock_data)
+            self.assertIsInstance(source, RawSourceSpikeGLX)
+            self.assertIs(source.reader, mock_reader.return_value)
+            mock_reader.assert_called_once_with(meta_file)
 
         with self.subTest('Meta data does not exist'):
             self.mock_one.load_dataset.side_effect = ALFObjectNotFound
-            data = self.loader.load_meta_data()
-            self.assertIsNone(data)
+            self.assertIsNone(self.loader.load_raw_source())
 
     def test_channels_read_probe_collection(self):
         """Channels are read from the probe's spike sorting collection"""
@@ -824,27 +839,25 @@ class TestGeometryLoaderLocal(unittest.TestCase):
         )
         self.loader = GeometryLoaderLocal(self.collections)
 
-    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.read_meta_data')
-    def test_load_meta_data(self, mock_meta):
-        """Test the load_meta_data method"""
-
-        mock_meta.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-
-        meta_file = self.probe_path.joinpath('spikeglx.ap.meta')
+    @patch('ibl_alignment_gui.loaders.geometry_loader.spikeglx.Reader')
+    def test_load_raw_source(self, mock_reader):
+        """The electrodes are read from the ap.meta in the raw_ephys folder"""
+        meta_file = self.probe_path.joinpath('meta', 'spikeglx.ap.meta')
 
         with (
             self.subTest('Meta data exists'),
             patch.object(Path, 'glob', return_value=iter([meta_file])),
         ):
-            data = self.loader.load_meta_data()
-            self.assertEqual(data, mock_meta.return_value)
+            source = self.loader.load_raw_source()
+            self.assertIsInstance(source, RawSourceSpikeGLX)
+            self.assertIs(source.reader, mock_reader.return_value)
+            mock_reader.assert_called_once_with(meta_file)
 
         with (
             self.subTest('Meta data does not exist'),
             patch.object(Path, 'glob', return_value=iter([])),
         ):
-            data = self.loader.load_meta_data()
-            self.assertIsNone(data)
+            self.assertIsNone(self.loader.load_raw_source())
 
         with self.subTest('No raw ephys path in the yaml'):
             # A yaml that does not give a raw_ephys dataset leaves nothing to glob
@@ -852,7 +865,19 @@ class TestGeometryLoaderLocal(unittest.TestCase):
                 DatasetPaths(spike_sorting=self.probe_path.joinpath('spikes'))
             )
             self.assertIsNone(loader.meta_path)
-            self.assertIsNone(loader.load_meta_data())
+            self.assertIsNone(loader.load_raw_source())
+
+    def test_meta_file_without_raw_data(self):
+        """A folder holding only the ap.meta file gives the electrodes"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            meta_file = next(FIXTURE_PATH.joinpath('NP24').glob('*.ap.meta'))
+            shutil.copy(meta_file, temp_dir)
+            loader = GeometryLoaderLocal(DatasetPaths(raw_ephys=Path(temp_dir)))
+            loader.get_geometry()
+
+        self.assertIsNone(loader.channels)
+        self.assertEqual(loader.electrodes.n_shanks, 3)
+        np.testing.assert_array_equal(loader.electrodes.chn_ind, np.arange(384))
 
     def test_channels_read_spike_sorting_folder(self):
         """Channels are read from the spike sorting folder"""
@@ -1033,7 +1058,7 @@ class TestFindGeometryMismatches(unittest.TestCase):
     """Test the find_geometry_mismatches function"""
 
     def _real_geometries(self, np_type):
-        electrodes = MetaGeometry(load_meta_fixtures(np_type))
+        electrodes = ElectrodeGeometry(load_electrode_fixtures(np_type))
         electrodes.split_sites_per_shank()
         channels = ChannelGeometry(load_channel_fixtures(np_type))
         channels.split_sites_per_shank()

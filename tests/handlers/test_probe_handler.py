@@ -20,10 +20,11 @@ from ibl_alignment_gui.handlers.probe_handler import (
 from ibl_alignment_gui.loaders.data_loader import DataLoaderLocal, DataLoaderSI
 from ibl_alignment_gui.loaders.geometry_loader import (
     ChannelGeometry,
+    ElectrodeGeometry,
     GeometryLoaderLocal,
     GeometryLoaderSI,
-    MetaGeometry,
 )
+from ibl_alignment_gui.loaders.sources import RawSourceSpikeGLX
 from ibl_alignment_gui.utils.optional import SPIKEINTERFACE_EXTRA_HINT, has_spikeinterface
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
@@ -152,7 +153,7 @@ class TestChannelOrderNotices(unittest.TestCase):
     def electrodes(np_type):
         """The electrodes of an ap.meta fixture"""
         meta_file = next(FIXTURE_PATH.joinpath(np_type).glob('*.ap.meta'))
-        geom = MetaGeometry(spikeglx.read_meta_data(meta_file))
+        geom = ElectrodeGeometry(RawSourceSpikeGLX(lambda: spikeglx.Reader(meta_file)).geometry)
         geom.split_sites_per_shank()
         return geom
 

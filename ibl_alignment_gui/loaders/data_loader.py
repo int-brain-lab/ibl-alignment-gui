@@ -24,7 +24,6 @@ from ibl_alignment_gui.loaders.sources import (
 )
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFObjectNotFound
 
 try:
     import ephysatlas.data
@@ -781,35 +780,7 @@ class RawDataLoader:
         return np.minimum(times, max(file_duration - twin, 0))
 
 
-class SpikeGLXLoader(RawDataLoader, ABC):
-    """
-    Abstract base class for loading the raw data and metadata of a SpikeGLX recording.
-
-    Subclasses must implement the `load_meta_data` method.
-    """
-
-    def get_meta_data(self) -> Bunch[str, Any]:
-        """
-        Load and parse metadata for the AP band.
-
-        Returns
-        -------
-        Bunch
-            A Bunch containing geometry info and an 'exists' flag.
-        """
-        self.meta = self.load_meta_data()
-        if not self.meta:
-            return Bunch({'exists': False})
-
-        geometry = spikeglx.geometry_from_meta(self.meta, sort=True)
-        return Bunch(geometry, exists=True)
-
-    @abstractmethod
-    def load_meta_data(self) -> dict | None:
-        """Abstract method to load AP metadata."""
-
-
-class SpikeGLXLoaderOne(SpikeGLXLoader):
+class SpikeGLXLoaderOne(RawDataLoader):
     """
     SpikeGLX loader using ONE.
 
@@ -844,26 +815,6 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
             save_path,
         )
 
-    def load_meta_data(self) -> dict | None:
-        """
-        Load AP metadata using ONE.
-
-        Returns
-        -------
-        dict or None
-            A dict containing the spikeglx AP band metadata, or None if not found.
-        """
-        try:
-            meta_file = self.one.load_dataset(
-                self.eid,
-                '*.ap.meta',
-                collection=f'raw_ephys_data/{self.probe_label}',
-                download_only=True,
-            )
-            return spikeglx.read_meta_data(meta_file)
-        except ALFObjectNotFound:
-            return None
-
     def _stream(self, band: str) -> Streamer:
         """
         Start streaming a band of the raw data using ONE.
@@ -883,7 +834,7 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ=band)
 
 
-class SpikeGLXLoaderLocal(SpikeGLXLoader):
+class SpikeGLXLoaderLocal(RawDataLoader):
     """
     SpikeGLX loader using local file system.
 
@@ -897,20 +848,6 @@ class SpikeGLXLoaderLocal(SpikeGLXLoader):
         self.meta_path: Path = meta_path
 
         super().__init__(self._source('ap'), self._source('lf'), self.meta_path)
-
-    def load_meta_data(self) -> dict | None:
-        """
-        Load AP metadata from local path.
-
-        Returns
-        -------
-        dict or None
-            A dict containing the spikeglx AP band metadata, or None if not found.
-        """
-        if self.meta_path is None:  # no raw_ephys dataset
-            return None
-        meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
-        return spikeglx.read_meta_data(meta_file) if meta_file else None
 
     def _source(self, band: str) -> RawSourceSpikeGLX | None:
         """

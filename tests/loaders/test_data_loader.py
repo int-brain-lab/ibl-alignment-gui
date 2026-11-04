@@ -358,6 +358,32 @@ class TestLoadersWithoutDatasets(unittest.TestCase):
         self.assertEqual(loader.load_lf_snippets(), {'exists': False})
 
 
+class TestSortByPosition(unittest.TestCase):
+    """Test the sort_by_position function."""
+
+    def test_shank_then_depth(self):
+        """Channels are sorted by shank, then depth, and the header with them"""
+        geometry = {
+            'x': np.zeros(4),
+            'y': np.array([40, 0, 20, 0]),
+            'shank': np.array([0, 1, 0, 0]),
+        }
+        order, h = data_loader.sort_by_position(geometry)
+        np.testing.assert_array_equal(order, [3, 2, 0, 1])
+        np.testing.assert_array_equal(h['y'], [0, 20, 40, 0])
+
+    def test_row_in_file_order(self):
+        """The two channels of a row stay in file order whichever way x points"""
+        y = np.array([0, 0, 20, 20])
+        for name, x in (
+            ('spikeglx', np.array([43, 11, 59, 27])),
+            ('mirrored', np.array([16, 48, 0, 32])),
+        ):
+            with self.subTest(x=name):
+                order, _ = data_loader.sort_by_position({'x': x, 'y': y, 'shank': np.zeros(4)})
+                np.testing.assert_array_equal(order, [0, 1, 2, 3])
+
+
 class TestRawDataLoader(unittest.TestCase):
     """Test the RawDataLoader class."""
 

@@ -491,14 +491,17 @@ def _local_reader(path: Path | None) -> AlfReaderLocal | None:
 
 def sort_by_position(geometry: dict[str, np.ndarray]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """
-    Sort channels by shank, row and -col, the order destriping needs.
+    Sort channels by shank and depth, the order destriping needs.
 
-    This is the order spikeglx.Reader returns the channels in.
+    The channels at the same depth, the two of a row, are kept in file order rather than
+    ordered by x, so the order does not depend on the direction of the x coordinates, which
+    differs between conventions (spikeglx mirrors Neuropixels 1.0, SpikeInterface does not).
+    On Neuropixels 1.0 this is the order spikeglx.Reader returns the channels in.
 
     Parameters
     ----------
     geometry : dict
-        The channel header in file order, with shank, row and col.
+        The channel header in file order, with shank and y.
 
     Returns
     -------
@@ -507,7 +510,8 @@ def sort_by_position(geometry: dict[str, np.ndarray]) -> tuple[np.ndarray, dict[
     h : dict
         The channel header in sorted order.
     """
-    order = np.lexsort((-geometry['col'], geometry['row'], geometry['shank']))
+    n_channels = np.asarray(geometry['y']).size
+    order = np.lexsort((np.arange(n_channels), geometry['y'], geometry['shank']))
     return order, {k: np.asarray(v)[order] for k, v in geometry.items()}
 
 

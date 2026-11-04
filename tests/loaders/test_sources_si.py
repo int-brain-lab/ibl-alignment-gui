@@ -1,14 +1,23 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
+import spikeglx
 
 import one.alf.io as alfio
-from ibl_alignment_gui.loaders.sources import SortingSourceSI, raw_channel_indices
+from ibl_alignment_gui.loaders.data_loader import RawDataLoader
+from ibl_alignment_gui.loaders.sources import (
+    RawSourceSI,
+    RawSourceSpikeGLX,
+    SortingSourceSI,
+    raw_channel_indices,
+    shank_numbers,
+)
 from ibl_alignment_gui.utils.optional import SPIKEINTERFACE_EXTRA_HINT, has_spikeinterface
 from tests.loaders._si_analyzer import write_analyzer
+from tests.loaders._spikeglx_file import write_spikeglx
 
 LOGGER = 'ibl_alignment_gui.loaders.sources'
 
@@ -232,3 +241,111 @@ class TestRawChannelIndices(unittest.TestCase):
     def test_other_ids(self):
         """Other ids give the channel order"""
         np.testing.assert_array_equal(raw_channel_indices(np.array(['3', '5', 'a'])), [0, 1, 2])
+
+
+@unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+class TestRawSourceSI(unittest.TestCase):
+    """Test the RawSourceSI class."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def numpy_recording(n_segments=1, shank_ids=None):
+        """A recording of 4 channels in 2 columns, the left column on shank 'b' when given"""
+        import probeinterface  # noqa: PLC0415
+        import spikeinterface as si  # noqa: PLC0415
+
+        traces = [np.arange(400, dtype=np.int16).reshape(100, 4)] * n_segments
+        recording = si.NumpyRecording(traces, sampling_frequency=1000)
+        recording.set_channel_gains(2.0)
+        recording.set_channel_offsets(0.0)
+        probe = probeinterface.Probe()
+        probe.set_contacts(positions=[[300, 0], [0, 0], [300, 20], [0, 20]])
+        if shank_ids is not None:
+            probe.set_shank_ids(shank_ids)
+        probe.set_device_channel_indices(np.arange(4))
+        recording.set_probe(probe)
+        return recording
+
+    def test_matches_spikeglx_source(self):
+        """A SpikeGLX file read with SpikeInterface gives the same data and snippets"""
+        import spikeinterface.extractors as se  # noqa: PLC0415
+
+        for np_type in ('NP21', 'NP24'):
+            with self.subTest(np_type=np_type):
+                bin_file = write_spikeglx(self.folder.joinpath(np_type), np_type)
+                sglx = RawSourceSpikeGLX(lambda bin_file=bin_file: spikeglx.Reader(bin_file))
+                source = RawSourceSI(
+                    lambda bin_file=bin_file: se.read_spikeglx(
+                        bin_file.parents[1], stream_id='imec0.ap'
+                    )
+                )
+
+                self.assertEqual(source.fs, sglx.fs)
+                self.assertAlmostEqual(source.duration, sglx.duration)
+                np.testing.assert_allclose(
+                    source.get_traces(0, 3000), sglx.get_traces(0, 3000), rtol=1e-6
+                )
+                np.testing.assert_array_equal(source.geometry['shank'], sglx.geometry['shank'])
+                np.testing.assert_allclose(
+                    source.geometry['sample_shift'], sglx.geometry['sample_shift']
+                )
+
+                kwargs = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
+                raw, labels, _ = RawDataLoader._get_ap_snippet(source, 0, 1, **kwargs)
+                raw_sglx, labels_sglx, _ = RawDataLoader._get_ap_snippet(sglx, 0, 1, **kwargs)
+                np.testing.assert_allclose(raw, raw_sglx, atol=1e-12)
+                np.testing.assert_array_equal(labels, labels_sglx)
+
+    def test_recording_opened_once_when_read(self):
+        """The recording is not opened until it is needed, then reused"""
+        open_recording = MagicMock(return_value=self.numpy_recording())
+        source = RawSourceSI(open_recording)
+        open_recording.assert_not_called()
+        self.assertEqual(source.fs, 1000)
+        self.assertAlmostEqual(source.duration, 0.1)
+        open_recording.assert_called_once()
+
+    def test_traces_in_volts(self):
+        """Traces are scaled to V, and a block past the end stops at the last sample"""
+        source = RawSourceSI(self.numpy_recording)
+        traces = source.get_traces(98, 10)
+        self.assertEqual(traces.shape, (2, 4))
+        np.testing.assert_allclose(traces[0], np.arange(392, 396) * 2e-6)
+
+    def test_geometry_from_probe(self):
+        """Positions come from the probe, shanks are numbered by position, no shift is zero"""
+        source = RawSourceSI(lambda: self.numpy_recording(shank_ids=['a', 'b', 'a', 'b']))
+        geometry = source.geometry
+        np.testing.assert_array_equal(geometry['x'], [300, 0, 300, 0])
+        np.testing.assert_array_equal(geometry['y'], [0, 0, 20, 20])
+        # Shank 'b' is on the left
+        np.testing.assert_array_equal(geometry['shank'], [1, 0, 1, 0])
+        np.testing.assert_array_equal(geometry['sample_shift'], np.zeros(4))
+
+    def test_multi_segment_refused(self):
+        """Recordings with several segments are refused"""
+        source = RawSourceSI(lambda: self.numpy_recording(n_segments=2))
+        with self.assertRaises(ValueError):
+            _ = source.fs
+
+
+class TestShankNumbers(unittest.TestCase):
+    """Test the shank_numbers function."""
+
+    def test_numbered_by_position(self):
+        """Shank ids are numbered from the leftmost shank"""
+        x = np.array([500, 0, 250, 0])
+        ids = np.array(['10', '2', '1', '2'])
+        np.testing.assert_array_equal(shank_numbers(ids, x), [2, 0, 1, 0])
+
+    def test_no_shank_ids(self):
+        """Without shank ids every channel is on shank 0"""
+        x = np.arange(3.0)
+        np.testing.assert_array_equal(shank_numbers(None, x), np.zeros(3))
+        np.testing.assert_array_equal(shank_numbers(np.array(['', '', '']), x), np.zeros(3))

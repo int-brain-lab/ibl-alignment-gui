@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import spikeglx
-    from spikeinterface import SortingAnalyzer
+    from spikeinterface import BaseRecording, SortingAnalyzer
 
     from one.api import ONE
 
@@ -305,7 +305,7 @@ class RawSource(ABC):
     @property
     @abstractmethod
     def geometry(self) -> dict[str, np.ndarray]:
-        """The channel header in file order: x, y, shank, row, col, adc and sample_shift."""
+        """The channel header in file order: at least x, y, shank and sample_shift."""
 
     @abstractmethod
     def get_traces(self, start: int, n_samples: int) -> np.ndarray:
@@ -829,3 +829,120 @@ class RawSourceSpikeGLX(RawSource):
         """
         traces = self.reader[start : start + n_samples, : -self.reader.nsync]
         return traces[:, self._file_order]
+
+
+class RawSourceSI(RawSource):
+    """
+    One band of a raw recording read with SpikeInterface.
+
+    The recording must be raw, as read from disk: the snippets and channel flags are computed by
+    destriping it, which is wrong on data that are already filtered or referenced. The channels
+    are in the order of the recording, which for a recording read from disk is file order.
+
+    The recording is opened when the data are first needed.
+
+    Parameters
+    ----------
+    open_recording : Callable
+        Returns the SpikeInterface recording of the band.
+    """
+
+    def __init__(self, open_recording: Callable[[], BaseRecording]):
+        self._open_recording: Callable[[], BaseRecording] = open_recording
+        self._recording: BaseRecording | None = None
+
+    @property
+    def recording(self) -> BaseRecording:
+        """The SpikeInterface recording, opened on first use."""
+        if self._recording is None:
+            recording = self._open_recording()
+            if recording.get_num_segments() != 1:
+                raise ValueError(
+                    f'The recording has {recording.get_num_segments()} segments, only single '
+                    f'segment recordings are supported'
+                )
+            self._recording = recording
+        return self._recording
+
+    @property
+    def fs(self) -> float:
+        """The sampling frequency (Hz)."""
+        return self.recording.get_sampling_frequency()
+
+    @property
+    def duration(self) -> float:
+        """The duration of the recording (s)."""
+        return self.recording.get_total_duration()
+
+    @cached_property
+    def geometry(self) -> dict[str, np.ndarray]:
+        """
+        The channel header in file order, read from the probe.
+
+        The shanks are numbered by their position on the probe. The sample shift is the
+        probe's inter_sample_shift, zero when the recording does not give it.
+        """
+        recording = self.recording
+        n_channels = recording.get_num_channels()
+        locations = recording.get_channel_locations()
+        x, y = locations[:, 0], locations[:, 1]
+
+        sample_shift = recording.get_property('inter_sample_shift')
+        if sample_shift is None:
+            sample_shift = np.zeros(n_channels)
+
+        return {
+            'x': x,
+            'y': y,
+            'shank': shank_numbers(recording.get_probe().shank_ids, x),
+            'sample_shift': np.asarray(sample_shift, dtype=float),
+        }
+
+    def get_traces(self, start: int, n_samples: int) -> np.ndarray:
+        """
+        Read a block of the recording.
+
+        Parameters
+        ----------
+        start : int
+            The first sample.
+        n_samples : int
+            The number of samples.
+
+        Returns
+        -------
+        np.ndarray
+            The traces (time, channels) in V, in file order.
+        """
+        end = min(start + n_samples, self.recording.get_num_samples())
+        traces = self.recording.get_traces(start_frame=start, end_frame=end, return_in_uV=True)
+        return traces * 1e-6
+
+
+def shank_numbers(shank_ids: np.ndarray | None, x: np.ndarray) -> np.ndarray:
+    """
+    Get the shank of each channel, numbering the shanks by their position on the probe.
+
+    SpikeInterface shank ids can be strings, or empty when the probe does not set them, so they
+    are not used as numbers.
+
+    Parameters
+    ----------
+    shank_ids : np.ndarray or None
+        The SpikeInterface shank id of each channel.
+    x : np.ndarray
+        The x coordinate of each channel.
+
+    Returns
+    -------
+    np.ndarray
+        The shank of each channel, 0 for the leftmost shank.
+    """
+    if shank_ids is None or np.any(np.asarray(shank_ids) == ''):
+        return np.zeros(x.size, dtype=int)
+    shank_ids = np.asarray(shank_ids)
+    shanks = sorted(np.unique(shank_ids), key=lambda sh: np.min(x[shank_ids == sh]))
+    numbers = np.zeros(x.size, dtype=int)
+    for i, sh in enumerate(shanks):
+        numbers[shank_ids == sh] = i
+    return numbers

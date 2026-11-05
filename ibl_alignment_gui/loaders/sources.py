@@ -303,6 +303,11 @@ class RawSource(ABC):
         """The duration of the recording (s)."""
 
     @property
+    def n_samples(self) -> int:
+        """The number of samples in the recording."""
+        return round(self.duration * self.fs)
+
+    @property
     @abstractmethod
     def geometry(self) -> dict[str, np.ndarray]:
         """The channel header in file order: at least x, y, shank and sample_shift."""
@@ -797,6 +802,11 @@ class RawSourceSpikeGLX(RawSource):
         """The duration of the recording (s)."""
         return self.reader.meta['fileTimeSecs']
 
+    @property
+    def n_samples(self) -> int:
+        """The number of samples in the recording."""
+        return self.reader.ns
+
     @cached_property
     def _file_order(self) -> np.ndarray:
         """The reader's columns in file order; the reader sorts them by position on the probe."""
@@ -873,6 +883,11 @@ class RawSourceSI(RawSource):
     def duration(self) -> float:
         """The duration of the recording (s)."""
         return self.recording.get_total_duration()
+
+    @property
+    def n_samples(self) -> int:
+        """The number of samples in the recording."""
+        return self.recording.get_num_samples()
 
     @cached_property
     def geometry(self) -> dict[str, np.ndarray]:

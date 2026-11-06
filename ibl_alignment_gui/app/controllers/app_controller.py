@@ -1076,9 +1076,12 @@ class AlignmentGUIController:
                 if cb_default
                 else None
             )
+            fig_cb = getattr(self.shank_items[shank][self.model.default_config].view, fig)
+            # Remove the colorbar of the previous plot before adding the new one
+            for item in [it for it in fig_cb.items if isinstance(it, ColorBar)]:
+                fig_cb.removeItem(item)
             if not cmap:
                 continue
-            fig_cb = getattr(self.shank_items[shank][self.model.default_config].view, fig)
             cbar = ColorBar(cmap, plot_item=fig_cb)
             if cb_default:
                 cbar.set_axis(cb_default.ticks, cb_default.label, loc='top', extent=20)
@@ -1610,6 +1613,8 @@ class AlignmentGUIController:
 
         # Add reference lines to the display
         if init:
+            # A new probe starts with its reference lines shown
+            self.show_lines = True
             self.set_init_reference_lines()
         else:
             self.add_reference_lines_to_display()
@@ -1879,6 +1884,10 @@ class AlignmentGUIController:
             The index of the panel that the mouse click event occured
         """
         if event.double():
+            # Show the hidden reference lines, so the new line is not the only one on display
+            if not self.show_lines:
+                self.toggle_reference_lines()
+
             if idx != self.model.selected_idx:
                 self.view.set_selection_dropdown('shank', idx)
                 self.on_shank_selected(idx)
@@ -2365,7 +2374,13 @@ class AlignmentGUIController:
 
     @shank_loop
     def add_reference_lines_to_display(self, items: ShankController, **kwargs) -> None:
-        """Add previously created reference lines and scatter points to their respective plots."""
+        """
+        Add previously created reference lines and scatter points to their respective plots.
+
+        Does nothing while the reference lines are hidden with Shift+H.
+        """
+        if not self.show_lines:
+            return
         shank = kwargs.get('shank')
         items.add_reference_lines_to_display()
         if shank == self.model.selected_shank:

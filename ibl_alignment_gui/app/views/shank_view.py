@@ -147,6 +147,7 @@ class ShankView:
         # Plot items for the scale factor plot
         self.fig_scale: pg.PlotItem | None = None
         self.fig_scale_cb: pg.PlotItem | None = None
+        self.scale_cbar: ColorBar | None = None
         self.fig_scale_ax: pg.AxisItem | None = None
         self.scale_regions: list[pg.LinearRegionItem] = []
 
@@ -655,6 +656,7 @@ class ShankView:
         """Clear items from the scale factor plot."""
         self.fig_scale.clear()
         self.scale_regions = []
+        self.scale_cbar = self.remove_items(self.fig_scale_cb, self.scale_cbar)
 
     def plot_scale_factor(self, data) -> ColorBar:
         """
@@ -672,9 +674,9 @@ class ShankView:
         """
         self.clear_scale_factor()
 
-        cbar = ColorBar('seismic', plot_item=self.fig_scale_cb)
-        colours = cbar.cmap.mapToQColor(data.scale_factor)
-        cbar.set_levels((0, 1.5), label='Scale')
+        self.scale_cbar = ColorBar('seismic', plot_item=self.fig_scale_cb)
+        colours = self.scale_cbar.cmap.mapToQColor(data.scale_factor)
+        self.scale_cbar.set_levels((0, 1.5), label='Scale')
 
         # Visible y-bounds (matching set_yaxis_range) used to keep region labels on-screen
         y_min = self.yrange[0] - self.ylim_extra
@@ -703,7 +705,7 @@ class ShankView:
         self.set_yaxis_range(self.fig_scale)
         set_axis(self.fig_scale, 'bottom', pen='w', label=' ')
 
-        return cbar
+        return self.scale_cbar
 
     def clear_slice(self):
         """Clear items from the slice plot."""
@@ -971,15 +973,15 @@ class ShankView:
 
         levels = data.levels if levels is None else levels
 
-        self.plot_cbar = ColorBar(data.cmap, plot_item=self.fig_probe_cb)
-        self.plot_cbar.set_levels(levels, label=data.title)
+        self.probe_cbar = ColorBar(data.cmap, plot_item=self.fig_probe_cb)
+        self.probe_cbar.set_levels(levels, label=data.title)
 
         # Create image plots per shank and add to figure
         self.probe_items = []
         image = pg.ImageItem()
         image.setImage(data.img)
         image.setTransform(self.make_transform(data.scale, data.offset))
-        image.setLookupTable(self.plot_cbar.get_colour_map())
+        image.setLookupTable(self.probe_cbar.get_colour_map())
         image.setLevels((levels[0], levels[1]))
         self.fig_probe.addItem(image)
         self.probe_items.append(image)
@@ -998,7 +1000,7 @@ class ShankView:
                 self.fig_probe.addItem(line)
                 self.probe_bounds.append(line)
 
-        return self.plot_cbar
+        return self.probe_cbar
 
     def plot_image(
         self, data: ImageData | None, levels: list | np.ndarray | None = None

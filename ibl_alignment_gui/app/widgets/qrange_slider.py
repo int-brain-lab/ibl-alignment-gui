@@ -225,12 +225,10 @@ class QRangeSlider(QtWidgets.QSlider):
 
         self.update()
 
-        # self.emit(QtCore.SIGNAL('sliderMoved(int)'), new_pos)
         self.sliderMoved.emit(self._low, self._high)
-        self.sliderReleased.emit(self._low, self._high)
 
-    # def mouseReleaseEvent(self, event):
-    #     self.sliderReleased.emit(self._low, self._high)
+    def mouseReleaseEvent(self, event):
+        self.sliderReleased.emit(self._low, self._high)
 
     def __pick(self, pt):
         if self.orientation() == QtCore.Qt.Horizontal:

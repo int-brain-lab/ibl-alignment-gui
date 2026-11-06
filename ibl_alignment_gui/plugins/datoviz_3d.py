@@ -3,13 +3,10 @@ from typing import TYPE_CHECKING, Any
 
 import matplotlib as mpl
 import numpy as np
-from datoviz.backends.pyqt6 import QtServer
 from matplotlib import cm
 from matplotlib.colors import Normalize
 from qtpy import QtCore, QtWidgets
 
-from ibl_datoviz.points import PointsController
-from ibl_datoviz.viewer import Viewer
 from iblutil.util import Bunch
 
 if TYPE_CHECKING:
@@ -22,12 +19,13 @@ from ibl_alignment_gui.utils.helpers import shank_loop
 
 PLUGIN_NAME = '3D features'
 
-SHANK_COLOURS = {
-    'a': [0, 255, 0, 255],
-    'b': [48, 182, 102, 255],
-    'c': [255, 0, 0, 255],
-    'd': [0, 0, 255, 255],
-}
+# Colours of the shank markers, in the order of the shanks
+SHANK_COLOURS = [
+    [0, 255, 0, 255],
+    [48, 182, 102, 255],
+    [255, 0, 0, 255],
+    [0, 0, 255, 255],
+]
 
 
 def setup(controller: 'AlignmentGUIController') -> None:
@@ -87,6 +85,9 @@ class Viewer3D(PopupWindow):
 
     def setup(self):
         """Create the datoviz server and figure, and add the display controls."""
+        # datoviz is only loaded once the 3D view is opened, not when the GUI starts
+        from datoviz.backends.pyqt6 import QtServer  # noqa: PLC0415
+
         self.qt_server = QtServer(background='black')
         w, h = 800, 600
         self.qfig = self.qt_server.figure(w, h)
@@ -180,6 +181,10 @@ class Features3D:
 
     def setup(self):
         """Launch the 3D Urchin viewer and display the initial probe channels."""
+        # ibl_datoviz loads datoviz, so it is only imported once the 3D view is opened
+        from ibl_datoviz.points import PointsController  # noqa: PLC0415
+        from ibl_datoviz.viewer import Viewer  # noqa: PLC0415
+
         self.view = Viewer3D(PLUGIN_NAME, self.controller)
         self.view.closed.connect(self.on_close)
         self.view.slider.sliderReleased.connect(
@@ -205,9 +210,13 @@ class Features3D:
         """
         Triggered when the plugin window is closed.
 
-        Deactivate the plugin and callbacks.
+        Deactivate the plugin and callbacks, and delete the window. Dropping the references to
+        the window and the viewer lets the datoviz server be destroyed.
         """
         self.controller.plugins[PLUGIN_NAME]['activated'] = False
+        self.viewer = None
+        self.view.deleteLater()
+        self.view = None
 
     def data_button_pressed(self) -> None:
         """
@@ -336,12 +345,14 @@ class Features3D:
 
         Parameters
         ----------
-        markers: dict
-            A list of marker positions, colors, and names.
+        markers: list of dict
+            A list of marker ids, names, positions and colors.
         """
         for marker in markers:
-            self.texts.append(marker['name'])
-            self.viewer.texts.add_text(marker['name'], marker['pos'], marker['col'], 1)
+            self.texts.append(marker['id'])
+            self.viewer.texts.add_text(
+                marker['name'], marker['pos'], marker['col'], 1, text_id=marker['id']
+            )
 
     def remove_markers(self) -> None:
         """Remove all markers from the 3D view."""
@@ -438,6 +449,8 @@ class Features3D:
             The function to use for getting the data.
         """
         self.plot_type = plot_key
+        # The markers are added again below for the new plot
+        self.remove_markers()
 
         if (
             self.controller.model.selected_config == 'both'
@@ -463,16 +476,23 @@ class Features3D:
             # Find the position to put the shank indicators
             min_idx = np.argmax(dat['xyz'][:, 2])
 
+            # The full shank name keeps the ids unique, the label is its last character
+            shank_idx = self.controller.all_shanks.index(dat['shank'])
             sh_info = {
+                'id': dat['shank'],
                 'name': dat['shank'][-1],
                 'pos': [
                     dat['xyz'][min_idx, 0],
                     dat['xyz'][min_idx, 1],
                     dat['xyz'][min_idx, 2] + 200 / 1e6,
                 ],
-                'col': SHANK_COLOURS.get(dat['shank'][-1], create_random_color()),
+                'col': SHANK_COLOURS[shank_idx % len(SHANK_COLOURS)],
             }
-            if self.controller.model.selected_config != 'both' or dat['config'] == 'quarter':
+            # With both configs shown, only add one marker per shank
+            if (
+                self.controller.model.selected_config != 'both'
+                or dat['config'] == self.controller.model.default_config
+            ):
                 markers.append(sh_info)
 
         if len(positions) != 0:
@@ -481,22 +501,6 @@ class Features3D:
             if len(positions) > 0:
                 self.set_points({'pos': positions, 'col': colours})
                 self.set_markers(markers)
-
-
-def create_random_color() -> str:
-    """
-    Create a random hex color code.
-
-    Returns
-    -------
-    str
-        A hex color code.
-    """
-    r = np.random.randint(0, 256)
-    g = np.random.randint(0, 256)
-    b = np.random.randint(0, 256)
-    return np.array([r, g, b, 255], dtype=np.uint8)
-    # return rgb2hex((r / 255, g / 255, b / 255))
 
 
 def data_to_colors(data: list | np.ndarray, cmap: str, vmin: float, vmax: float) -> list:

@@ -20,6 +20,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extra.
 - Bad channel detection keeps the two channels of a probe row in file order, which can change
   the flags of NP2 probes slightly.
+- datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
+
+### Fixed
+- Replotting the probe plot replaces its colour bar instead of adding another one, and an empty
+  probe plot no longer keeps the previous colour bar. The same applies to the scale factor colour
+  bar on each fit and to the shared colour bars shown with both configurations.
+- Opening the Range Controller or Ephys Features while it is already open brings it to the front
+  instead of connecting its controls again, which made each slider change replot more than once
+  and Next/Previous skip pages.
+- The Range Controller closes when a new session is loaded, instead of keeping the previous
+  session's shanks and failing on the next plot change.
+- Closing a plugin window (Range Controller, Ephys Features, 3D features or a cluster popup)
+  deletes it instead of keeping it hidden, and closing the 3D view releases its datoviz server.
+  Clicking a cluster whose popup is already open brings that popup to the front.
+- Dragging a range slider (Range Controller, Ephys Features) redraws the plots at most every
+  100 ms and once more on release, instead of on every mouse movement.
+- In Ephys Features, changing page or region selects the probe in the same column of the new
+  page, so the colour slider and reset act on a probe that is shown.
+- Loading a session with fewer shanks than the previous one no longer leaves empty rows and
+  their splitter handles in the shank grid.
+- The shank markers in the 3D view are replaced on each replot instead of being added again,
+  keep a fixed colour per shank, no longer overwrite each other when shank names end in the same
+  character, and are shown with both configurations whatever the configuration names.
+- Reference lines hidden with Shift+H stay hidden through fits, resets and changes of mapping or
+  configuration. Double-clicking to add a line shows them again, and a new probe starts with them
+  shown.
 
 ## [0.1.0a4] - 2026-11-03
 

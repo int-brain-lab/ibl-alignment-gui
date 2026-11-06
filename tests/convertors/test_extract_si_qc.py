@@ -29,11 +29,24 @@ class TestExtractSIQC(_ConverterTest):
         lf_file = write_spikeglx(raw, 'NP24', 'lf', 6.0) if lf_file else None
         return raw, ap_file, lf_file
 
-    def extract(self, raw, name='si'):
+    def extract(self, raw, name='si', compressed=False, **kwargs):
+        """Read the probe with SpikeInterface and extract its datasets."""
+        import spikeinterface.extractors as se  # noqa: PLC0415
+
         from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc  # noqa: PLC0415
 
+        def read(band):
+            if compressed:
+                cbin_file = next(raw.glob(f'*.{band}.cbin'), None)
+                return se.read_cbin_ibl(cbin_file_path=cbin_file) if cbin_file else None
+            if next(raw.glob(f'*.{band}.bin'), None) is None:
+                return None
+            return se.read_spikeglx(raw, stream_id=f'imec0.{band}')
+
+        if 'lfp_from_ap' not in kwargs:
+            kwargs['lf_recording'] = read('lf')
         out = self.folder.joinpath(name)
-        extract_si_qc(raw, out, sample_spacing_secs=0.5, n_workers=2)
+        extract_si_qc(read('ap'), out, sample_spacing_secs=0.5, n_workers=2, **kwargs)
         return out
 
     def assert_rms_equal(self, out, expected):
@@ -63,7 +76,7 @@ class TestExtractSIQC(_ConverterTest):
         from ibl_alignment_gui.loaders.data_loader import RawDataLoader  # noqa: PLC0415
 
         raw, ap_file, _ = self.write_probe(lf_file=False)
-        out = self.extract(raw)
+        out = self.extract(raw, lfp_from_ap=True)
         expected = self.folder.joinpath('sglx')
         kwargs = {'out_folder': expected, 'sample_spacing_secs': 0.5, 'n_workers': 1}
         extract_rmsmap(ap_file, spectra=False, **kwargs)
@@ -112,35 +125,64 @@ class TestExtractSIQC(_ConverterTest):
             with spikeglx.Reader(bin_file) as reader:
                 reader.compress_file(keep_original=False)
         self.assertEqual(len(list(raw.glob('*.cbin'))), 2)
-        self.assert_rms_equal(self.extract(raw, 'cbin'), expected)
+        self.assert_rms_equal(self.extract(raw, 'cbin', compressed=True), expected)
+
+    def test_without_lf(self):
+        """Without an LF recording or lfp_from_ap, only the AP datasets are written"""
+        from ibl_alignment_gui.loaders.data_loader import RawDataLoader  # noqa: PLC0415
+
+        raw, _, _ = self.write_probe(lf_file=False)
+        out = self.extract(raw)
+        self.assertEqual(
+            sorted(f.name for f in out.iterdir()),
+            sorted(
+                [
+                    '_iblqc_ephysTimeRmsAP.rawInd.npy',
+                    '_iblqc_ephysTimeRmsAP.rms.npy',
+                    '_iblqc_ephysTimeRmsAP.timestamps.npy',
+                    RawDataLoader.AP_SNIPPETS_FILE,
+                ]
+            ),
+        )
 
 
 @unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
-class TestFindRawFiles(_ConverterTest):
-    """The files of one probe are found in its folder."""
+class TestRecordingChecks(unittest.TestCase):
+    """Recordings that cannot give the datasets are refused."""
 
-    def test_files(self):
-        from ibl_alignment_gui.convertors.extract_si_qc import find_raw_files  # noqa: PLC0415
+    def setUp(self):
+        import spikeinterface as si  # noqa: PLC0415
 
-        ap_file = write_spikeglx(self.folder, 'NP24', 'ap', 0.01)
-        self.assertEqual(find_raw_files(self.folder), (ap_file, None))
-        lf_file = write_spikeglx(self.folder, 'NP24', 'lf', 0.01)
-        self.assertEqual(find_raw_files(self.folder), (ap_file, lf_file))
+        self.ap = si.generate_recording(num_channels=4, sampling_frequency=30000, durations=[1])
+        self.lf = si.generate_recording(num_channels=4, sampling_frequency=2500, durations=[1])
 
-    def test_no_ap_file(self):
-        from ibl_alignment_gui.convertors.extract_si_qc import find_raw_files  # noqa: PLC0415
+    def test_filtered(self):
+        import spikeinterface.preprocessing as spre  # noqa: PLC0415
 
-        with self.assertRaises(FileNotFoundError):
-            find_raw_files(self.folder)
+        from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc  # noqa: PLC0415
 
-    def test_two_probes(self):
-        from ibl_alignment_gui.convertors.extract_si_qc import find_raw_files  # noqa: PLC0415
-
-        ap_file = write_spikeglx(self.folder, 'NP24', 'ap', 0.01)
-        ap_file.rename(ap_file.with_name(ap_file.name.replace('imec0', 'imec1')))
-        ap_file.with_suffix('.meta').rename(
-            ap_file.with_name(ap_file.name.replace('imec0', 'imec1')).with_suffix('.meta')
-        )
-        write_spikeglx(self.folder, 'NP24', 'ap', 0.01)
         with self.assertRaises(ValueError):
-            find_raw_files(self.folder)
+            extract_si_qc(spre.highpass_filter(self.ap), 'unused')
+
+    def test_lf_twice(self):
+        from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc  # noqa: PLC0415
+
+        with self.assertRaises(ValueError):
+            extract_si_qc(self.ap, 'unused', lf_recording=self.lf, lfp_from_ap=True)
+
+    def test_lfp_from_lf_band(self):
+        """The LF band can only be computed from a band sampled at 30 kHz"""
+        from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc  # noqa: PLC0415
+
+        with self.assertRaises(ValueError):
+            extract_si_qc(self.lf, 'unused', lfp_from_ap=True)
+
+    def test_clone_per_thread(self):
+        """Each thread after the first reads from a clone of the recording"""
+        from ibl_alignment_gui.convertors.extract_si_qc import _source_opener  # noqa: PLC0415
+
+        open_source = _source_opener(self.ap)
+        first, second = open_source().recording, open_source().recording
+        self.assertIs(first, self.ap)
+        self.assertIsNot(second, self.ap)
+        np.testing.assert_array_equal(second.get_traces(), self.ap.get_traces())

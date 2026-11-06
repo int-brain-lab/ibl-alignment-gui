@@ -10,8 +10,8 @@ writes are described in {ref}`ref-output-files`.
 
 | Datasets | YAML key | Contents |
 |---|---|---|
-| `spikes.*`, `clusters.*`, `channels.*` | `spike_sorting` | Spike sorting output |
-| `_iblqc_ephysTimeRms*`, `_iblqc_ephysSpectralDensityLF.*` | `processed_ephys` | RMS and power spectra computed from the raw data |
+| `spikes.*`, `clusters.*`, `channels.*`, or a `SortingAnalyzer` | `spike_sorting` | Spike sorting output |
+| `_iblqc_*`, snippets from `extract_si_qc` | `processed_ephys` | RMS and power spectra computed from the raw data |
 | `*.ap.meta`, `*.ap.bin`, `*.lf.bin` | `raw_ephys` | Raw SpikeGLX recordings and their metadata |
 | Histology volumes | `histology` | Histology images registered to the Allen CCF |
 | `*xyz_picks*.json` | `picks` | Traced probe trajectory |
@@ -23,6 +23,14 @@ Read from the `spike_sorting` folder. `spikes.amps`, `spikes.clusters`, `spikes.
 `spikes.times` are all needed: if any of them is missing, the spike sorting is treated as absent
 and a warning names the missing files. Kilosort output that has not been converted (with
 `spikes.samples` but no `spikes.times`) is in this case.
+
+The `spike_sorting` folder can instead be a SpikeInterface `SortingAnalyzer`, as a binary folder
+or a `.zarr`, which needs the `spikeinterface` extra. The datasets below are then read from the
+analyzer rather than from files: the spikes from its sorting and the `spike_amplitudes` and
+`spike_locations` extensions, the clusters from the `templates`, `template_metrics` and
+`quality_metrics` extensions, and the channels from its probe. The raw index of each channel is
+found by matching the probe contact ids (see `_iblqc_ephysChannels.contactIds` below). See
+{ref}`howto-convert-spikeinterface` for the extensions needed.
 
 `spikes.amps`
 : **Units** V · **Type** double · **Dimensions** [number of spikes] · **Format** npy
@@ -107,7 +115,8 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
 : **Units** V · **Type** float32 · **Dimensions** [number of time windows, number of channels] ·
   **Format** npy
 
-  RMS amplitude of the AP band over time. `extract_ephys` destripes the AP band first:
+  RMS amplitude of the AP band over time. `extract_ephys` and `extract_si_qc` destripe the AP
+  band first:
   high-pass at 300 Hz, as Neuropixels 2.0 probes record it with the LFP, ADC sample shift
   correction and the median of each shank subtracted.
 
@@ -121,7 +130,8 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
   **Format** npy
 
   RMS amplitude of the LF band over time. For Neuropixels 2.0 probes without an LF file,
-  `extract_ephys` computes the LF band from the AP band, decimated to 2.5 kHz.
+  `extract_ephys` computes the LF band from the AP band, decimated to 2.5 kHz, as
+  `extract_si_qc` does with `lfp_from_ap`.
 
 `_iblqc_ephysTimeRmsLF.timestamps`
 : **Units** s · **Type** float32 · **Dimensions** [number of time windows] · **Format** npy
@@ -133,9 +143,25 @@ each column (see {ref}`ref-probe-geometry` for the channel order).
 : **Units** index · **Type** int32 · **Dimensions** [1, number of channels] · **Format** npy
 
   Optional. Index in the raw recording file of the channel in each column, counting from 0.
-  Written by `extract_ephys`. Without it the columns are taken to be in file order; a local file
+  Written by `extract_ephys` and `extract_si_qc`. Without it the columns are taken to be in file order; a local file
   without it is reported when the raw file does not store the channels in shank and depth order,
   as it may then show the wrong channels (see {ref}`howto-convert-kilosort`).
+
+`_iblqc_ephysChannels.contactIds`
+: **Type** str · **Dimensions** [number of channels] · **Format** npy
+
+  Optional. The probe contact id of each channel of the raw recording, in file order, as
+  probeinterface names Neuropixels contacts (`e12`, or `s1e288` on multi-shank probes). Written by
+  `extract_si_qc`. The channels of a `SortingAnalyzer` are matched to the columns of the other
+  files by their contact ids, so an analyzer may hold fewer channels than the raw recording, or
+  one shank of it. Without this file, the channels of an analyzer are matched by their SpikeGLX
+  channel ids (`imec0.ap#AP12`), or else taken to be the raw recording's channels in order.
+
+`alignment_gui_raw_data_snippets.npy`, `alignment_gui_raw_lf_data_snippets.npy`
+: **Format** npy (pickled dictionary)
+
+  Optional. Snippets of the AP and LF bands and the channel quality flags, written by
+  `extract_si_qc`. Read when the `raw_ephys` folder holds neither raw data nor snippets of its own.
 
 ## Raw electrophysiology
 
@@ -152,8 +178,9 @@ not available.
 : **Format** SpikeGLX binary
 
   Raw AP and LF recordings. Short snippets are read to display the raw data plots, each shank
-  showing its own channels. The snippets are cached in the same folder, in
-  `alignment_gui_raw_data_snippets.npy`; caches made by older versions are rebuilt.
+  showing its own channels. The AP snippets are cached in the same folder, in
+  `alignment_gui_raw_data_snippets.npy`; caches made by older versions are rebuilt. Without raw
+  data, the snippets written to the `processed_ephys` folder by `extract_si_qc` are shown.
 
 ## Histology
 

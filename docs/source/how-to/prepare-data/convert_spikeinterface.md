@@ -66,7 +66,9 @@ data plots come from files you write once with the `extract_si_qc` script.
    extract_si_qc(ap, out_folder, lfp_from_ap=True)
    ```
 
-   With neither an LF recording nor `lfp_from_ap`, only the AP datasets are written. The
+   `lfp_from_ap` is refused for probes with a separate LF band, such as Neuropixels 1.0, whose
+   AP band is high-passed and holds no LFP. With neither an LF recording nor `lfp_from_ap`, only
+   the AP datasets are written. The
    recordings are processed as by `extract_ephys` (see {ref}`ref-input-datasets` for each file),
    reading a sample of the recording, so this takes minutes rather than a pass over the file.
 

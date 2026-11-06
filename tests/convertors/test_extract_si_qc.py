@@ -141,6 +141,22 @@ class TestExtractSIQCWithoutLF(_RmsTest):
         self.folder = Path(self.temp_dir.name)
         self.raw, self.ap_file, _ = write_probe(self.folder, lf_file=False)
 
+    def test_lf_from_ap_of_np1_metadata(self):
+        """The metadata of a SpikeGLX recording say whether the LF band is in the AP band"""
+        import spikeinterface.extractors as se  # noqa: PLC0415
+
+        from ibl_alignment_gui.convertors.extract_si_qc import _check_wideband  # noqa: PLC0415
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', 'Unable to compute saturation threshold')
+            ap = se.read_spikeglx(self.raw, stream_id='imec0.ap')
+        _check_wideband(ap)
+        # The metadata of an NP1 probe, which the probe read before does not know of
+        meta = self.ap_file.with_suffix('.meta')
+        meta.write_text(meta.read_text().replace('imDatPrb_type=2013', 'imDatPrb_type=0'))
+        with self.assertRaises(ValueError):
+            _check_wideband(ap)
+
     def test_lf_from_ap(self):
         """The LF band of an NP2 probe is computed from the AP band, without LF snippets"""
         from ibl_alignment_gui.loaders.data_loader import RawDataLoader  # noqa: PLC0415
@@ -208,6 +224,24 @@ class TestRecordingChecks(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             extract_si_qc(self.lf, 'unused', lfp_from_ap=True)
+
+    def test_lfp_from_ap_of_np1(self):
+        """The LF band is not computed from the AP band of a probe with a separate LF band"""
+        from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc  # noqa: PLC0415
+
+        # probeinterface gives Neuropixels 1.0 probes an LF band at 2.5 kHz
+        probe = self.ap.get_probe()
+        probe.annotate(lf_sample_frequency_hz=2500.0)
+        self.ap.set_probe(probe)
+        with self.assertRaises(ValueError):
+            extract_si_qc(self.ap, 'unused', lfp_from_ap=True)
+
+    def test_lfp_from_ap_of_unknown_probe(self):
+        """A probe that does not give its LF band is taken to record wideband, with a warning"""
+        from ibl_alignment_gui.convertors.extract_si_qc import _check_wideband  # noqa: PLC0415
+
+        with self.assertLogs('ibl_alignment_gui.convertors.extract_si_qc', 'WARNING'):
+            _check_wideband(self.ap)
 
     def test_clone_per_thread(self):
         """Each thread after the first reads from a clone of the recording"""

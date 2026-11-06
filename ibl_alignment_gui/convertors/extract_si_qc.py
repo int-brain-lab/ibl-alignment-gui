@@ -46,6 +46,7 @@ from ibl_alignment_gui.convertors.extract_ephys import (
     LF_DECIMATION,
     N_WORKERS,
     SAMPLE_SPACING_SECS,
+    _is_np2,
     compute_rmsmap,
     save_rmsmap,
 )
@@ -84,7 +85,8 @@ def extract_si_qc(
         ``lfp_from_ap`` is set.
     lfp_from_ap : bool
         Whether to compute the LF band from the AP band, for probes that record wideband, such
-        as NP2 probes. The AP band is decimated to 2.5 kHz.
+        as NP2 probes. The AP band is decimated to 2.5 kHz. Refused for probes with a separate LF
+        band, such as NP1 probes, whose AP band is high-passed and holds no LFP.
     sample_spacing_secs : float or None
         The RMS and spectra are computed on a sample taken every ``sample_spacing_secs``
         seconds. None reads the whole recording.
@@ -96,8 +98,8 @@ def extract_si_qc(
     ------
     ValueError
         If a recording is filtered, if both ``lf_recording`` and ``lfp_from_ap`` are given, if
-        ``lfp_from_ap`` is set for an AP band that does not decimate to 2.5 kHz, or if the LF
-        band does not have the channels of the AP band.
+        ``lfp_from_ap`` is set for a probe with a separate LF band or an AP band that does not
+        decimate to 2.5 kHz, or if the LF band does not have the channels of the AP band.
     """
     for recording in (ap_recording, lf_recording):
         if recording is not None and recording.is_filtered():
@@ -111,6 +113,8 @@ def extract_si_qc(
             f'The AP band is sampled at {ap_recording.get_sampling_frequency()} Hz, so it does '
             f'not decimate to the {LF_FS} Hz of the LF band'
         )
+    if lfp_from_ap:
+        _check_wideband(ap_recording)
 
     # The GUI matches the channels of both bands with the contact ids of the AP band
     contact_ids = channel_contact_ids(ap_recording)
@@ -157,6 +161,85 @@ def extract_si_qc(
     np.save(out_folder.joinpath(RawDataLoader.AP_SNIPPETS_FILE), loader.load_ap_snippets())
     if lf_recording is not None:
         np.save(out_folder.joinpath(RawDataLoader.LF_SNIPPETS_FILE), loader.load_lf_snippets())
+
+
+def _check_wideband(recording):
+    """
+    Check that a probe records the LFP in its AP band, so that the LF band can be computed from it.
+
+    A SpikeGLX recording is checked from its metadata, as by ``extract_ephys``. Otherwise
+    probeinterface gives Neuropixels probes the sampling frequency of their LF band, 0 for probes
+    that record wideband, such as NP2 probes. Other probes do not say, so are taken to record
+    wideband with a warning.
+
+    Parameters
+    ----------
+    recording : spikeinterface.BaseRecording
+        The AP band of the probe.
+
+    Raises
+    ------
+    ValueError
+        If the probe records the LF band separately.
+    """
+    meta_file = _spikeglx_meta_file(recording)
+    if meta_file is not None:
+        if not _is_np2(meta_file):
+            raise ValueError(
+                f'{meta_file.name} is not from an NP2 probe, so its AP band holds no LFP to '
+                f'compute the LF band from: give the LF recording instead of lfp_from_ap'
+            )
+        return
+
+    try:
+        probe = recording.get_probe()
+    except ValueError:  # no probe, or more than one
+        probe = None
+    lf_fs = probe.annotations.get('lf_sample_frequency_hz') if probe is not None else None
+    if lf_fs is None:
+        _logger.warning(
+            'The probe does not say whether it records the LFP in its AP band, which is taken '
+            'to be wideband. Give the LF recording instead if it records the LF band separately.'
+        )
+    elif lf_fs > 0:
+        raise ValueError(
+            f'The {probe.model_name} probe records the LF band separately, so its AP band holds '
+            f'no LFP to compute it from: give the LF recording instead of lfp_from_ap'
+        )
+
+
+def _spikeglx_meta_file(recording):
+    """
+    Get the SpikeGLX metadata file a recording was read from.
+
+    Parameters
+    ----------
+    recording : spikeinterface.BaseRecording
+        The recording.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The metadata file, or None when the recording was not read with ``read_spikeglx`` or
+        ``read_cbin_ibl``, or its metadata file is not found.
+    """
+    description = recording.to_dict()
+    class_name = description['class'].rsplit('.', 1)[-1]
+    kwargs = description['kwargs']
+    if class_name == 'SpikeGLXRecordingExtractor' and kwargs.get('folder_path'):
+        # SpikeGLX names its files <run>_g<gate>_t<trigger>.<probe>.<band>.bin
+        stream_id = getattr(recording, 'stream_id', None) or kwargs.get('stream_id')
+        if stream_id is None:
+            return None
+        meta_files = sorted(Path(kwargs['folder_path']).rglob(f'*.{stream_id}.meta'))
+    elif class_name == 'CompressedBinaryIblExtractor':
+        if kwargs.get('cbin_file_path'):
+            meta_files = [Path(kwargs['cbin_file_path']).with_suffix('.meta')]
+        else:
+            meta_files = sorted(Path(kwargs['folder_path']).glob('*ap.meta'))
+    else:
+        return None
+    return next((file for file in meta_files if file.exists()), None)
 
 
 def _source_opener(recording):

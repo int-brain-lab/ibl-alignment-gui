@@ -102,6 +102,8 @@ class TestDataLoader(unittest.TestCase):
         np.testing.assert_array_equal(spikes['clusters'], [0, 2])
         self.assertIs(clusters, self.sorting.load_clusters.return_value)
         self.assertIs(channels, self.sorting.load_channels.return_value)
+        # Nothing more is read from the source, so it frees what it kept
+        self.sorting.release.assert_called_once()
 
     def test_get_spikes_data_rate_filter(self):
         """With filter set, low firing clusters are removed before the channel filter"""

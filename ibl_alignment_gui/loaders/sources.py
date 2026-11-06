@@ -234,6 +234,9 @@ class SortingSource(ABC):
     def load_channels(self) -> Bunch[str, Any]:
         """Load the channels: rawInd and localCoordinates."""
 
+    def release(self) -> None:  # noqa: B027
+        """Free what was kept to load the objects, once they have been loaded."""
+
 
 class EphysQCSource(ABC):
     """Abstract base class for the RMS and power spectral density of a probe's raw data."""
@@ -604,6 +607,15 @@ class SortingSourceSI(SortingSource):
                 )
             self._analyzer = analyzer
         return self._analyzer
+
+    def release(self) -> None:
+        """
+        Free the SortingAnalyzer once the spikes, clusters and channels have been loaded.
+
+        Each shank loads its own source, so an analyzer kept by each would hold a copy of the
+        sorting per shank. It is loaded again if an object is loaded after this.
+        """
+        self._analyzer = None
 
     def _has_sorting(self) -> bool:
         """Whether there is an analyzer with the extensions needed for the spikes and clusters."""

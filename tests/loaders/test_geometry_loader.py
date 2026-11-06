@@ -656,6 +656,8 @@ class TestGeometryLoader(unittest.TestCase):
         with self.subTest('Channels exist'):
             loader = self._mock_loaders(self.mock_channels, None)
             self.assertIs(loader.load_channels(), self.mock_channels)
+            # Nothing more is read from the source, so it frees what it kept
+            loader.sorting.release.assert_called_once()
 
         with self.subTest('Channels do not exist'):
             loader = self._mock_loaders(None, None)

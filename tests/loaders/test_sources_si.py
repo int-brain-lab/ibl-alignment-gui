@@ -137,6 +137,15 @@ class TestSortingSourceSI(unittest.TestCase):
             np.save(qc_path.joinpath(RAW_CONTACT_IDS_FILE), raw_contact_ids)
             np.testing.assert_array_equal(source.load_channels()['rawInd'], np.arange(9, 1, -1))
 
+    def test_release(self):
+        """A released source frees its analyzer, and loads it again if it is needed"""
+        source = SortingSourceSI(self.path)
+        source.load_channels()
+        self.assertIsNotNone(source._analyzer)
+        source.release()
+        self.assertIsNone(source._analyzer)
+        self.assertTrue(source.load_spikes()['exists'])
+
     def test_no_spike_sorting(self):
         """Without an analyzer every object is returned with exists=False"""
         source = SortingSourceSI(None)

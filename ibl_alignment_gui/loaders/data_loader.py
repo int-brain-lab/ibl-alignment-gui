@@ -206,6 +206,7 @@ class DataLoader:
 
         clusters = self.sorting.load_clusters()
         channels = self.sorting.load_channels()
+        self.sorting.release()
 
         if self.filter and spikes['exists']:
             # Remove low firing rate clusters

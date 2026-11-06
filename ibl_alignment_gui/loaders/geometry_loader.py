@@ -385,6 +385,7 @@ class GeometryLoader(ABC):
             sorting).
         """
         chns = self.sorting.load_channels()
+        self.sorting.release()
         return chns if chns['exists'] else None
 
     def get_sites_for_shank(self, shank_idx: int, sites=None) -> Bunch[str, Any]:

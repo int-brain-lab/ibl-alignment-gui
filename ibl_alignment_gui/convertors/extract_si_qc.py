@@ -6,7 +6,10 @@ For one probe this writes, to the output folder:
 - the RMS of the AP and LF bands and the spectral density of the LF band, as the
   ``_iblqc_ephysTimeRms*`` and ``_iblqc_ephysSpectralDensity*`` ALF files;
 - snippets of the AP and LF bands, with the channels flagged as dead, noisy or outside the
-  brain, as the files the GUI caches them in.
+  brain, as the files the GUI caches them in;
+- the probe contact id of each channel, as ``_iblqc_ephysChannels.contactIds``, which the GUI
+  matches to the contact ids of the SortingAnalyzer to find the raw channel of each of its
+  channels, also when channels were removed before sorting.
 
 The recordings are opened with the SpikeInterface reader of the acquisition system, and must be
 raw, as read from disk. The data are processed as by
@@ -47,7 +50,11 @@ from ibl_alignment_gui.convertors.extract_ephys import (
     save_rmsmap,
 )
 from ibl_alignment_gui.loaders.data_loader import RawDataLoader
-from ibl_alignment_gui.loaders.sources import RawSourceSI
+from ibl_alignment_gui.loaders.sources import (
+    RAW_CONTACT_IDS_FILE,
+    RawSourceSI,
+    channel_contact_ids,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -88,8 +95,9 @@ def extract_si_qc(
     Raises
     ------
     ValueError
-        If a recording is filtered, if both ``lf_recording`` and ``lfp_from_ap`` are given, or
-        if ``lfp_from_ap`` is set for an AP band that does not decimate to 2.5 kHz.
+        If a recording is filtered, if both ``lf_recording`` and ``lfp_from_ap`` are given, if
+        ``lfp_from_ap`` is set for an AP band that does not decimate to 2.5 kHz, or if the LF
+        band does not have the channels of the AP band.
     """
     for recording in (ap_recording, lf_recording):
         if recording is not None and recording.is_filtered():
@@ -104,8 +112,28 @@ def extract_si_qc(
             f'not decimate to the {LF_FS} Hz of the LF band'
         )
 
+    # The GUI matches the channels of both bands with the contact ids of the AP band
+    contact_ids = channel_contact_ids(ap_recording)
+    if lf_recording is not None and (
+        lf_recording.get_num_channels() != ap_recording.get_num_channels()
+        or (
+            contact_ids is not None
+            and not np.array_equal(channel_contact_ids(lf_recording), contact_ids)
+        )
+    ):
+        raise ValueError('The LF recording does not have the channels of the AP recording')
+
     out_folder = Path(out_folder)
     out_folder.mkdir(parents=True, exist_ok=True)
+    if contact_ids is not None:
+        np.save(out_folder.joinpath(RAW_CONTACT_IDS_FILE), contact_ids)
+    else:
+        # Remove the ids of an earlier run, which would not match these channels
+        out_folder.joinpath(RAW_CONTACT_IDS_FILE).unlink(missing_ok=True)
+        _logger.warning(
+            'The AP recording has no probe contact ids, so the GUI can only match its channels '
+            'to those of the spike sorting by their SpikeGLX ids or their order'
+        )
     kwargs = {'sample_spacing_secs': sample_spacing_secs, 'n_workers': n_workers}
 
     _logger.info('Computing the AP RMS')

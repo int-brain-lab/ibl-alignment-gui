@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 SPIKES_ATTRIBUTES = ['depths', 'amps', 'times', 'clusters']
 CLUSTERS_ATTRIBUTES = ['metrics', 'peakToTrough', 'waveforms', 'channels']
 CHANNELS_ATTRIBUTES = ['rawInd', 'localCoordinates']
+# The probe contact id of each channel of the raw recording, in file order, written with the RMS
+# and spectra computed from a SpikeInterface recording
+RAW_CONTACT_IDS_FILE = '_iblqc_ephysChannels.contactIds.npy'
 
 # The SortingAnalyzer extensions needed to show the spikes and clusters
 SI_REQUIRED_EXTENSIONS = ['templates', 'spike_amplitudes']
@@ -556,15 +559,24 @@ class SortingSourceSI(SortingSource):
     good_units_query : str or None
         Query on the quality metrics that labels a unit as IBL good. When None, the units are not
         labelled.
+    raw_qc_path : Path or None
+        The folder of the datasets computed from the raw recording, whose probe contact ids
+        (``_iblqc_ephysChannels.contactIds``) give the raw channel of each analyzer channel.
     """
 
-    def __init__(self, path: Path | None, good_units_query: str | None = SI_GOOD_UNITS_QUERY):
+    def __init__(
+        self,
+        path: Path | None,
+        good_units_query: str | None = SI_GOOD_UNITS_QUERY,
+        raw_qc_path: Path | None = None,
+    ):
         if path is not None and not has_spikeinterface():
             raise ImportError(
                 f'{path} is a SpikeInterface SortingAnalyzer. {SPIKEINTERFACE_EXTRA_HINT}'
             )
         self.path: Path | None = path
         self.good_units_query: str | None = good_units_query
+        self.raw_qc_path: Path | None = raw_qc_path
         self._analyzer: SortingAnalyzer | None = None
         self._missing_extensions: list[str] = []
 
@@ -723,9 +735,10 @@ class SortingSourceSI(SortingSource):
         """
         Load the channels.
 
-        The raw indices are read from SpikeGLX channel ids (e.g. 'imec0.ap#AP12'), which give
-        the channel in the raw file even when channels were removed before sorting. For other
-        recordings they are the channel order of the analyzer.
+        The raw indices are found from the probe contact ids, matched to those of the raw
+        recording when they were saved with the raw data QC, or read from SpikeGLX channel ids
+        (e.g. 'imec0.ap#AP12'). Both give the channel in the raw file even when channels were
+        removed before sorting. Otherwise they are the channel order of the analyzer.
 
         Returns
         -------
@@ -737,7 +750,9 @@ class SortingSourceSI(SortingSource):
             return Bunch(exists=False)
         analyzer = self.analyzer
         channels = alfio.AlfBunch(
-            rawInd=raw_channel_indices(analyzer.channel_ids),
+            rawInd=raw_channel_indices(
+                analyzer.channel_ids, channel_contact_ids(analyzer), self.load_raw_contact_ids()
+            ),
             localCoordinates=analyzer.get_channel_locations(),
             exists=True,
         )
@@ -746,8 +761,60 @@ class SortingSourceSI(SortingSource):
             channels['shank'] = np.asarray(shank_ids)
         return channels
 
+    def load_raw_contact_ids(self) -> np.ndarray | None:
+        """
+        Load the probe contact ids of the raw recording, saved with the raw data QC.
 
-def raw_channel_indices(channel_ids: np.ndarray) -> np.ndarray:
+        Returns
+        -------
+        np.ndarray or None
+            The contact id of each channel of the raw recording in file order, or None when they
+            were not saved.
+        """
+        if self.raw_qc_path is None:
+            return None
+        file = self.raw_qc_path.joinpath(RAW_CONTACT_IDS_FILE)
+        return np.load(file) if file.exists() else None
+
+
+def channel_contact_ids(extractor: BaseRecording | SortingAnalyzer) -> np.ndarray | None:
+    """
+    Get the probe contact id of each channel of a recording or analyzer.
+
+    probeinterface gives Neuropixels contacts the same ids whichever reader opened the recording
+    (e.g. 'e12' or 's1e288' on multi-shank probes), and SpikeInterface keeps them when channels
+    are removed, so they match the channels of a sorting to those of its raw recording.
+
+    Parameters
+    ----------
+    extractor : BaseRecording or SortingAnalyzer
+        The recording or analyzer.
+
+    Returns
+    -------
+    np.ndarray or None
+        The contact id of each channel, in channel order, or None when there is no probe or it
+        does not set the ids of all its contacts.
+    """
+    try:
+        probe = extractor.get_probe()
+    except ValueError:  # no probe, or more than one
+        return None
+    if probe is None or probe.device_channel_indices is None:
+        return None
+    contact_ids = np.asarray(probe.contact_ids).astype(str)
+    if contact_ids.size != extractor.get_num_channels() or np.any(contact_ids == ''):
+        return None
+    ids = np.empty(contact_ids.size, dtype=contact_ids.dtype)
+    ids[probe.device_channel_indices] = contact_ids
+    return ids
+
+
+def raw_channel_indices(
+    channel_ids: np.ndarray,
+    contact_ids: np.ndarray | None = None,
+    raw_contact_ids: np.ndarray | None = None,
+) -> np.ndarray:
     """
     Get the index of each channel in the raw recording file.
 
@@ -755,13 +822,38 @@ def raw_channel_indices(channel_ids: np.ndarray) -> np.ndarray:
     ----------
     channel_ids : np.ndarray
         The SpikeInterface channel ids.
+    contact_ids : np.ndarray or None
+        The probe contact id of each channel.
+    raw_contact_ids : np.ndarray or None
+        The probe contact id of each channel of the raw recording, in file order.
 
     Returns
     -------
     np.ndarray
-        The channel numbers of SpikeGLX ids (e.g. 'imec0.ap#AP12' gives 12), otherwise the
-        position of each channel.
+        The position of each channel's contact in the raw recording when both contact ids are
+        given, otherwise the channel numbers of SpikeGLX ids (e.g. 'imec0.ap#AP12' gives 12),
+        otherwise the position of each channel.
+
+    Raises
+    ------
+    ValueError
+        If a channel's contact is not in the raw recording.
     """
+    if contact_ids is not None and raw_contact_ids is not None:
+        raw_position = {contact_id: i for i, contact_id in enumerate(raw_contact_ids)}
+        missing = [contact_id for contact_id in contact_ids if contact_id not in raw_position]
+        if missing:
+            raise ValueError(
+                f'{len(missing)} channels of the spike sorting are not in the raw recording the '
+                f'QC was computed from (contacts {", ".join(missing[:5])}), was it computed from '
+                f'another recording?'
+            )
+        return np.array([raw_position[contact_id] for contact_id in contact_ids])
+    if raw_contact_ids is not None:
+        logger.warning(
+            'The raw recording saved its probe contact ids but the spike sorting has none, so '
+            'its channels are matched by their ids'
+        )
     matches = [re.search(r'#(?:AP|LF)(\d+)$', str(channel_id)) for channel_id in channel_ids]
     if all(matches):
         return np.array([int(match.group(1)) for match in matches])

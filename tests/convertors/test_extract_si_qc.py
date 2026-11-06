@@ -117,6 +117,21 @@ class TestExtractSIQC(_ConverterTest):
                         np.testing.assert_allclose(got[key].values, want[key].values, atol=1e-6)
                         np.testing.assert_array_equal(got[key].points, want[key].points)
 
+    def test_contact_ids(self):
+        """The contact ids of the AP recording are saved in file order"""
+        import spikeinterface.extractors as se  # noqa: PLC0415
+
+        from ibl_alignment_gui.loaders.sources import (  # noqa: PLC0415
+            RAW_CONTACT_IDS_FILE,
+            channel_contact_ids,
+        )
+
+        raw, _, _ = self.write_probe()
+        out = self.extract(raw)
+        expected = channel_contact_ids(se.read_spikeglx(raw, stream_id='imec0.ap'))
+        self.assertEqual(expected.size, 384)
+        np.testing.assert_array_equal(np.load(out.joinpath(RAW_CONTACT_IDS_FILE)), expected)
+
     def test_compressed(self):
         """Compressed files give the same datasets as uncompressed ones"""
         raw, ap_file, lf_file = self.write_probe()
@@ -137,6 +152,7 @@ class TestExtractSIQC(_ConverterTest):
             sorted(f.name for f in out.iterdir()),
             sorted(
                 [
+                    '_iblqc_ephysChannels.contactIds.npy',
                     '_iblqc_ephysTimeRmsAP.rawInd.npy',
                     '_iblqc_ephysTimeRmsAP.rms.npy',
                     '_iblqc_ephysTimeRmsAP.timestamps.npy',
@@ -169,6 +185,14 @@ class TestRecordingChecks(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             extract_si_qc(self.ap, 'unused', lf_recording=self.lf, lfp_from_ap=True)
+
+    def test_lf_channels_differ(self):
+        """The LF band must have the channels of the AP band"""
+        from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc  # noqa: PLC0415
+
+        lf = self.lf.remove_channels([self.lf.channel_ids[0]])
+        with self.assertRaises(ValueError):
+            extract_si_qc(self.ap, 'unused', lf_recording=lf)
 
     def test_lfp_from_lf_band(self):
         """The LF band can only be computed from a band sampled at 30 kHz"""

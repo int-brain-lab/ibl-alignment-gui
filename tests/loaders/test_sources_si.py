@@ -9,9 +9,11 @@ import spikeglx
 import one.alf.io as alfio
 from ibl_alignment_gui.loaders.data_loader import RawDataLoader
 from ibl_alignment_gui.loaders.sources import (
+    RAW_CONTACT_IDS_FILE,
     RawSourceSI,
     RawSourceSpikeGLX,
     SortingSourceSI,
+    channel_contact_ids,
     raw_channel_indices,
     shank_numbers,
 )
@@ -121,6 +123,19 @@ class TestSortingSourceSI(unittest.TestCase):
         )
         # The generated probe sets no shanks
         self.assertNotIn('shank', channels)
+
+    def test_channels_matched_by_contact(self):
+        """The raw channels are found from the contact ids saved with the raw data QC"""
+        contact_ids = channel_contact_ids(self.analyzer)
+        with tempfile.TemporaryDirectory() as qc_dir:
+            qc_path = Path(qc_dir)
+            source = SortingSourceSI(self.path, raw_qc_path=qc_path)
+            # Without the saved ids, the channels are in the order of the analyzer
+            np.testing.assert_array_equal(source.load_channels()['rawInd'], np.arange(8))
+            # A raw recording with two more channels, in another order
+            raw_contact_ids = np.r_[['x0', 'x1'], contact_ids[::-1]]
+            np.save(qc_path.joinpath(RAW_CONTACT_IDS_FILE), raw_contact_ids)
+            np.testing.assert_array_equal(source.load_channels()['rawInd'], np.arange(9, 1, -1))
 
     def test_no_spike_sorting(self):
         """Without an analyzer every object is returned with exists=False"""
@@ -241,6 +256,61 @@ class TestRawChannelIndices(unittest.TestCase):
     def test_other_ids(self):
         """Other ids give the channel order"""
         np.testing.assert_array_equal(raw_channel_indices(np.array(['3', '5', 'a'])), [0, 1, 2])
+
+    def test_contact_ids(self):
+        """The contact ids give the channel in the raw file, over the channel ids"""
+        ids = np.array(['imec0.ap#AP0', 'imec0.ap#AP1', 'imec0.ap#AP2'])
+        raw_ind = raw_channel_indices(
+            ids, np.array(['e5', 'e1', 'e3']), np.array(['e0', 'e1', 'e2', 'e3', 'e4', 'e5'])
+        )
+        np.testing.assert_array_equal(raw_ind, [5, 1, 3])
+
+    def test_contact_not_in_raw(self):
+        """A channel whose contact is not in the raw recording is refused"""
+        with self.assertRaises(ValueError):
+            raw_channel_indices(np.array(['CH1', 'CH2']), np.array(['e0', 'e9']), np.array(['e0']))
+
+    def test_raw_contact_ids_only(self):
+        """Without the contact ids of the sorting, the channel ids are used"""
+        ids = np.array(['imec0.ap#AP3', 'imec0.ap#AP4'])
+        with self.assertLogs(LOGGER, 'WARNING'):
+            raw_ind = raw_channel_indices(ids, None, np.array(['e0', 'e1']))
+        np.testing.assert_array_equal(raw_ind, [3, 4])
+
+
+@unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+class TestChannelContactIds(unittest.TestCase):
+    """Test the channel_contact_ids function."""
+
+    def setUp(self):
+        import spikeinterface as si  # noqa: PLC0415
+        from probeinterface import generate_linear_probe  # noqa: PLC0415
+
+        recording = si.generate_recording(num_channels=4, durations=[0.1])
+        probe = generate_linear_probe(num_elec=4)
+        probe.set_contact_ids(['e0', 'e1', 'e2', 'e3'])
+        # The contacts are wired to the channels in reverse order
+        probe.set_device_channel_indices([3, 2, 1, 0])
+        recording.set_probe(probe)
+        self.recording = recording
+
+    def test_channel_order(self):
+        """The ids are in the order of the channels"""
+        np.testing.assert_array_equal(
+            channel_contact_ids(self.recording), ['e3', 'e2', 'e1', 'e0']
+        )
+
+    def test_kept_when_channels_removed(self):
+        """The ids of the remaining channels are kept when channels are removed"""
+        recording = self.recording.remove_channels([self.recording.channel_ids[1]])
+        np.testing.assert_array_equal(channel_contact_ids(recording), ['e3', 'e1', 'e0'])
+
+    def test_no_probe(self):
+        """A recording without a probe has no contact ids"""
+        import spikeinterface as si  # noqa: PLC0415
+
+        recording = si.NumpyRecording(np.zeros((10, 2), dtype='float32'), sampling_frequency=1)
+        self.assertIsNone(channel_contact_ids(recording))
 
 
 @unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)

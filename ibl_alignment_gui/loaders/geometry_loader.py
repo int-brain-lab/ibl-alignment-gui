@@ -517,7 +517,8 @@ class GeometryLoaderSI(GeometryLoaderLocal):
     Geometry loader using a SpikeInterface SortingAnalyzer on the local file system.
 
     The channels are read from the SortingAnalyzer and the electrodes from the ``raw_ephys``
-    folder.
+    folder. The raw channel of each channel is matched with the probe contact ids saved in the
+    ``processed_ephys`` folder, when there are any.
 
     Parameters
     ----------
@@ -528,7 +529,7 @@ class GeometryLoaderSI(GeometryLoaderLocal):
 
     def __init__(self, data_paths: DatasetPaths):
         super().__init__(data_paths)
-        self.sorting = SortingSourceSI(self.spike_path)
+        self.sorting = SortingSourceSI(self.spike_path, raw_qc_path=data_paths.processed_ephys)
 
 
 def arrange_channels_into_banks(

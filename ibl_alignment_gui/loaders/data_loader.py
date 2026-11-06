@@ -470,7 +470,8 @@ class DataLoaderSI(DataLoaderLocal):
     Data loader using a SpikeInterface SortingAnalyzer on the local file system.
 
     The spike sorting is read from the SortingAnalyzer, and the RMS, power spectra and passive
-    data from their ALF folders as in :class:`DataLoaderLocal`.
+    data from their ALF folders as in :class:`DataLoaderLocal`. The raw channel of each channel
+    is matched with the probe contact ids saved with the RMS, when there are any.
 
     Parameters
     ----------
@@ -481,7 +482,7 @@ class DataLoaderSI(DataLoaderLocal):
 
     def __init__(self, data_paths: DatasetPaths):
         super().__init__(data_paths)
-        self.sorting = SortingSourceSI(self.spike_path)
+        self.sorting = SortingSourceSI(self.spike_path, raw_qc_path=self.ephys_path)
 
 
 def _local_reader(path: Path | None) -> AlfReaderLocal | None:

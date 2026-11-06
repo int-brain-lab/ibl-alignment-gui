@@ -24,11 +24,11 @@ from ibl_alignment_gui.loaders.geometry_loader import (
     GeometryLoaderLocal,
     GeometryLoaderSI,
 )
-from ibl_alignment_gui.loaders.sources import RawSourceSpikeGLX
+from ibl_alignment_gui.loaders.sources import RAW_CONTACT_IDS_FILE, RawSourceSpikeGLX
 from ibl_alignment_gui.utils.optional import SPIKEINTERFACE_EXTRA_HINT, has_spikeinterface
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
-from tests.loaders._si_analyzer import write_analyzer
+from tests.loaders._si_analyzer import write_analyzer, write_shank_analyzers
 
 FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures')
 
@@ -353,6 +353,54 @@ class TestProbeHandlerLocalSpikeInterface(unittest.TestCase):
                 )
                 self.assertTrue(plots.scatter_plots)
                 self.assertTrue(plots.image_plots)
+
+
+@unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+class TestProbeHandlerLocalYamlShankAnalyzers(unittest.TestCase):
+    """A multi-shank probe sorted into one SortingAnalyzer per shank, as for sample data 2."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        analyzers, contact_ids = write_shank_analyzers(self.root.joinpath('sorting'))
+
+        # One raw data QC folder for the whole probe, the RMS of each channel its raw index
+        qc = self.root.joinpath('qc')
+        qc.mkdir()
+        n_channels = contact_ids.size
+        np.save(qc.joinpath(RAW_CONTACT_IDS_FILE), contact_ids)
+        np.save(
+            qc.joinpath('_iblqc_ephysTimeRmsAP.rms.npy'), np.tile(np.arange(n_channels), (3, 1))
+        )
+        np.save(qc.joinpath('_iblqc_ephysTimeRmsAP.timestamps.npy'), np.arange(3.0))
+        np.save(qc.joinpath('_iblqc_ephysTimeRmsAP.rawInd.npy'), np.arange(n_channels)[None, :])
+
+        probes = ''.join(
+            f'  probe00{letter}:\n'
+            '    datasets:\n'
+            f'      spike_sorting:\n        path: sorting/{analyzer.name}\n'
+            '      processed_ephys:\n        path: qc\n'
+            f'      output:\n        path: out_{letter}\n'
+            for letter, analyzer in zip('ab', analyzers, strict=True)
+        )
+        self.yaml_file = self.root.joinpath('session.yaml')
+        self.yaml_file.write_text(f'path: {self.root.as_posix()}\n\nprobes:\n{probes}')
+
+    def test_each_shank_shows_its_channels(self):
+        """Each probe entry is a shank, whose RMS is found in the whole probe's QC"""
+        model = ProbeHandlerLocalYaml(self.yaml_file)
+        self.assertEqual(model.get_shanks(None), ['probe00a', 'probe00b'])
+
+        for ishank, label in enumerate(model.shank_labels):
+            with self.subTest(shank=label):
+                shank = model.get_current_shank(label, model.default_config)
+                shank.load_data()
+                self.assertTrue(shank.raw_data['spikes']['exists'])
+                # The columns of the shank's channels, not the first channels of the probe
+                np.testing.assert_array_equal(
+                    np.unique(shank.raw_data['rms_AP']['rms']), np.arange(4) + 4 * ishank
+                )
 
 
 class TestProbeHandlerLocalYaml(unittest.TestCase):

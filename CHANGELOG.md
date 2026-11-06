@@ -9,24 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- A SpikeInterface `SortingAnalyzer` can be opened directly, without converting it to ALF first:
-  give it as the `spike_sorting` of a session YAML, or put it in the data folder. The format is
-  detected from the path, or set with `format: spikeinterface` or `format: alf`. Needs the
-  `spikeinterface` extra.
-- `extract_si_qc` writes the RMS, power spectra and raw data snippets of a probe from its
-  SpikeInterface recordings, read with any SpikeInterface reader and processed as by
-  `extract_ephys`. It also saves the probe contact id of each channel, which the GUI matches to
-  the analyzer's channels, so analyzers with channels removed before sorting, or of one shank,
-  show their own channels.
-- The raw data snippets are read from the `processed_ephys` folder when the `raw_ephys` folder
-  holds neither raw data nor snippets.
+- A SpikeInterface `SortingAnalyzer` can be opened directly as the spike sorting, detected from
+  the path or set with `format: spikeinterface`. Needs the `spikeinterface` extra.
+- `extract_si_qc` writes the RMS, power spectra and raw data snippets from SpikeInterface
+  recordings, with the probe contact ids used to match the analyzer's channels.
+- The raw data snippets are read from `processed_ephys` when `raw_ephys` holds none.
 
 ### Changed
-- The RMS and power spectra written by `extract_ephys` no longer include the sync channel.
-- `extract_ephys` can be imported without the `ibl` extra; only `extract_data` needs it.
-- The two channels of a probe row are kept in file order when the channels are sorted to detect
-  bad channels, so both readers give the same channel flags. The flags of NP2 probes can change
-  slightly.
+- `extract_ephys` no longer saves the sync channel, and only `extract_data` needs the `ibl`
+  extra.
+- Bad channel detection keeps the two channels of a probe row in file order, which can change
+  the flags of NP2 probes slightly.
 
 ## [0.1.0a4] - 2026-11-03
 

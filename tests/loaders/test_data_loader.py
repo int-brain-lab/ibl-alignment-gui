@@ -601,6 +601,40 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
             self.assertIsNone(loader.lf)
 
 
+class TestSpikeGLXLoaderLocalSnippets(unittest.TestCase):
+    """The snippets are read beside the raw data, else from the processed ephys folder."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.raw = self.root.joinpath('raw')
+        self.processed = self.root.joinpath('processed')
+        self.raw.mkdir()
+        self.processed.mkdir()
+        np.save(self.processed.joinpath(RawDataLoader.AP_SNIPPETS_FILE), {'from': 'processed'})
+
+    def test_processed_without_raw_data(self):
+        """Without raw data or snippets beside it, the processed folder's snippets are read"""
+        for raw in (None, self.raw):
+            with self.subTest(raw=raw):
+                loader = SpikeGLXLoaderLocal(raw, self.processed)
+                self.assertEqual(loader.save_path, self.processed)
+
+    def test_snippets_beside_raw_data_first(self):
+        """Snippets cached beside the raw data are read first"""
+        np.save(self.raw.joinpath(RawDataLoader.LF_SNIPPETS_FILE), {'from': 'raw'})
+        self.assertEqual(SpikeGLXLoaderLocal(self.raw, self.processed).save_path, self.raw)
+
+    def test_raw_data_first(self):
+        """With raw data, its snippets are computed and cached beside it"""
+        self.raw.joinpath('test_g0_t0.imec0.ap.bin').touch()
+        self.assertEqual(SpikeGLXLoaderLocal(self.raw, self.processed).save_path, self.raw)
+
+    def test_no_snippets(self):
+        """Without snippets in the processed folder, nothing changes"""
+        loader = SpikeGLXLoaderLocal(self.raw, self.root.joinpath('empty'))
+        self.assertEqual(loader.save_path, self.raw)
+
+
 class TestFeatureLoaderOneTables(unittest.TestCase):
     """Reading a feature table, downloading it when it is not complete on disk."""
 

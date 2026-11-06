@@ -1128,7 +1128,9 @@ class ProbeHandlerCSV(ProbeHandler):
                 loaders['upload'] = AlignmentUploaderLocal(
                     data_paths.spike_sorting, 0, 1, self.brain_atlas, user=user
                 )
-                loaders['ephys'] = SpikeGLXLoaderLocal(data_paths.raw_ephys)
+                loaders['ephys'] = SpikeGLXLoaderLocal(
+                    data_paths.raw_ephys, data_paths.processed_ephys
+                )
                 loaders['plots'] = PlotLoader()
                 self.shanks[shank.probe]['quarter'] = ShankHandler(loaders, 0)
             else:  # Dense is online
@@ -1327,7 +1329,9 @@ class ProbeHandlerLocal(ProbeHandler):
                 self.data_paths.output, ish, self.n_shanks, self.brain_atlas
             )
             if self.data_paths.raw_ephys is not None:
-                loaders['ephys'] = SpikeGLXLoaderLocal(self.data_paths.raw_ephys)
+                loaders['ephys'] = SpikeGLXLoaderLocal(
+                    self.data_paths.raw_ephys, self.data_paths.processed_ephys
+                )
             # A features file in the folder holds every shank; the loader splits it per shank
             if self.data_paths.features is not None:
                 loaders['features'] = FeatureLoaderLocal(self.data_paths.features)
@@ -1443,7 +1447,9 @@ class ProbeHandlerLocalYaml(ProbeHandler):
                 loaders['data'] = make_data_loader(data_path)
                 loaders['align'] = self._build_align_loader(data_path, ishank)
                 loaders['upload'] = self._build_upload_loader(data_path, ishank)
-                loaders['ephys'] = SpikeGLXLoaderLocal(data_path.raw_ephys)
+                loaders['ephys'] = SpikeGLXLoaderLocal(
+                    data_path.raw_ephys, data_path.processed_ephys
+                )
                 # Per-session features (if the yaml specifies them) load via the existing
                 # shank_handler.load_data -> loaders['features'] path, so the session is
                 # self-contained and switching yaml switches the features too.

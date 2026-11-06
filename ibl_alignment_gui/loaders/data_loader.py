@@ -847,16 +847,39 @@ class SpikeGLXLoaderLocal(RawDataLoader):
     """
     SpikeGLX loader using local file system.
 
+    The snippets are cached beside the raw data. When there is neither raw data nor cached
+    snippets there, the snippets are read from the processed ephys folder, where
+    ``extract_si_qc`` writes them.
+
     Parameters
     ----------
     meta_path : Path or None
         The folder holding the meta and binary files, or None when there is no raw data.
+    processed_path : Path or None
+        The processed ephys folder, which can hold the snippets instead.
     """
 
-    def __init__(self, meta_path: Path):
-        self.meta_path: Path = meta_path
+    def __init__(self, meta_path: Path | None, processed_path: Path | None = None):
+        self.meta_path: Path | None = meta_path
+        ap, lf = self._source('ap'), self._source('lf')
 
-        super().__init__(self._source('ap'), self._source('lf'), self.meta_path)
+        save_path = meta_path
+        if (
+            ap is None
+            and lf is None
+            and not self._has_snippets(meta_path)
+            and self._has_snippets(processed_path)
+        ):
+            save_path = processed_path
+
+        super().__init__(ap, lf, save_path)
+
+    @classmethod
+    def _has_snippets(cls, path: Path | None) -> bool:
+        """Whether a folder holds snippet files."""
+        return path is not None and any(
+            path.joinpath(file).exists() for file in (cls.AP_SNIPPETS_FILE, cls.LF_SNIPPETS_FILE)
+        )
 
     def _source(self, band: str) -> RawSourceSpikeGLX | None:
         """

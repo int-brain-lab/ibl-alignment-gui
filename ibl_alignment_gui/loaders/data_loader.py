@@ -529,15 +529,19 @@ class RawDataLoader:
         Directory where cached snippet data will be saved.
     """
 
+    # The files the snippets are cached in, in the save path
+    AP_SNIPPETS_FILE = 'alignment_gui_raw_data_snippets.npy'
+    LF_SNIPPETS_FILE = 'alignment_gui_raw_lf_data_snippets.npy'
+
     def __init__(self, ap: RawSource | None, lf: RawSource | None, save_path: Path | None = None):
         self.ap: RawSource | None = ap
         self.lf: RawSource | None = lf
         self.save_path: Path | None = save_path
         self.cached_ap_path: Path | None = (
-            save_path.joinpath('alignment_gui_raw_data_snippets.npy') if save_path else None
+            save_path.joinpath(self.AP_SNIPPETS_FILE) if save_path else None
         )
         self.cached_lf_path: Path | None = (
-            save_path.joinpath('alignment_gui_raw_lf_data_snippets.npy') if save_path else None
+            save_path.joinpath(self.LF_SNIPPETS_FILE) if save_path else None
         )
 
     def load_ap_snippets(self, twin: float = 1) -> Bunch[str, Any] | defaultdict[str, Any]:

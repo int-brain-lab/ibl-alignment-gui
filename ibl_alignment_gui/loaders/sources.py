@@ -881,8 +881,13 @@ class RawSourceSI(RawSource):
 
     @property
     def duration(self) -> float:
-        """The duration of the recording (s)."""
-        return self.recording.get_total_duration()
+        """
+        The duration of the recording (s).
+
+        Computed from the number of samples, as for SpikeGLX: SpikeInterface computes it from its
+        times, which can fall a float error short and move a snippet by a sample.
+        """
+        return self.n_samples / self.fs
 
     @property
     def n_samples(self) -> int:

@@ -52,7 +52,10 @@ def write_spikeglx(
     nc = 385
     ns = int(duration * fs)
     meta = next(FIXTURE_PATH.joinpath(np_type).glob('*.ap.meta')).read_text()
+    bin_file = folder.joinpath(f'{np_type}_g0_t0.imec0.{band}.bin')
     replace = {
+        # SpikeInterface reads the stream from the file name in the metadata
+        'fileName': bin_file.as_posix(),
         'imSampRate': fs,
         'fileTimeSecs': ns / fs,
         'fileSizeBytes': ns * nc * 2,
@@ -63,7 +66,6 @@ def write_spikeglx(
         f'{key}={replace[key]}' if (key := line.split('=')[0]) in replace else line
         for line in meta.splitlines()
     ]
-    bin_file = folder.joinpath(f'{np_type}_g0_t0.imec0.{band}.bin')
     bin_file.with_suffix('.meta').write_text('\n'.join(lines) + '\n')
 
     components = components or [(1000 if band == 'ap' else 100, 20)]

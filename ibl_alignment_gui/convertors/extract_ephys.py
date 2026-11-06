@@ -6,14 +6,12 @@ from pathlib import Path
 
 import numpy as np
 import spikeglx
-from phylib.io import alf
 from scipy import signal
 from tqdm import tqdm
 
 import one.alf.io as alfio
 from ibl_alignment_gui.loaders.sources import RawSourceSpikeGLX
 from ibldsp import fourier, utils, voltage
-from ibllib.ephys import ephysqc
 
 _logger = logging.getLogger(__name__)
 
@@ -364,14 +362,10 @@ def extract_rmsmap(
     if lfp_from_ap and not _is_np2(fbin):
         raise ValueError(f'{fbin} is not from an NP2 probe, so its AP band holds no LFP')
     _logger.info(f'Computing QC for {fbin}')
-    sglx = spikeglx.Reader(fbin)
-    # check if output ALF files exist already:
+    with spikeglx.Reader(fbin) as reader:
+        band = 'lf' if lfp_from_ap else reader.type
     out_folder = Path(fbin).parent if out_folder is None else Path(out_folder)
-    band = 'LF' if lfp_from_ap else sglx.type.upper()
-    alf_object_time = f'ephysTimeRms{band}'
-    alf_object_freq = f'ephysSpectralDensity{band}'
 
-    # crunch numbers
     rms = rmsmap(
         fbin,
         spectra=spectra,
@@ -379,9 +373,29 @@ def extract_rmsmap(
         lfp_from_ap=lfp_from_ap,
         n_workers=n_workers,
     )
-    # output ALF files, single precision with the optional label as suffix before extension
-    if not out_folder.exists():
-        out_folder.mkdir()
+    save_rmsmap(rms, out_folder, band, spectra=spectra)
+
+
+def save_rmsmap(rms, out_folder, band, spectra=True):
+    """
+    Write the _iblqc_ephysTimeRms and _iblqc_ephysSpectralDensity ALF files of a band.
+
+    Parameters
+    ----------
+    rms : dict
+        The RMS and spectra, as returned by :func:`compute_rmsmap`.
+    out_folder : str or pathlib.Path
+        Folder to write the ALF files to, created if it does not exist.
+    band : str
+        The band the files are saved as, 'ap' or 'lf'.
+    spectra : bool
+        Whether to write the spectral density.
+    """
+    out_folder = Path(out_folder)
+    alf_object_time = f'ephysTimeRms{band.upper()}'
+    alf_object_freq = f'ephysSpectralDensity{band.upper()}'
+    # output ALF files, single precision
+    out_folder.mkdir(parents=True, exist_ok=True)
     # The raw index of each channel is saved with the data, (1, channels) so that it broadcasts
     # over the windows and frequencies. It records that the channels are in file order, which
     # older versions of this function did not write them in.
@@ -441,6 +455,10 @@ def ks2_to_alf(ks_path, bin_path, out_path, bin_file=None, ampfactor=1, label=No
     force : bool
         Whether to overwrite an existing dataset.
     """
+    from phylib.io import alf  # noqa: PLC0415
+
+    from ibllib.ephys import ephysqc  # noqa: PLC0415
+
     m = ephysqc.phy_model_from_ks2_path(ks2_path=ks_path, bin_path=bin_path, bin_file=bin_file)
     ac = alf.EphysAlfCreator(m)
     ac.convert(out_path, label=label, force=force, ampfactor=ampfactor)

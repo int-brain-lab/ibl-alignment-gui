@@ -8,70 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0a5] - 2026-11-09
+
 ### Added
-- A SpikeInterface `SortingAnalyzer` can be opened directly as the spike sorting, detected from
-  the path or set with `format: spikeinterface`. Needs the `spikeinterface` extra.
+- A SpikeInterface `SortingAnalyzer` can be opened directly as the spike sorting (`spikeinterface`
+  extra).
 - `extract_si_qc` writes the RMS, power spectra and raw data snippets from SpikeInterface
-  recordings, with the probe contact ids used to match the analyzer's channels.
+  recordings.
 - The raw data snippets are read from `processed_ephys` when `raw_ephys` holds none.
 
 ### Changed
-- `extract_ephys` no longer saves the sync channel, and only `extract_data` needs the `ibl`
-  extra.
-- Bad channel detection keeps the two channels of a probe row in file order, which can change
-  the flags of NP2 probes slightly.
-- datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
+- `extract_ephys` no longer saves the sync channel, and only `extract_data` needs the `ibl` extra.
+- Bad channel detection keeps the channels of a probe row in file order, which can slightly change
+  the flags of NP2 probes.
+- The original alignment is sized to the probe, up to 1.5 times the deepest channel, instead of
+  +-6 mm, so reference lines above 6 mm are kept. Probes with channels up to 4 mm are unchanged.
+- The spike-based images are drawn at the depths their spikes were binned at, leaving out spikes
+  below the probe tip.
+- Previous and Next show the reference lines of the fit at each step.
+- Sessions with more than four shanks stop with an error saying so.
+- datoviz is only loaded when the 3D view is opened.
 
 ### Fixed
-- A SortingAnalyzer whose processed ephys was computed from a recording with other probe contacts
-  opens without the RMS, power spectra and snippets, with a warning, instead of failing to load.
-- Opening a folder or yaml session with more than four shanks stops with an error saying the GUI
-  supports up to four, instead of an `IndexError`.
-- A probe in a session yaml without a `datasets:` section takes its datasets from `defaults:`
-  instead of failing to load.
-- A folder with no spike sorting, only the SpikeGLX `ap.meta`, opens with the probe layout from the
-  meta file, as a yaml session already does.
-- A multi-shank session where some shanks have no picks displays correctly. Those shanks show
-  their ephys plots without a slice, instead of the slice and reference lines failing for every
-  shank.
-- Previous and Next show the reference lines that the fit at that step used, instead of keeping
-  the lines of the latest fit. Lines added or moved since the last fit are discarded.
-- Choosing another alignment from the dropdown keeps the current fit in the alignment history, so
-  it can be recovered with undo, instead of overwriting it.
-- A shank with no spikes, e.g. a dead shank, loads without its spike plots instead of failing the
-  whole session.
-- Uploading to Alyx re-reads the stored alignments first, so an alignment uploaded by someone else
-  since the GUI loaded them is kept, and only replaces earlier alignments of the same user
-  (`mf` no longer matches `mfaulkner`).
-- The original alignment of a probe with channels above 4 mm starts from a range sized to the
-  probe (up to 1.5 times the deepest channel) instead of +-6 mm, so reference lines placed above
-  6 mm are no longer dropped from the fit. Probes with channels up to 4 mm are unchanged.
-- The firing rate, correlation, passive and receptive field images are drawn at the depths their
-  spikes were binned at. Spikes below the lowest site shifted or compressed these images before.
-  Spikes localised below the probe tip (depth < 0) are left out of them.
-- Replotting the probe plot replaces its colour bar instead of adding another one, and an empty
-  probe plot no longer keeps the previous colour bar. The same applies to the scale factor colour
-  bar on each fit and to the shared colour bars shown with both configurations.
-- Opening the Range Controller or Ephys Features while it is already open brings it to the front
-  instead of connecting its controls again, which made each slider change replot more than once
-  and Next/Previous skip pages.
-- The Range Controller closes when a new session is loaded, instead of keeping the previous
-  session's shanks and failing on the next plot change.
-- Closing a plugin window (Range Controller, Ephys Features, 3D features or a cluster popup)
-  deletes it instead of keeping it hidden, and closing the 3D view releases its datoviz server.
-  Clicking a cluster whose popup is already open brings that popup to the front.
-- Dragging a range slider (Range Controller, Ephys Features) redraws the plots at most every
-  100 ms and once more on release, instead of on every mouse movement.
-- In Ephys Features, changing page or region selects the probe in the same column of the new
-  page, so the colour slider and reset act on a probe that is shown.
-- Loading a session with fewer shanks than the previous one no longer leaves empty rows and
-  their splitter handles in the shank grid.
-- The shank markers in the 3D view are replaced on each replot instead of being added again,
-  keep a fixed colour per shank, no longer overwrite each other when shank names end in the same
-  character, and are shown with both configurations whatever the configuration names.
-- Reference lines hidden with Shift+H stay hidden through fits, resets and changes of mapping or
-  configuration. Double-clicking to add a line shows them again, and a new probe starts with them
-  shown.
+- Uploading to Alyx keeps alignments uploaded by others since the GUI loaded them, and only
+  replaces earlier alignments of the same user.
+- Sessions load when a shank has no spikes or no picks, a folder has only an `ap.meta`, a yaml
+  probe has no `datasets:`, or a SortingAnalyzer's processed ephys is from another recording
+  (shown without its RMS and snippets).
+- Choosing another alignment keeps the current fit in the undo history.
+- Colour bars, plugin windows, their signal connections and the 3D markers no longer build up over
+  a session.
+- Hidden reference lines stay hidden, range sliders redraw at most every 100 ms, Ephys Features
+  keeps its selection on the page shown, and loading fewer shanks leaves no empty grid rows.
 
 ## [0.1.0a4] - 2026-11-03
 

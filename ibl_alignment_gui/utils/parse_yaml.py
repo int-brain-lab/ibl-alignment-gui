@@ -331,7 +331,8 @@ def load_alignment_yaml(
         for pname, probe in config.probes.items():
             probe_path = probe.path
             probes.append(pname)
-            datasets = probe.datasets
+            # A probe without datasets takes them all from the defaults section
+            datasets = probe.datasets or {}
 
             resolved_paths = DatasetPaths()
 

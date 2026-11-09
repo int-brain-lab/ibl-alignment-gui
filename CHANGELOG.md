@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- A probe in a session yaml without a `datasets:` section takes its datasets from `defaults:`
+  instead of failing to load.
 - A folder with no spike sorting, only the SpikeGLX `ap.meta`, opens with the probe layout from the
   meta file, as a yaml session already does.
 - A multi-shank session where some shanks have no picks displays correctly. Those shanks show

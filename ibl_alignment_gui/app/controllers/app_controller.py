@@ -1223,6 +1223,8 @@ class AlignmentGUIController:
             self.remove_reference_lines_from_display(shanks=[self.model.selected_shank])
             # Reset arrays that track the reference lines
             self.reset_reference_line_arrays(shanks=[self.model.selected_shank])
+            # Move to a new slot in the alignment history, so the current fit is kept for undo
+            self.reset_feature_and_tracks(shanks=[self.model.selected_shank])
             # Add the reference lines for the selected alignment
             self.set_init_reference_lines(shanks=[self.model.selected_shank])
             # Update the plots

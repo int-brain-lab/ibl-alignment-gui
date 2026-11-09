@@ -145,6 +145,8 @@ autodoc_mock_imports = [
     'phylib',
     # ephysatlas extra
     'ephysatlas',
+    # spikeinterface extra
+    'spikeinterface',
 ]
 
 # Allen/Code Ocean mode is not documented, so its classes and functions in shared modules are

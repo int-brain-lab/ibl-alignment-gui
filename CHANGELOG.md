@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- Previous and Next show the reference lines that the fit at that step used, instead of keeping
+  the lines of the latest fit. Lines added or moved since the last fit are discarded.
 - Choosing another alignment from the dropdown keeps the current fit in the alignment history, so
   it can be recovered with undo, instead of overwriting it.
 - A shank with no spikes, e.g. a dead shank, loads without its spike plots instead of failing the

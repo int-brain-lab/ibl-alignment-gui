@@ -1807,6 +1807,7 @@ class AlignmentGUIController:
         arrow is pressed.
         """
         if self.model.next_idx():
+            self.restore_reference_lines()
             self.update_plots(shanks=[self.model.selected_shank])
             self.log_fit()
 
@@ -1817,8 +1818,27 @@ class AlignmentGUIController:
         Called when next button or Shift+left arrow is pressed.
         """
         if self.model.prev_idx():
+            self.restore_reference_lines()
             self.update_plots(shanks=[self.model.selected_shank])
             self.log_fit()
+
+    def restore_reference_lines(self) -> None:
+        """
+        Replace the reference lines of the selected shank with those of the alignment shown.
+
+        Called after moving through the alignment history, so the lines on display are the ones
+        the fit at that step used. Lines added or moved since the last fit are discarded.
+        """
+        shanks = [self.model.selected_shank]
+        self.remove_reference_lines_from_display(shanks=shanks)
+        self.reset_reference_line_arrays(shanks=shanks)
+        self.create_fit_reference_lines(shanks=shanks)
+
+    @shank_loop
+    def create_fit_reference_lines(self, items: ShankController, **kwargs) -> None:
+        """Create reference lines at the positions used by the fit at the current history step."""
+        # The first and last points are the range ends of the alignment, not reference lines
+        self.create_reference_lines(items.model.feature[1:-1] * 1e6, items)
 
     def log_fit(self) -> None:
         """

@@ -43,6 +43,7 @@ from ibl_alignment_gui.loaders.histology_loader import (
     make_slice_loader,
 )
 from ibl_alignment_gui.loaders.plot_loader import PlotLoader
+from ibl_alignment_gui.loaders.sources import raw_qc_matches_sorting
 from ibl_alignment_gui.loaders.transform_loader import TransformLoaderAllen
 from ibl_alignment_gui.utils.parse_yaml import (
     DatasetPaths,
@@ -1250,6 +1251,32 @@ def find_sorting_analyzer(folder: Path) -> Path | None:
     return analyzers[0] if analyzers else None
 
 
+def drop_unmatched_raw_qc(data_paths: DatasetPaths) -> DatasetPaths:
+    """
+    Leave out the processed ephys of a SortingAnalyzer when it is from another recording.
+
+    The raw channel of each analyzer channel is found from the contact ids saved with the raw
+    data QC. When they do not match, the session is still opened with the spike sorting, but
+    without the RMS, power spectra and snippets, which would otherwise be shown on the wrong
+    channels.
+
+    Parameters
+    ----------
+    data_paths : DatasetPaths
+        The resolved dataset paths of the probe.
+
+    Returns
+    -------
+    DatasetPaths
+        The same paths, without the processed ephys folder when it does not match.
+    """
+    if data_paths.spike_sorting_format != 'spikeinterface' or raw_qc_matches_sorting(
+        data_paths.spike_sorting, data_paths.processed_ephys
+    ):
+        return data_paths
+    return data_paths.model_copy(update={'processed_ephys': None})
+
+
 def make_data_loader(data_paths: DatasetPaths) -> DataLoaderLocal:
     """Build the local data loader for the format of the spike sorting."""
     if data_paths.spike_sorting_format == 'spikeinterface':
@@ -1299,6 +1326,7 @@ class ProbeHandlerLocal(ProbeHandler):
             features=find_features_file(folder_path),
             spike_sorting_format='spikeinterface' if analyzer else 'alf',
         )
+        self.data_paths = drop_unmatched_raw_qc(self.data_paths)
 
         # Load in the geometry and find the number of shnaks
         self.geom = make_geometry_loader(self.data_paths)
@@ -1385,6 +1413,10 @@ class ProbeHandlerLocalYaml(ProbeHandler):
         self.configs, self.probes, self.data_paths, self.histology_space = load_alignment_yaml(
             yaml_file
         )
+        self.data_paths = {
+            config: {probe: drop_unmatched_raw_qc(paths) for probe, paths in probes.items()}
+            for config, probes in self.data_paths.items()
+        }
 
         # The base sets a single 'default' config; mirror it to the yaml config name and, when the
         # yaml carries two configs, expose both (plus 'both') as in the multi-config workflows.

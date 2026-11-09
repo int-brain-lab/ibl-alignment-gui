@@ -872,6 +872,48 @@ def raw_channel_indices(
     return np.arange(len(channel_ids))
 
 
+def raw_qc_matches_sorting(analyzer_path: Path, raw_qc_path: Path | None) -> bool:
+    """
+    Check that the raw data QC in a folder was computed from the channels of a SortingAnalyzer.
+
+    The QC matches when it saved no probe contact ids, so there is nothing to compare, or when
+    every channel of the analyzer is among its contacts, as when channels were removed before
+    sorting.
+
+    Parameters
+    ----------
+    analyzer_path : Path
+        The SortingAnalyzer.
+    raw_qc_path : Path or None
+        The folder of the datasets computed from the raw recording.
+
+    Returns
+    -------
+    bool
+        False when the analyzer has channels that the raw recording does not, which means the
+        QC was computed from a recording with another channel map.
+    """
+    if raw_qc_path is None or not raw_qc_path.joinpath(RAW_CONTACT_IDS_FILE).exists():
+        return True
+    import spikeinterface as si  # noqa: PLC0415
+
+    contact_ids = channel_contact_ids(si.load(analyzer_path, load_extensions=False))
+    if contact_ids is None:
+        return True
+    raw_contact_ids = set(np.load(raw_qc_path.joinpath(RAW_CONTACT_IDS_FILE)))
+    missing = [contact_id for contact_id in contact_ids if contact_id not in raw_contact_ids]
+    if missing:
+        logger.warning(
+            '%d channels of the spike sorting are not in the raw recording the QC in %s was '
+            'computed from (contacts %s), so its RMS, power spectra and snippets are not shown. '
+            'Was it computed from another recording?',
+            len(missing),
+            raw_qc_path,
+            ', '.join(missing[:5]),
+        )
+    return not missing
+
+
 class RawSourceSpikeGLX(RawSource):
     """
     One band of a SpikeGLX recording, read with a spikeglx.Reader or a ONE Streamer.

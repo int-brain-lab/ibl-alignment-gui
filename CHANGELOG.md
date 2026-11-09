@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- A SortingAnalyzer whose processed ephys was computed from a recording with other probe contacts
+  opens without the RMS, power spectra and snippets, with a warning, instead of failing to load.
 - Opening a folder or yaml session with more than four shanks stops with an error saying the GUI
   supports up to four, instead of an `IndexError`.
 - A probe in a session yaml without a `datasets:` section takes its datasets from `defaults:`

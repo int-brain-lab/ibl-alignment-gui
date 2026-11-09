@@ -214,6 +214,13 @@ class DataLoader:
 
         if spikes['exists']:
             spikes, *_ = self.filter_spikes_by_chns(spikes, clusters, channels)
+            # A shank without spikes, e.g. a dead shank, is shown without the spike plots rather
+            # than failing the whole load
+            if spikes['times'].size == 0:
+                logger.warning(
+                    'There are no spikes on this shank, so the spike plots will not display'
+                )
+                spikes = Bunch(exists=False)
 
         return spikes, clusters, channels
 

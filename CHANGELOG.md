@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- A shank with no spikes, e.g. a dead shank, loads without its spike plots instead of failing the
+  whole session.
 - Uploading to Alyx re-reads the stored alignments first, so an alignment uploaded by someone else
   since the GUI loaded them is kept, and only replaces earlier alignments of the same user
   (`mf` no longer matches `mfaulkner`).

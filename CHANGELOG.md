@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- The original alignment of a probe with channels above 4 mm starts from a range sized to the
+  probe (up to 1.5 times the deepest channel) instead of +-6 mm, so reference lines placed above
+  6 mm are no longer dropped from the fit. Probes with channels up to 4 mm are unchanged.
 - The firing rate, correlation, passive and receptive field images are drawn at the depths their
   spikes were binned at. Spikes below the lowest site shifted or compressed these images before.
   Spikes localised below the probe tip (depth < 0) are left out of them.

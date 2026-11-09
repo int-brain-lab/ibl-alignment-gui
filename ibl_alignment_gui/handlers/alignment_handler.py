@@ -148,6 +148,10 @@ class AlignmentHandler:
         self.ephysalign: EphysAlignment = EphysAlignment(
             xyz_picks, chn_depths, brain_atlas=self.brain_atlas
         )
+        # The starting range of the 'original' alignment, sized to the probe:
+        # -6 mm to max(6 mm, 1.5 x deepest channel)
+        self.default_feature: np.ndarray = np.copy(self.ephysalign.feature_init)
+        self.default_track: np.ndarray = np.copy(self.ephysalign.track_init)
         self.tracks: list = [0] * (self.buffer.max_idx + 1)
         self.features: list = [0] * (self.buffer.max_idx + 1)
         self.hist_mapping: str = 'Allen'
@@ -302,6 +306,9 @@ class AlignmentHandler:
         """
         Set the initial feature and track values for the current buffer index.
 
+        If neither is given, as for the 'original' alignment, the range sized to the probe is
+        used.
+
         Parameters
         ----------
         feature : np.ndarray, optional
@@ -309,10 +316,12 @@ class AlignmentHandler:
         track : np.ndarray, optional
             Initial track alignment.
         """
+        if feature is None and track is None:
+            feature, track = self.default_feature, self.default_track
         if feature is not None:
-            self.ephysalign.feature_init = feature
+            self.ephysalign.feature_init = np.copy(feature)
         if track is not None:
-            self.ephysalign.track_init = track
+            self.ephysalign.track_init = np.copy(track)
         self.features[self.idx], self.tracks[self.idx], _ = self.ephysalign.get_track_and_feature()
 
     def reset_features_and_tracks(self) -> None:

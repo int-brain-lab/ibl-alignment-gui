@@ -71,6 +71,17 @@ configurations:                 # ... or configurations, not both
 : Folder holding the dataset, absolute or relative. `~` is expanded to the home folder. For
   `features` it is the path to a file rather than a folder.
 
+`format`
+: Only for `spike_sorting`: `alf` for ALF files, or `spikeinterface` for a SpikeInterface
+  `SortingAnalyzer` folder or `.zarr`. Optional: when left out it is detected from the path. Can
+  be set in `defaults`. `spikeinterface` needs the `spikeinterface` extra.
+
+  ```yaml
+  spike_sorting:
+    path: sorting_analyzer.zarr
+    format: spikeinterface
+  ```
+
 ## Datasets
 
 Every probe must give `output`, the folder the results are written to, and at least one of
@@ -83,10 +94,10 @@ data is never looked for.
 | Dataset | Contents | If not given |
 |---|---|---|
 | `output` | Where the results are written | Required |
-| `spike_sorting` | Spike sorting output | Required if `processed_ephys` is not given; otherwise the plots that need spike sorting are empty |
-| `processed_ephys` | RMS and power spectra | Read from `raw_ephys`, or from `spike_sorting` if there is no `raw_ephys`; required if neither is given |
+| `spike_sorting` | Spike sorting output, as ALF files or a SpikeInterface `SortingAnalyzer` | Required if `processed_ephys` is not given; otherwise the plots that need spike sorting are empty |
+| `processed_ephys` | RMS and power spectra, and the raw data snippets written by `extract_si_qc` | Read from `raw_ephys`, or from `spike_sorting` if there is no `raw_ephys`; required if neither is given |
 | `picks` | Traced probe trajectory | Read from `spike_sorting`; required if there is no `spike_sorting` |
-| `raw_ephys` | Raw SpikeGLX recordings and metadata | No raw data snippets are shown; required if `spike_sorting` is not given |
+| `raw_ephys` | Raw SpikeGLX recordings and metadata | Raw data snippets are only shown if `processed_ephys` holds them; required if `spike_sorting` is not given |
 | `histology` | Histology volumes | Only the Allen atlas slices are shown |
 | `features` | Per-channel features file | No channel predictions |
 
@@ -114,6 +125,8 @@ Loading the file fails when:
 - a probe does not give `output`, gives neither `spike_sorting` nor `processed_ephys`, or has no
   `picks` and no `spike_sorting` to read them from
 - a probe without `spike_sorting` does not give `raw_ephys`
+- `format` is not `alf` or `spikeinterface`, or is `spikeinterface` and there is no
+  `SortingAnalyzer` at the `spike_sorting` path
 - there are more than two configurations
 - the configurations do not all contain the same probes
 - a relative path cannot be made absolute

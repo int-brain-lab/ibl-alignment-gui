@@ -2,7 +2,7 @@
 # How to install the optional extras
 
 This guide shows you how to add the packages needed for converting kilosort output, the IBL online
-mode or the channel prediction models.
+mode, the channel prediction models or SpikeInterface sortings.
 
 ## Prerequisites
 
@@ -22,6 +22,7 @@ mode or the channel prediction models.
    ```console
    uv pip install -e ".[ibl]"
    uv pip install -e ".[ephysatlas]"
+   uv pip install -e ".[spikeinterface]"
    ```
 
    With `pip` (in a `venv` or `conda` environment):
@@ -29,6 +30,7 @@ mode or the channel prediction models.
    ```console
    pip install -e ".[ibl]"
    pip install -e ".[ephysatlas]"
+   pip install -e ".[spikeinterface]"
    ```
 
    `ephysatlas` also installs everything `ibl` does, so for both, install `ephysatlas` only.
@@ -38,6 +40,7 @@ mode or the channel prediction models.
    ```console
    python -c "import ibllib"       # ibl
    python -c "import ephysatlas"   # ephysatlas
+   python -c "import spikeinterface"   # spikeinterface
    ```
 
    With `ephysatlas` installed, a `Channel Prediction` entry appears in the `Plugins` menu the

@@ -21,7 +21,7 @@ through them.
 | `rms AP` | AP band RMS over time and depth | `_iblqc_ephysTimeRmsAP` |
 | `rms LF` | LF band RMS over time and depth | `_iblqc_ephysTimeRmsLF` |
 | `LF spectrum` | LF power by frequency and depth | `_iblqc_ephysSpectralDensityLF` |
-| `Raw ap snippet <n>`, `Raw lf snippet <n>` | Short snippets of the raw data | Raw AP or LF data |
+| `Raw ap snippet <n>`, `Raw lf snippet <n>` | Short snippets of the raw data | Raw AP or LF data, or snippets from `extract_si_qc` |
 
 Clicking a cluster in a cluster plot opens its waveform (see {ref}`ref-plugins`).
 
@@ -31,10 +31,10 @@ Clicking a cluster in a cluster plot opens its waveform (see {ref}`ref-plugins`)
 |---|---|---|
 | `Firing Rate` | Mean firing rate along depth | Spike sorting |
 | `Amplitude` | Mean amplitude along depth | Spike sorting |
-| `Dead Channels` | Channels detected as dead | Raw AP data |
-| `Noisy Channels Coherence` | Channels detected as noisy by coherence | Raw AP data |
-| `Noisy Channels PSD` | Channels detected as noisy by power spectrum | Raw AP data |
-| `Outside Channels` | Channels detected as outside the brain | Raw AP data |
+| `Dead Channels` | Channels detected as dead | Raw AP data, or snippets from `extract_si_qc` |
+| `Noisy Channels Coherence` | Channels detected as noisy by coherence | Raw AP data, or snippets from `extract_si_qc` |
+| `Noisy Channels PSD` | Channels detected as noisy by power spectrum | Raw AP data, or snippets from `extract_si_qc` |
+| `Outside Channels` | Channels detected as outside the brain | Raw AP data, or snippets from `extract_si_qc` |
 
 {kbd}`Alt+2` / {kbd}`Shift+Alt+2` cycle through them.
 

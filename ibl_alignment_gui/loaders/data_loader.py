@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
@@ -14,9 +13,17 @@ import spikeglx
 
 import ibldsp.voltage
 import one.alf.io as alfio
+from ibl_alignment_gui.loaders.sources import (
+    AlfReaderLocal,
+    AlfReaderOne,
+    EphysQCSourceAlf,
+    PassiveSourceAlf,
+    RawSourceSpikeGLX,
+    SortingSourceAlf,
+    SortingSourceSI,
+)
 from iblutil.numerical import ismember
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFMultipleCollectionsFound, ALFObjectNotFound
 
 try:
     import ephysatlas.data
@@ -26,33 +33,44 @@ except ImportError:
     EPHYS_ATLAS = False
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from brainbox.io.spikeglx import Streamer
+    from ibl_alignment_gui.loaders.sources import (
+        EphysQCSource,
+        PassiveSource,
+        RawSource,
+        SortingSource,
+    )
     from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
     from one.api import ONE
 
 logger = logging.getLogger(__name__)
 
 
-class DataLoader(ABC):
+class DataLoader:
     """
-    Abstract base class for loading processed data  for the ibl_alignment_gui.
+    Load the spike sorting, ephys QC and passive data of a probe for the ibl_alignment_gui.
 
-    Loads spikesorted and raw ephys data.
+    The data are read from one source of each kind, and only the data on the channels of the
+    selected shank are returned.
 
-    Subclasses must implement the follow abstract methods:
-    - `load_passive_data`
-    - `load_raw_passive_data`
-    - `load_ephys_data`
-    - `load_spikes_data`
+    Parameters
+    ----------
+    sorting : SortingSource
+        The source of the spikes, clusters and channels.
+    ephys_qc : EphysQCSource
+        The source of the RMS and power spectral density.
+    passive : PassiveSource
+        The source of the passive stimulus data.
     """
 
     # Whether to note RMS and spectra saved without the raw index of each channel. The IBL
     # pipeline saves them in file order without it, so only local data are checked.
     check_channel_order: bool = False
 
-    def __init__(self):
+    def __init__(self, sorting: SortingSource, ephys_qc: EphysQCSource, passive: PassiveSource):
+        self.sorting: SortingSource = sorting
+        self.ephys_qc: EphysQCSource = ephys_qc
+        self.passive: PassiveSource = passive
         self.filter: bool = False
         self.shank_sites: Bunch | None = None
         # The RMS and spectra objects that do not record the order of their channels
@@ -90,69 +108,6 @@ class DataLoader(ABC):
 
         return data
 
-    @staticmethod
-    def load_data(
-        load_function: Callable,
-        *args: Any,
-        raise_message: str | None = None,
-        raise_exception: type[Exception] | tuple[type[Exception], ...] = (
-            ALFObjectNotFound,
-            ALFMultipleCollectionsFound,
-        ),
-        raise_error: bool = False,
-        **kwargs,
-    ) -> Bunch[str, Any]:
-        """
-        Safely load data using a provided function.
-
-        Parameters
-        ----------
-        load_function : Callable
-            Function to load the data (e.g., ONE or alfio).
-        args : tuple
-            Arguments for the loading function.
-        raise_message : str or None
-            Message to log if an exception is raised.
-        raise_exception : Exception or ALFObjectNotFound
-            Type of exception to catch.
-        raise_error : bool
-            Whether to raise the exception after logging.
-
-        Returns
-        -------
-        Bunch
-            The loaded data with an 'exists' flag.
-        """
-        alf_object = args[1]
-        try:
-            data = load_function(*args, **kwargs)
-            if isinstance(data, dict | Bunch):
-                data['exists'] = True
-            return data
-        except raise_exception as e:
-            if raise_message is None:
-                if isinstance(e, ALFMultipleCollectionsFound):
-                    raise_message = (
-                        f'{alf_object} data matches multiple collections ({e}); '
-                        f'cannot disambiguate, some plots will not display'
-                    )
-                else:
-                    raise_message = f'{alf_object} data was not found, some plots will not display'
-            logger.warning(raise_message)
-            if raise_error:
-                logger.error(raise_message)
-                logger.error(traceback.format_exc())
-                raise e
-            return Bunch(exists=False)
-
-    @abstractmethod
-    def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """Abstract method to load passive data."""
-
-    @abstractmethod
-    def load_raw_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """Abstract method to load raw passive data."""
-
     def get_passive_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
         Load passive visual stimulus data including RF map, visual stimuli, and gabor events.
@@ -166,45 +121,7 @@ class DataLoader(ABC):
         vis_stim : Bunch
             Gabor event data for left and right gabors.
         """
-        try:
-            rf_data = self.load_passive_data('passiveRFM')
-            frame_path = self.load_raw_passive_data('RFMapStim')
-            frames = np.fromfile(frame_path['raw'], dtype='uint8')
-            rf_data['frames'] = np.transpose(
-                np.reshape(frames, [15, 15, -1], order='F'), [2, 1, 0]
-            )
-        except Exception:
-            logger.warning('passiveRFM data was not found, some plots will not display')
-            rf_data = Bunch(exists=False)
-
-        # Load in passive stim data
-        stim_data = self.load_passive_data('passiveStims')
-
-        # Load in passive gabor data
-        try:
-            gabor = self.load_passive_data('passiveGabor')
-            if not gabor['exists']:
-                vis_stim = Bunch(exists=False)
-            else:
-                vis_stim = Bunch()
-                vis_stim['leftGabor'] = np.array(
-                    gabor['start'][(gabor['position'] == 35) & (gabor['contrast'] > 0.1)],
-                    dtype=np.float64,
-                )
-                vis_stim['rightGabor'] = np.array(
-                    gabor['start'][(gabor['position'] == -35) & (gabor['contrast'] > 0.1)],
-                    dtype=np.float64,
-                )
-                vis_stim['exists'] = True
-        except Exception:
-            logger.warning('Failed to process passiveGabor data, some plots will not display')
-            vis_stim = Bunch(exists=False)
-
-        return rf_data, stim_data, vis_stim
-
-    @abstractmethod
-    def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """Abstract method to load ephys data."""
+        return self.passive.load_rf_map(), self.passive.load_stims(), self.passive.load_gabor()
 
     def get_rms_data(self, alf_object: str) -> Bunch[str, Any]:
         """
@@ -222,20 +139,9 @@ class DataLoader(ABC):
         rms_data : Bunch
             RMS data
         """
-        rms_data = self.load_ephys_data(alf_object)
+        rms_data = self.ephys_qc.load_rms(alf_object)
         self.note_channel_order(rms_data, alf_object)
-        rms_data = self.filter_raw_by_chns(rms_data)
-
-        if rms_data['exists']:
-            if 'amps' in rms_data:
-                rms_data['rms'] = rms_data.pop('amps')
-            if 'timestamps' not in rms_data:
-                rms_data['timestamps'] = np.array([0, rms_data['rms'].shape[0]])
-                rms_data['xaxis'] = 'Time samples'
-            else:
-                rms_data['xaxis'] = 'Time (s)'
-
-        return rms_data
+        return self.filter_raw_by_chns(rms_data)
 
     def note_channel_order(self, data: Bunch[str, Any], alf_object: str) -> None:
         """
@@ -267,20 +173,9 @@ class DataLoader(ABC):
         psd_data: Bunch
             PSD data
         """
-        psd_data = self.load_ephys_data(alf_object)
+        psd_data = self.ephys_qc.load_psd(alf_object)
         self.note_channel_order(psd_data, alf_object)
-        psd_data = self.filter_raw_by_chns(psd_data)
-
-        if psd_data['exists'] and 'amps' in psd_data:
-            psd_data['power'] = psd_data.pop('amps')
-
-        return psd_data
-
-    @abstractmethod
-    def load_spikes_data(
-        self, alf_object: str, attributes: list[str], **kwargs
-    ) -> Bunch[str, Any]:
-        """Abstract method to load spike sorting data."""
+        return self.filter_raw_by_chns(psd_data)
 
     def get_spikes_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
         """
@@ -297,9 +192,9 @@ class DataLoader(ABC):
         channels: Bunch
             channels data
         """
-        attributes = ['depths', 'amps', 'times', 'clusters']
-        spikes = self.load_spikes_data('spikes', attributes)
+        spikes = self.sorting.load_spikes()
         # A spikes object without all of them cannot be plotted, so it is treated as missing
+        attributes = ['depths', 'amps', 'times', 'clusters']
         missing = [f'spikes.{attribute}' for attribute in attributes if attribute not in spikes]
         if spikes['exists'] and missing:
             logger.warning(
@@ -309,11 +204,9 @@ class DataLoader(ABC):
             )
             spikes = Bunch(exists=False)
 
-        clusters = self.load_spikes_data(
-            'clusters', ['metrics', 'peakToTrough', 'waveforms', 'channels']
-        )
-
-        channels = self.load_spikes_data('channels', ['rawInd', 'localCoordinates'])
+        clusters = self.sorting.load_clusters()
+        channels = self.sorting.load_channels()
+        self.sorting.release()
 
         if self.filter and spikes['exists']:
             # Remove low firing rate clusters
@@ -321,6 +214,13 @@ class DataLoader(ABC):
 
         if spikes['exists']:
             spikes, *_ = self.filter_spikes_by_chns(spikes, clusters, channels)
+            # A shank without spikes, e.g. a dead shank, is shown without the spike plots rather
+            # than failing the whole load
+            if spikes['times'].size == 0:
+                logger.warning(
+                    'There are no spikes on this shank, so the spike plots will not display'
+                )
+                spikes = Bunch(exists=False)
 
         return spikes, clusters, channels
 
@@ -379,9 +279,8 @@ class DataLoader(ABC):
             columns = lookup[columns]
 
         for key in data:
-            if key == 'exists':
-                continue
-            if data[key].ndim == 1:
+            # Skip the exists flag, labels and 1D arrays such as timestamps
+            if not isinstance(data[key], np.ndarray) or data[key].ndim == 1:
                 continue
             data[key] = self._safe_take(data[key], columns)
 
@@ -483,9 +382,16 @@ class DataLoaderOne(DataLoader):
         self.spike_collection: str | None = spike_collection
         self.probe_path: Path = self.get_spike_sorting_path()
         self.probe_collection: str = str(self.probe_path.relative_to(self.session_path))
+        # TODO DataLoader.__init__ resets this to False, so ONE sessions are not rate filtered
         self.filter: bool = True
 
-        super().__init__()
+        super().__init__(
+            SortingSourceAlf(AlfReaderOne(one, self.eid, collection=self.probe_collection)),
+            EphysQCSourceAlf(
+                AlfReaderOne(one, self.eid, collection=f'raw_ephys_data/{self.probe_label}')
+            ),
+            PassiveSourceAlf(AlfReaderOne(one, self.eid), AlfReaderOne(one, self.eid)),
+        )
 
     @property
     def spike_sorting_path(self) -> Path:
@@ -524,61 +430,6 @@ class DataLoaderOne(DataLoader):
         # If neither exist return ks2 path
         return probe_path
 
-    def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load passive data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(self.one.load_object, self.eid, alf_object)
-
-    def load_raw_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load raw passive data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(self.one.load_object, self.eid, alf_object)
-
-    def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load ephys data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(
-            self.one.load_object,
-            self.eid,
-            alf_object,
-            collection=f'raw_ephys_data/{self.probe_label}',
-            **kwargs,
-        )
-
-    def load_spikes_data(
-        self, alf_object: str, attributes: list[str], **kwargs
-    ) -> Bunch[str, Any]:
-        """
-        Load spike sorting data using ONE.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(
-            self.one.load_object,
-            self.eid,
-            alf_object,
-            collection=self.probe_collection,
-            attribute=attributes,
-            **kwargs,
-        )
-
 
 class DataLoaderLocal(DataLoader):
     """
@@ -602,7 +453,11 @@ class DataLoaderLocal(DataLoader):
         # A session can have no spike sorting, only the RMS and power spectra
         self.probe_collection: str | None = self.spike_path.name if self.spike_path else None
 
-        super().__init__()
+        super().__init__(
+            SortingSourceAlf(_local_reader(self.spike_path)),
+            EphysQCSourceAlf(_local_reader(self.ephys_path)),
+            PassiveSourceAlf(_local_reader(self.task_path), _local_reader(self.raw_task_path)),
+        )
         self.check_channel_order = True
 
     @property
@@ -617,120 +472,86 @@ class DataLoaderLocal(DataLoader):
         """
         return self.spike_path
 
-    def load_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load passive data from local path.
 
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(alfio.load_object, self.task_path, alf_object, **kwargs)
-
-    def load_raw_passive_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load raw passive data from local path.
-
-        Returns
-        -------
-        Bunch or None
-        """
-        return self.load_data(alfio.load_object, self.raw_task_path, alf_object)
-
-    def get_passive_data(self) -> tuple[Bunch[str, Any], Bunch[str, Any], Bunch[str, Any]]:
-        """
-        Load passive data from local path.
-
-        Only attempts to load if both task_path and raw_task_path are defined.
-
-        Returns
-        -------
-        Bunch or None
-        """
-        if self.task_path is None and self.raw_task_path is None:
-            return Bunch(exists=False), Bunch(exists=False), Bunch(exists=False)
-
-        return super().get_passive_data()
-
-    def load_ephys_data(self, alf_object: str, **kwargs) -> Bunch[str, Any]:
-        """
-        Load ephys data from local path.
-
-        Returns
-        -------
-        Bunch
-        """
-        return self.load_data(alfio.load_object, self.ephys_path, alf_object, **kwargs)
-
-    def load_spikes_data(
-        self, alf_object: str, attributes: list[str], **kwargs
-    ) -> Bunch[str, Any]:
-        """
-        Load spike sorting data from local path.
-
-        Returns
-        -------
-        Bunch
-            The data, with ``exists`` False when the session has no spike sorting.
-        """
-        if self.spike_path is None:
-            return Bunch(exists=False)
-        return self.load_data(
-            alfio.load_object, self.spike_path, alf_object, attribute=attributes, **kwargs
-        )
-
-
-class SpikeGLXLoader(ABC):
+class DataLoaderSI(DataLoaderLocal):
     """
-    Abstract base class for loading SpikeGLX metadata and AP band snippets.
+    Data loader using a SpikeInterface SortingAnalyzer on the local file system.
 
-    Subclasses must implement the follow abstract methods:
-    - `load_meta_data`
-    - `load_ap_data`
+    The spike sorting is read from the SortingAnalyzer, and the RMS, power spectra and passive
+    data from their ALF folders as in :class:`DataLoaderLocal`. The raw channel of each channel
+    is matched with the probe contact ids saved with the RMS, when there are any.
 
     Parameters
     ----------
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe, with the SortingAnalyzer as the
+        ``spike_sorting``.
+    """
+
+    def __init__(self, data_paths: DatasetPaths):
+        super().__init__(data_paths)
+        self.sorting = SortingSourceSI(self.spike_path, raw_qc_path=self.ephys_path)
+
+
+def _local_reader(path: Path | None) -> AlfReaderLocal | None:
+    """Return a reader for a folder, or None when the dataset has no folder."""
+    return AlfReaderLocal(path) if path is not None else None
+
+
+def sort_by_position(geometry: dict[str, np.ndarray]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """
+    Sort channels by shank and depth, the order destriping needs.
+
+    The channels at the same depth, the two of a row, are kept in file order rather than
+    ordered by x, so the order does not depend on the direction of the x coordinates, which
+    differs between conventions (spikeglx mirrors Neuropixels 1.0, SpikeInterface does not).
+    On Neuropixels 1.0 this is the order spikeglx.Reader returns the channels in.
+
+    Parameters
+    ----------
+    geometry : dict
+        The channel header in file order, with shank and y.
+
+    Returns
+    -------
+    order : np.ndarray
+        The file channels in sorted order.
+    h : dict
+        The channel header in sorted order.
+    """
+    n_channels = np.asarray(geometry['y']).size
+    order = np.lexsort((np.arange(n_channels), geometry['y'], geometry['shank']))
+    return order, {k: np.asarray(v)[order] for k, v in geometry.items()}
+
+
+class RawDataLoader:
+    """
+    Load snippets of a probe's raw AP and LF data and flag its bad channels.
+
+    Parameters
+    ----------
+    ap : RawSource or None
+        The AP band of the recording, or None when there is none.
+    lf : RawSource or None
+        The LF band of the recording, or None when there is none.
     save_path : Path or None
         Directory where cached snippet data will be saved.
     """
 
-    def __init__(self, save_path: Path | None = None):
-        self.meta: Bunch | None = None
+    # The files the snippets are cached in, in the save path
+    AP_SNIPPETS_FILE = 'alignment_gui_raw_data_snippets.npy'
+    LF_SNIPPETS_FILE = 'alignment_gui_raw_lf_data_snippets.npy'
+
+    def __init__(self, ap: RawSource | None, lf: RawSource | None, save_path: Path | None = None):
+        self.ap: RawSource | None = ap
+        self.lf: RawSource | None = lf
         self.save_path: Path | None = save_path
         self.cached_ap_path: Path | None = (
-            save_path.joinpath('alignment_gui_raw_data_snippets.npy') if save_path else None
+            save_path.joinpath(self.AP_SNIPPETS_FILE) if save_path else None
         )
         self.cached_lf_path: Path | None = (
-            save_path.joinpath('alignment_gui_raw_lf_data_snippets.npy') if save_path else None
+            save_path.joinpath(self.LF_SNIPPETS_FILE) if save_path else None
         )
-
-    def get_meta_data(self) -> Bunch[str, Any]:
-        """
-        Load and parse metadata for the AP band.
-
-        Returns
-        -------
-        Bunch
-            A Bunch containing geometry info and an 'exists' flag.
-        """
-        self.meta = self.load_meta_data()
-        if not self.meta:
-            return Bunch({'exists': False})
-
-        geometry = spikeglx.geometry_from_meta(self.meta, sort=True)
-        return Bunch(geometry, exists=True)
-
-    @abstractmethod
-    def load_meta_data(self) -> dict | None:
-        """Abstract method to load AP metadata."""
-
-    @abstractmethod
-    def load_ap_data(self) -> spikeglx.Reader | Streamer | None:
-        """Abstract method to return a SpikeGLX reader or Streamer object."""
-
-    @abstractmethod
-    def load_lf_data(self) -> spikeglx.Reader | Streamer | None:
-        """Abstract method to return a SpikeGLX reader or Streamer object."""
 
     def load_ap_snippets(self, twin: float = 1) -> Bunch[str, Any] | defaultdict[str, Any]:
         """
@@ -756,11 +577,10 @@ class SpikeGLXLoader(ABC):
             if 'dead_channels' in data and data.get('channel_order') == 'file':
                 return data
 
-        sr = self.load_ap_data()
-        if not sr:
+        if self.ap is None:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr, twin=twin)
+        times = self.get_time_snippets(self.ap, twin=twin)
 
         # Thresholds for channel quality detection
         detection_thresholds = {'similarity_threshold': (-0.5, 1), 'psd_hf_threshold': 0.02}
@@ -768,7 +588,9 @@ class SpikeGLXLoader(ABC):
         data = defaultdict(Bunch)
 
         for i, t in enumerate(times):
-            raw, labels, features = self._get_ap_snippet(sr, t, twin=twin, **detection_thresholds)
+            raw, labels, features = self._get_ap_snippet(
+                self.ap, t, twin=twin, **detection_thresholds
+            )
 
             if i == 0:
                 chn_labels = np.zeros((raw.shape[1], len(times)))
@@ -806,7 +628,7 @@ class SpikeGLXLoader(ABC):
         )
 
         data['exists'] = True
-        data['fs'] = sr.fs
+        data['fs'] = self.ap.fs
         data['channel_order'] = 'file'
 
         if self.cached_ap_path:
@@ -838,21 +660,20 @@ class SpikeGLXLoader(ABC):
             if data.get('channel_order') == 'file':
                 return data
 
-        sr = self.load_lf_data()
-        if not sr:
+        if self.lf is None:
             return Bunch(exists=False)
 
-        times = self.get_time_snippets(sr, twin=twin)
+        times = self.get_time_snippets(self.lf, twin=twin)
 
         data = defaultdict(Bunch)
 
         for t in times:
-            raw = self._get_lf_snippet(sr, t, twin=twin)
+            raw = self._get_lf_snippet(self.lf, t, twin=twin)
 
             data['images'][t] = raw
 
         data['exists'] = True
-        data['fs'] = sr.fs
+        data['fs'] = self.lf.fs
         data['channel_order'] = 'file'
 
         # TODO uncomment once we are happy with the snippet length
@@ -863,15 +684,15 @@ class SpikeGLXLoader(ABC):
 
     @staticmethod
     def _get_ap_snippet(
-        sr: spikeglx.Reader | Streamer, t: float, twin: float = 1, **kwargs
+        source: RawSource, t: float, twin: float = 1, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of AP data centered at time t.
 
         Parameters
         ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader
+        source : RawSource
+            The AP band of the recording
         t : float
             Time in seconds for center of snippet.
         twin : float
@@ -882,36 +703,36 @@ class SpikeGLXLoader(ABC):
         np.ndarray
             Snippet of raw data (time, channels)
         """
-        start_sample = int(t * sr.fs)
-        end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, : -sr.nsync].T
+        fs = source.fs
+        raw = source.get_traces(int(t * fs), int(twin * fs)).T
 
-        # Detect bad channels and destripe
-        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, sr.fs, **kwargs)
+        # Detect bad channels and destripe with the channels sorted by position on the probe,
+        # then put them back in file order
+        order, h = sort_by_position(source.geometry)
+        unsort = np.argsort(order)
+        raw = raw[order]
+        channel_labels, channel_features = ibldsp.voltage.detect_bad_channels(raw, fs, **kwargs)
         raw = ibldsp.voltage.destripe(
-            raw, fs=sr.fs, h=sr.geometry, channel_labels=channel_labels, k_filter=False
+            raw, fs=fs, h=h, channel_labels=channel_labels, k_filter=False
         )
 
         # Extract a window in time (450–500 ms)
-        window = slice(int(0.45 * sr.fs), int(0.5 * sr.fs))
+        window = slice(int(0.45 * fs), int(0.5 * fs))
 
-        # The reader sorts the channels by position on the probe for the destriping, put them
-        # back in file order so they can be indexed with the raw channel indices
-        unsort = SpikeGLXLoader._unsort(sr, raw.shape[0])
         channel_features = {k: np.asarray(v)[unsort] for k, v in channel_features.items()}
         return raw[unsort, window].T, channel_labels[unsort], channel_features
 
     @staticmethod
     def _get_lf_snippet(
-        sr: spikeglx.Reader | Streamer, t: float, twin: float = 3, **kwargs
+        source: RawSource, t: float, twin: float = 3, **kwargs
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract a snippet of LF data centered at time t.
 
         Parameters
         ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader
+        source : RawSource
+            The LF band of the recording
         t : float
             Time in seconds for center of snippet.
         twin : float
@@ -922,61 +743,38 @@ class SpikeGLXLoader(ABC):
         np.ndarray
             Snippet of raw data (time, channels)
         """
-        start_sample = int(t * sr.fs)
-        end_sample = start_sample + int(twin * sr.fs)
-        raw = sr[start_sample:end_sample, : -sr.nsync].T
+        fs = source.fs
+        raw = source.get_traces(int(t * fs), int(twin * fs)).T
 
-        butter_kwargs = {'N': 3, 'Wn': 2 / sr.fs * 2, 'btype': 'highpass'}
-        # Detect bad channels and destripe
+        butter_kwargs = {'N': 3, 'Wn': 2 / fs * 2, 'btype': 'highpass'}
+        # Detect bad channels and destripe with the channels sorted by position on the probe,
+        # then put them back in file order
+        order, h = sort_by_position(source.geometry)
         raw = ibldsp.voltage.destripe(
-            raw,
-            fs=sr.fs,
+            raw[order],
+            fs=fs,
             channel_labels=True,
             butter_kwargs=butter_kwargs,
-            h=sr.geometry,
+            h=h,
             k_filter=None,
         )
 
         # Extract a window in time (1–2 seconds)
-        window = slice(int(0.5 * sr.fs), int(2.5 * sr.fs))
+        window = slice(int(0.5 * fs), int(2.5 * fs))
 
-        # The reader sorts the channels by position on the probe for the destriping, put them
-        # back in file order so they can be indexed with the raw channel indices
-        return raw[SpikeGLXLoader._unsort(sr, raw.shape[0]), window].T
-
-    @staticmethod
-    def _unsort(sr: spikeglx.Reader | Streamer, n_channels: int) -> np.ndarray:
-        """
-        Get the index that puts the channels read from a reader back in file order.
-
-        Parameters
-        ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader, which returns the channels in its raw_channel_order.
-        n_channels : int
-            The number of channels read, without the sync channels.
-
-        Returns
-        -------
-        np.ndarray
-            The index of the channels read, in file order.
-        """
-        order = getattr(sr, 'raw_channel_order', None)
-        if order is None:
-            return np.arange(n_channels)
-        return np.argsort(order[:n_channels])
+        return raw[np.argsort(order), window].T
 
     @staticmethod
     def get_time_snippets(
-        sr: spikeglx.Reader, n: int = 3, pad: int = 200, twin: float = 0
+        source: RawSource, n: int = 3, pad: int = 200, twin: float = 0
     ) -> np.ndarray:
         """
         Return n time points across the file duration, excluding pad seconds from start and end.
 
         Parameters
         ----------
-        sr : spikeglx.Reader or Streamer
-            The raw data reader
+        source : RawSource
+            The band of the recording
         n : int
             Number of time points to extract.
         pad : int
@@ -990,7 +788,7 @@ class SpikeGLXLoader(ABC):
         np.ndarray
             Array of time points in seconds.
         """
-        file_duration = sr.meta['fileTimeSecs']
+        file_duration = source.duration
         pad = pad if file_duration > 500 else 0
         usable_time = file_duration - 2 * pad
         intervals = usable_time // n
@@ -999,7 +797,7 @@ class SpikeGLXLoader(ABC):
         return np.minimum(times, max(file_duration - twin, 0))
 
 
-class SpikeGLXLoaderOne(SpikeGLXLoader):
+class SpikeGLXLoaderOne(RawDataLoader):
     """
     SpikeGLX loader using ONE.
 
@@ -1028,113 +826,89 @@ class SpikeGLXLoaderOne(SpikeGLXLoader):
         self.force: bool = force
         save_path = self.session_path.joinpath(f'raw_ephys_data/{self.probe_label}')
 
-        super().__init__(save_path)
+        super().__init__(
+            RawSourceSpikeGLX(lambda: self._stream('ap')),
+            RawSourceSpikeGLX(lambda: self._stream('lf')),
+            save_path,
+        )
 
-    def load_meta_data(self) -> dict | None:
+    def _stream(self, band: str) -> Streamer:
         """
-        Load AP metadata using ONE.
+        Start streaming a band of the raw data using ONE.
 
-        Returns
-        -------
-        dict or None
-            A dict containing the spikeglx AP band metadata, or None if not found.
-        """
-        try:
-            meta_file = self.one.load_dataset(
-                self.eid,
-                '*.ap.meta',
-                collection=f'raw_ephys_data/{self.probe_label}',
-                download_only=True,
-            )
-            return spikeglx.read_meta_data(meta_file)
-        except ALFObjectNotFound:
-            return None
-
-    def load_ap_data(self) -> Streamer:
-        """
-        Load AP data using ONE.
+        Parameters
+        ----------
+        band : str
+            The band to stream, 'ap' or 'lf'.
 
         Returns
         -------
         Streamer
-            A streamer object for AP band.
+            A streamer object for the band.
         """
         import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
 
-        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='ap')
-
-    def load_lf_data(self):
-        """
-        Load LF data using ONE.
-
-        Returns
-        -------
-        Streamer
-            A streamer object for LF band.
-        """
-        import brainbox.io.spikeglx as spikeglx_io  # noqa: PLC0415
-
-        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ='lf')
+        return spikeglx_io.Streamer(pid=self.pid, one=self.one, remove_cached=self.force, typ=band)
 
 
-class SpikeGLXLoaderLocal(SpikeGLXLoader):
+class SpikeGLXLoaderLocal(RawDataLoader):
     """
     SpikeGLX loader using local file system.
 
+    The snippets are cached beside the raw data. When there is neither raw data nor cached
+    snippets there, the snippets are read from the processed ephys folder, where
+    ``extract_si_qc`` writes them.
+
     Parameters
     ----------
-    probe_path : Path
-        Root directory of probe data
-    meta_collection : str
-        Name of subfolder containing meta and binary files.
+    meta_path : Path or None
+        The folder holding the meta and binary files, or None when there is no raw data.
+    processed_path : Path or None
+        The processed ephys folder, which can hold the snippets instead.
     """
 
-    def __init__(self, meta_path: Path):
-        self.meta_path: Path = meta_path
+    def __init__(self, meta_path: Path | None, processed_path: Path | None = None):
+        self.meta_path: Path | None = meta_path
+        ap, lf = self._source('ap'), self._source('lf')
 
-        super().__init__(self.meta_path)
+        save_path = meta_path
+        if (
+            ap is None
+            and lf is None
+            and not self._has_snippets(meta_path)
+            and self._has_snippets(processed_path)
+        ):
+            save_path = processed_path
 
-    def load_meta_data(self) -> dict | None:
+        super().__init__(ap, lf, save_path)
+
+    @classmethod
+    def _has_snippets(cls, path: Path | None) -> bool:
+        """Whether a folder holds snippet files."""
+        return path is not None and any(
+            path.joinpath(file).exists() for file in (cls.AP_SNIPPETS_FILE, cls.LF_SNIPPETS_FILE)
+        )
+
+    def _source(self, band: str) -> RawSourceSpikeGLX | None:
         """
-        Load AP metadata from local path.
+        Get a band of the raw data from the local path.
+
+        Parameters
+        ----------
+        band : str
+            The band, 'ap' or 'lf'.
 
         Returns
         -------
-        dict or None
-            A dict containing the spikeglx AP band metadata, or None if not found.
+        RawSourceSpikeGLX or None
+            The band of the recording, or None if its binary file is not found.
         """
         if self.meta_path is None:  # no raw_ephys dataset
             return None
-        meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
-        return spikeglx.read_meta_data(meta_file) if meta_file else None
-
-    def load_ap_data(self) -> spikeglx.Reader | None:
-        """
-        Load binary AP data from local path.
-
-        Returns
-        -------
-        spikeglx.Reader or None
-            A spikeglx.Reader instance to load the raw data, or None if not found.
-        """
-        if self.meta_path is None:
+        bin_file = next(self.meta_path.glob(f'*.{band}.*bin'), None)
+        if bin_file is None:
             return None
-        ap_file = next(self.meta_path.glob('*.ap.*bin'), None)
-        return spikeglx.Reader(ap_file) if ap_file else None
-
-    def load_lf_data(self) -> spikeglx.Reader | None:
-        """
-        Load binary LF data from local path.
-
-        Returns
-        -------
-        spikeglx.Reader or None
-            A spikeglx.Reader instance to load the raw data, or None if not found.
-        """
-        if self.meta_path is None:
-            return None
-        lf_file = next(self.meta_path.glob('*.lf.*bin'), None)
-        return spikeglx.Reader(lf_file) if lf_file else None
+        return RawSourceSpikeGLX(lambda: spikeglx.Reader(bin_file))
 
 
 class FeatureLoader(ABC):

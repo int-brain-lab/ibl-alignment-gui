@@ -189,6 +189,9 @@ class ClusterPopupManager:
         clust_popup = ClusterPopup._get_or_create(
             f'{name}: cluster {clust_no}', self.view, data=data
         )
+        # The popup for this cluster is already open, _get_or_create has brought it to the front
+        if clust_popup in self.cluster_popups:
+            return
         clust_popup.closed.connect(self.popup_closed)
         clust_popup.leave.connect(self.popup_left)
         clust_popup.enter.connect(self.popup_entered)
@@ -205,24 +208,25 @@ class ClusterPopupManager:
                 pop.showMinimized()
 
     def close_popups(self) -> None:
-        """Close all cluster popups and reset the list."""
+        """Close and delete all cluster popups and reset the list."""
         for pop in self.cluster_popups:
             pop.blockSignals(True)
             pop.close()
+            pop.deleteLater()
         self.cluster_popups = []
 
     def popup_closed(self, popup: ClusterPopup) -> None:
         """
-        Triggered when a popup is closed by the user.
+        Triggered when a popup is closed by the user, which removes and deletes it.
 
         Parameters
         ----------
         popup: ClusterPopup
             The cluster popup that was closed.
         """
-        if len(self.cluster_popups) > 0:
-            popup_idx = [iP for iP, pop in enumerate(self.cluster_popups) if pop == popup][0]
-            self.cluster_popups.pop(popup_idx)
+        if popup in self.cluster_popups:
+            self.cluster_popups.remove(popup)
+        popup.deleteLater()
 
     def popup_left(self) -> None:
         """Triggered when the mouse leaves a popup."""

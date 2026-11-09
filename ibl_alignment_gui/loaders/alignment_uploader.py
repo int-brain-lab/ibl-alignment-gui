@@ -185,6 +185,9 @@ class AlignmentUploaderOne(AlignmentUploader):
         str
             Message containing information about upload result.
         """
+        # Re-read the alignments from Alyx before the channels upload replaces the trajectory, so
+        # an alignment uploaded by someone else since this GUI loaded them is not lost
+        data = {**data, 'alignments': self.load_latest_alignments()}
         # Upload channels
         is_channels = self.upload_channels(data)
         # Upload alignments
@@ -193,6 +196,24 @@ class AlignmentUploaderOne(AlignmentUploader):
         is_resolved = self.upload_qc(data, updated_alignments)
 
         return self.get_upload_info(is_channels, is_resolved)
+
+    def load_latest_alignments(self) -> dict[str, Any]:
+        """
+        Load the alignments currently stored on Alyx for this insertion.
+
+        Returns
+        -------
+        dict
+            The stored alignments, empty if none have been uploaded yet.
+        """
+        traj = self.one.alyx.rest(
+            'trajectories',
+            'list',
+            probe_insertion=self.pid,
+            provenance='Ephys aligned histology track',
+            no_cache=True,
+        )
+        return (traj[0].get('json') or {}) if traj else {}
 
     def get_upload_info(self, channels: bool, resolved: bool) -> str:
         """
@@ -298,7 +319,8 @@ class AlignmentUploaderOne(AlignmentUploader):
         alignments: dict
             Alignments with duplicated user keys removed.
         """
-        old_user = [key for key in alignments if self.user in key]
+        # Keys are '<time>_<user>' and the time has no underscore, so the user is the rest
+        old_user = [key for key in alignments if key.split('_', 1)[-1] == self.user]
         # Only delete duplicated if trajectory is not resolved
         if len(old_user) > 0 and not self.resolved:
             for old in old_user:

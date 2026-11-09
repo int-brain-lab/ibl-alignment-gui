@@ -1,0 +1,269 @@
+"""
+Write the datasets the alignment GUI computes from the raw data of a SpikeInterface recording.
+
+For one probe this writes, to the output folder:
+
+- the RMS of the AP and LF bands and the spectral density of the LF band, as the
+  ``_iblqc_ephysTimeRms*`` and ``_iblqc_ephysSpectralDensity*`` ALF files;
+- snippets of the AP and LF bands, with the channels flagged as dead, noisy or outside the
+  brain, as the files the GUI caches them in;
+- the probe contact id of each channel, as ``_iblqc_ephysChannels.contactIds``, which the GUI
+  matches to the contact ids of the SortingAnalyzer to find the raw channel of each of its
+  channels, also when channels were removed before sorting.
+
+The recordings are opened with the SpikeInterface reader of the acquisition system, and must be
+raw, as read from disk. The data are processed as by
+:mod:`ibl_alignment_gui.convertors.extract_ephys`, SpikeInterface only reads them.
+
+Examples
+--------
+A SpikeGLX recording, with an LF file:
+
+>>> import spikeinterface.extractors as se
+>>> ap = se.read_spikeglx(folder, stream_id='imec0.ap')
+>>> lf = se.read_spikeglx(folder, stream_id='imec0.lf')
+>>> extract_si_qc(ap, out_folder, lf_recording=lf)
+
+A compressed SpikeGLX recording of an NP2 probe, which records wideband, so that the LF band is
+computed from the AP band:
+
+>>> ap = se.read_cbin_ibl(cbin_file_path=folder / 'recording.ap.cbin')
+>>> extract_si_qc(ap, out_folder, lfp_from_ap=True)
+
+An Open Ephys recording of an NP1 probe:
+
+>>> ap = se.read_openephys(folder, stream_name='Record Node 101#Neuropix-PXI-100.ProbeA')
+>>> lf = se.read_openephys(folder, stream_name='Record Node 101#Neuropix-PXI-100.ProbeA-LFP')
+>>> extract_si_qc(ap, out_folder, lf_recording=lf)
+"""
+
+import logging
+from pathlib import Path
+
+import numpy as np
+
+from ibl_alignment_gui.convertors.extract_ephys import (
+    LF_DECIMATION,
+    N_WORKERS,
+    SAMPLE_SPACING_SECS,
+    _is_np2,
+    compute_rmsmap,
+    save_rmsmap,
+)
+from ibl_alignment_gui.loaders.data_loader import RawDataLoader
+from ibl_alignment_gui.loaders.sources import (
+    RAW_CONTACT_IDS_FILE,
+    RawSourceSI,
+    channel_contact_ids,
+)
+
+_logger = logging.getLogger(__name__)
+
+# The sampling frequency of the LF band, and of the AP band decimated to it
+LF_FS = 2500
+
+
+def extract_si_qc(
+    ap_recording,
+    out_folder,
+    lf_recording=None,
+    lfp_from_ap=False,
+    sample_spacing_secs=SAMPLE_SPACING_SECS,
+    n_workers=N_WORKERS,
+):
+    """
+    Write the RMS, spectral density and snippets of a probe from its SpikeInterface recordings.
+
+    Parameters
+    ----------
+    ap_recording : spikeinterface.BaseRecording
+        The raw AP band of the probe.
+    out_folder : str or pathlib.Path
+        The folder to write the datasets to, created if it does not exist.
+    lf_recording : spikeinterface.BaseRecording or None
+        The raw LF band of the probe. When None, the LF datasets are only written if
+        ``lfp_from_ap`` is set.
+    lfp_from_ap : bool
+        Whether to compute the LF band from the AP band, for probes that record wideband, such
+        as NP2 probes. The AP band is decimated to 2.5 kHz. Refused for probes with a separate LF
+        band, such as NP1 probes, whose AP band is high-passed and holds no LFP.
+    sample_spacing_secs : float or None
+        The RMS and spectra are computed on a sample taken every ``sample_spacing_secs``
+        seconds. None reads the whole recording.
+    n_workers : int
+        The number of threads the RMS windows are shared between, each reading from a clone of
+        the recording.
+
+    Raises
+    ------
+    ValueError
+        If a recording is filtered, if both ``lf_recording`` and ``lfp_from_ap`` are given, if
+        ``lfp_from_ap`` is set for a probe with a separate LF band or an AP band that does not
+        decimate to 2.5 kHz, or if the LF band does not have the channels of the AP band.
+    """
+    for recording in (ap_recording, lf_recording):
+        if recording is not None and recording.is_filtered():
+            raise ValueError(
+                f'{recording} is filtered, the raw recording, as read from disk, is needed'
+            )
+    if lf_recording is not None and lfp_from_ap:
+        raise ValueError('Give either an LF recording or lfp_from_ap, not both')
+    if lfp_from_ap and abs(ap_recording.get_sampling_frequency() / LF_DECIMATION - LF_FS) > 10:
+        raise ValueError(
+            f'The AP band is sampled at {ap_recording.get_sampling_frequency()} Hz, so it does '
+            f'not decimate to the {LF_FS} Hz of the LF band'
+        )
+    if lfp_from_ap:
+        _check_wideband(ap_recording)
+
+    # The GUI matches the channels of both bands with the contact ids of the AP band
+    contact_ids = channel_contact_ids(ap_recording)
+    if lf_recording is not None and (
+        lf_recording.get_num_channels() != ap_recording.get_num_channels()
+        or (
+            contact_ids is not None
+            and not np.array_equal(channel_contact_ids(lf_recording), contact_ids)
+        )
+    ):
+        raise ValueError('The LF recording does not have the channels of the AP recording')
+
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    if contact_ids is not None:
+        np.save(out_folder.joinpath(RAW_CONTACT_IDS_FILE), contact_ids)
+    else:
+        # Remove the ids of an earlier run, which would not match these channels
+        out_folder.joinpath(RAW_CONTACT_IDS_FILE).unlink(missing_ok=True)
+        _logger.warning(
+            'The AP recording has no probe contact ids, so the GUI can only match its channels '
+            'to those of the spike sorting by their SpikeGLX ids or their order'
+        )
+    kwargs = {'sample_spacing_secs': sample_spacing_secs, 'n_workers': n_workers}
+
+    _logger.info('Computing the AP RMS')
+    rms = compute_rmsmap(_source_opener(ap_recording), 'ap', spectra=False, **kwargs)
+    save_rmsmap(rms, out_folder, 'ap', spectra=False)
+    if lf_recording is not None:
+        _logger.info('Computing the LF RMS and spectral density')
+        rms = compute_rmsmap(_source_opener(lf_recording), 'lf', **kwargs)
+        save_rmsmap(rms, out_folder, 'lf')
+    elif lfp_from_ap:
+        _logger.info('Computing the LF RMS and spectral density from the AP band')
+        rms = compute_rmsmap(_source_opener(ap_recording), 'ap', lfp_from_ap=True, **kwargs)
+        save_rmsmap(rms, out_folder, 'lf')
+
+    # The snippets are computed without a save path, so that cached snippets are not reused
+    _logger.info('Computing the snippets')
+    loader = RawDataLoader(
+        RawSourceSI(lambda: ap_recording),
+        RawSourceSI(lambda: lf_recording) if lf_recording is not None else None,
+    )
+    np.save(out_folder.joinpath(RawDataLoader.AP_SNIPPETS_FILE), loader.load_ap_snippets())
+    if lf_recording is not None:
+        np.save(out_folder.joinpath(RawDataLoader.LF_SNIPPETS_FILE), loader.load_lf_snippets())
+
+
+def _check_wideband(recording):
+    """
+    Check that a probe records the LFP in its AP band, so that the LF band can be computed from it.
+
+    A SpikeGLX recording is checked from its metadata, as by ``extract_ephys``. Otherwise
+    probeinterface gives Neuropixels probes the sampling frequency of their LF band, 0 for probes
+    that record wideband, such as NP2 probes. Other probes do not say, so are taken to record
+    wideband with a warning.
+
+    Parameters
+    ----------
+    recording : spikeinterface.BaseRecording
+        The AP band of the probe.
+
+    Raises
+    ------
+    ValueError
+        If the probe records the LF band separately.
+    """
+    meta_file = _spikeglx_meta_file(recording)
+    if meta_file is not None:
+        if not _is_np2(meta_file):
+            raise ValueError(
+                f'{meta_file.name} is not from an NP2 probe, so its AP band holds no LFP to '
+                f'compute the LF band from: give the LF recording instead of lfp_from_ap'
+            )
+        return
+
+    try:
+        probe = recording.get_probe()
+    except ValueError:  # no probe, or more than one
+        probe = None
+    lf_fs = probe.annotations.get('lf_sample_frequency_hz') if probe is not None else None
+    if lf_fs is None:
+        _logger.warning(
+            'The probe does not say whether it records the LFP in its AP band, which is taken '
+            'to be wideband. Give the LF recording instead if it records the LF band separately.'
+        )
+    elif lf_fs > 0:
+        raise ValueError(
+            f'The {probe.model_name} probe records the LF band separately, so its AP band holds '
+            f'no LFP to compute it from: give the LF recording instead of lfp_from_ap'
+        )
+
+
+def _spikeglx_meta_file(recording):
+    """
+    Get the SpikeGLX metadata file a recording was read from.
+
+    Parameters
+    ----------
+    recording : spikeinterface.BaseRecording
+        The recording.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The metadata file, or None when the recording was not read with ``read_spikeglx`` or
+        ``read_cbin_ibl``, or its metadata file is not found.
+    """
+    description = recording.to_dict()
+    class_name = description['class'].rsplit('.', 1)[-1]
+    kwargs = description['kwargs']
+    if class_name == 'SpikeGLXRecordingExtractor' and kwargs.get('folder_path'):
+        # SpikeGLX names its files <run>_g<gate>_t<trigger>.<probe>.<band>.bin
+        stream_id = getattr(recording, 'stream_id', None) or kwargs.get('stream_id')
+        if stream_id is None:
+            return None
+        meta_files = sorted(Path(kwargs['folder_path']).rglob(f'*.{stream_id}.meta'))
+    elif class_name == 'CompressedBinaryIblExtractor':
+        if kwargs.get('cbin_file_path'):
+            meta_files = [Path(kwargs['cbin_file_path']).with_suffix('.meta')]
+        else:
+            meta_files = sorted(Path(kwargs['folder_path']).glob('*ap.meta'))
+    else:
+        return None
+    return next((file for file in meta_files if file.exists()), None)
+
+
+def _source_opener(recording):
+    """
+    Get a function that opens a source of a recording, for each thread computing the RMS.
+
+    The first source reads from the recording, the next ones from clones of it, which open the
+    files again, so that the threads do not share a reader.
+
+    Parameters
+    ----------
+    recording : spikeinterface.BaseRecording
+        The recording.
+
+    Returns
+    -------
+    Callable[[], RawSourceSI]
+        Opens a source of the recording.
+    """
+    opened = []
+
+    def open_source():
+        current = recording.clone() if opened else recording
+        opened.append(current)
+        return RawSourceSI(lambda: current)
+
+    return open_source

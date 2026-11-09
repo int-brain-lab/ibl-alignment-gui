@@ -86,11 +86,12 @@ class TestAlignmentLoaderOne(unittest.TestCase):
             np.testing.assert_array_equal(self.loader.feature_prev, np.array([0.5, 0, 0.5]))
             np.testing.assert_array_equal(self.loader.track_prev, np.array([0.2, 0, 0.2]))
 
-        # Load in the alignment at index 2 for the key 'original'
+        # Load in the alignment at index 2 for the key 'original', which has no previous points:
+        # the alignment handler starts from a range sized to the probe instead
         with self.subTest('From original alignment'):
             self.loader.get_starting_alignment(2)
-            np.testing.assert_array_equal(self.loader.feature_prev, np.array([-0.006, 0.006]))
-            np.testing.assert_array_equal(self.loader.track_prev, np.array([-0.006, 0.006]))
+            self.assertIsNone(self.loader.feature_prev)
+            self.assertIsNone(self.loader.track_prev)
 
     def test_stored_alignment_idx(self):
         """Test get_stored_alignment_idx returns stored key index or 0 as fallback."""

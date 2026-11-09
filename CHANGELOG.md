@@ -6,6 +6,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.0a5] - 2026-11-09
+
+### Added
+- A SpikeInterface `SortingAnalyzer` can be opened directly as the spike sorting (`spikeinterface`
+  extra).
+- `extract_si_qc` writes the RMS, power spectra and raw data snippets from SpikeInterface
+  recordings.
+- The raw data snippets are read from `processed_ephys` when `raw_ephys` holds none.
+
+### Changed
+- `extract_ephys` no longer saves the sync channel, and only `extract_data` needs the `ibl` extra.
+- Bad channel detection keeps the channels of a probe row in file order, which can slightly change
+  the flags of NP2 probes.
+- The original alignment is sized to the probe, up to 1.5 times the deepest channel, instead of
+  +-6 mm, so reference lines above 6 mm are kept. Probes with channels up to 4 mm are unchanged.
+- The spike-based images are drawn at the depths their spikes were binned at, leaving out spikes
+  below the probe tip.
+- Previous and Next show the reference lines of the fit at each step.
+- Sessions with more than four shanks stop with an error saying so.
+- datoviz is only loaded when the 3D view is opened.
+
+### Fixed
+- Uploading to Alyx keeps alignments uploaded by others since the GUI loaded them, and only
+  replaces earlier alignments of the same user.
+- Sessions load when a shank has no spikes or no picks, a folder has only an `ap.meta`, a yaml
+  probe has no `datasets:`, or a SortingAnalyzer's processed ephys is from another recording
+  (shown without its RMS and snippets).
+- Choosing another alignment keeps the current fit in the undo history.
+- Colour bars, plugin windows, their signal connections and the 3D markers no longer build up over
+  a session.
+- Hidden reference lines stay hidden, range sliders redraw at most every 100 ms, Ephys Features
+  keeps its selection on the page shown, and loading fewer shanks leaves no empty grid rows.
+
 ## [0.1.0a4] - 2026-11-03
 
 ### Added

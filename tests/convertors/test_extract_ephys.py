@@ -52,7 +52,10 @@ def write_spikeglx(
     nc = 385
     ns = int(duration * fs)
     meta = next(FIXTURE_PATH.joinpath(np_type).glob('*.ap.meta')).read_text()
+    bin_file = folder.joinpath(f'{np_type}_g0_t0.imec0.{band}.bin')
     replace = {
+        # SpikeInterface reads the stream from the file name in the metadata
+        'fileName': bin_file.as_posix(),
         'imSampRate': fs,
         'fileTimeSecs': ns / fs,
         'fileSizeBytes': ns * nc * 2,
@@ -63,7 +66,6 @@ def write_spikeglx(
         f'{key}={replace[key]}' if (key := line.split('=')[0]) in replace else line
         for line in meta.splitlines()
     ]
-    bin_file = folder.joinpath(f'{np_type}_g0_t0.imec0.{band}.bin')
     bin_file.with_suffix('.meta').write_text('\n'.join(lines) + '\n')
 
     components = components or [(1000 if band == 'ap' else 100, 20)]
@@ -99,7 +101,7 @@ class TestRmsmap(_ConverterTest):
 
     def assert_file_order(self, rms):
         """The RMS grows with the file index, so it only increases along the channels"""
-        mean_rms = rms.mean(axis=0)[:-1]  # without the sync channel
+        mean_rms = rms.mean(axis=0)
         self.assertTrue(np.all(np.diff(mean_rms) > 0))
 
     def test_file_order(self):
@@ -111,7 +113,8 @@ class TestRmsmap(_ConverterTest):
                 bin_file = write_spikeglx(self.folder, np_type, 'lf', 1.0)
                 win = rmsmap(bin_file, spectra=False, n_workers=1)
                 self.assert_file_order(win['TRMS'])
-                np.testing.assert_array_equal(win['raw_ind'], np.arange(385))
+                # The probe channels only, without the sync channel
+                np.testing.assert_array_equal(win['raw_ind'], np.arange(384))
 
     def test_open_sorted_reader(self):
         """An open reader that sorts the channels still gives them in file order"""
@@ -129,7 +132,7 @@ class TestRmsmap(_ConverterTest):
         from ibl_alignment_gui.convertors.extract_ephys import rmsmap  # noqa: PLC0415
 
         bin_file = write_spikeglx(self.folder, 'NP24', 'lf', 2.0, components=[(50, 20)])
-        rms = rmsmap(bin_file, spectra=False, n_workers=1)['TRMS'].mean(axis=0)[:-1]
+        rms = rmsmap(bin_file, spectra=False, n_workers=1)['TRMS'].mean(axis=0)
         # A sine of amplitude A has an RMS of A / sqrt(2), here in V for channel 0
         s2v = spikeglx.Reader(bin_file).sample2volts[0]
         self.assertGreater(rms[0], 0.5 * 20 / np.sqrt(2) * s2v)
@@ -150,7 +153,7 @@ class TestApDestriped(_ConverterTest):
             extract_ephys.rmsmap(bin_file, spectra=False, n_workers=1)
 
         args, kwargs = mock_destripe.call_args
-        self.assertEqual(args[0].shape[0], 384)  # without the sync channel
+        self.assertEqual(args[0].shape[0], 384)
         self.assertIs(kwargs['k_filter'], False)
         meta = spikeglx.read_meta_data(bin_file.with_suffix('.meta'))
         geometry = spikeglx.geometry_from_meta(meta, sort=False)
@@ -180,7 +183,7 @@ class TestApDestriped(_ConverterTest):
             per_channel=False,
             adc_shift=True,
         )
-        rms = rmsmap(bin_file, spectra=False, n_workers=1)['TRMS'].mean(axis=0)[:-1]
+        rms = rmsmap(bin_file, spectra=False, n_workers=1)['TRMS'].mean(axis=0)
         sine_rms = 500 / np.sqrt(2) * spikeglx.Reader(bin_file).sample2volts[0]
         self.assertTrue(np.all(rms < 0.01 * sine_rms))
 
@@ -205,11 +208,11 @@ class TestExtractRmsmap(_ConverterTest):
         ):
             with self.subTest(alf_object=alf_object):
                 data = alfio.load_object(out, alf_object, namespace='iblqc')
-                np.testing.assert_array_equal(data['rawInd'], np.arange(385)[np.newaxis, :])
-                self.assertEqual(data[attribute].shape[1], 385)
+                np.testing.assert_array_equal(data['rawInd'], np.arange(384)[np.newaxis, :])
+                self.assertEqual(data[attribute].shape[1], 384)
                 self.assertEqual(alfio.check_dimensions(data), 0)
         rms = alfio.load_object(out, 'ephysTimeRmsLF', namespace='iblqc')['rms']
-        self.assertTrue(np.all(np.diff(rms.mean(axis=0)[:-1]) > 0))
+        self.assertTrue(np.all(np.diff(rms.mean(axis=0)) > 0))
 
 
 @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
@@ -258,15 +261,78 @@ class TestSampledRms(_ConverterTest):
         # Different numbers of windows, but the spectral density is averaged over them
         self.assertNotEqual(len(whole['tscale']), len(sampled['tscale']))
         np.testing.assert_allclose(
-            sampled['TRMS'].mean(axis=0)[:-1], whole['TRMS'].mean(axis=0)[:-1], rtol=0.01
+            sampled['TRMS'].mean(axis=0), whole['TRMS'].mean(axis=0), rtol=0.01
         )
         # The power of the sine, at its peak and in total, rather than the leakage around it
         for psd in (np.max, np.sum):
             np.testing.assert_allclose(
-                psd(sampled['spectral_density'][:, :-1], axis=0),
-                psd(whole['spectral_density'][:, :-1], axis=0),
+                psd(sampled['spectral_density'], axis=0),
+                psd(whole['spectral_density'], axis=0),
                 rtol=0.05,
             )
+
+
+class ArraySource:
+    """A RawSource holding its traces in memory, standing in for any backend."""
+
+    def __init__(self, traces, fs, geometry):
+        self.traces, self.fs, self.geometry = traces, fs, geometry
+        self.n_samples = traces.shape[0]
+        self.duration = self.n_samples / fs
+
+    def get_traces(self, start, n_samples):
+        return self.traces[start : start + n_samples]
+
+
+@unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
+class TestComputeRmsmap(_ConverterTest):
+    """The RMS and spectra are computed from any RawSource, as from the SpikeGLX file."""
+
+    def test_any_source(self):
+        """A source holding the file's traces gives the same result as the file"""
+        from ibl_alignment_gui.convertors.extract_ephys import (  # noqa: PLC0415
+            compute_rmsmap,
+            rmsmap,
+        )
+        from ibl_alignment_gui.loaders.sources import RawSourceSpikeGLX  # noqa: PLC0415
+
+        for band, duration in (('ap', 0.5), ('lf', 7.0)):
+            with self.subTest(band=band):
+                bin_file = write_spikeglx(self.folder, 'NP24', band, duration)
+                with spikeglx.Reader(bin_file, sort=True) as reader:
+                    file_source = RawSourceSpikeGLX(lambda r=reader: r)
+                    source = ArraySource(
+                        file_source.get_traces(0, file_source.n_samples),
+                        file_source.fs,
+                        file_source.geometry,
+                    )
+                from_file = rmsmap(bin_file, sample_spacing_secs=2, n_workers=1)
+                for n_workers in (1, 2):
+                    from_source = compute_rmsmap(
+                        lambda s=source: s, band, sample_spacing_secs=2, n_workers=n_workers
+                    )
+                    for key in ('TRMS', 'spectral_density', 'tscale', 'raw_ind'):
+                        np.testing.assert_allclose(from_source[key], from_file[key], rtol=1e-6)
+
+    def test_source_per_thread(self):
+        """Each thread reads from a source of its own"""
+        from ibl_alignment_gui.convertors.extract_ephys import compute_rmsmap  # noqa: PLC0415
+        from ibl_alignment_gui.loaders.sources import RawSourceSpikeGLX  # noqa: PLC0415
+
+        bin_file = write_spikeglx(self.folder, 'NP24', 'lf', 7.0)
+        sources = []
+
+        def open_source():
+            reader = spikeglx.Reader(bin_file)
+            sources.append(reader)
+            return RawSourceSpikeGLX(lambda: reader)
+
+        compute_rmsmap(open_source, 'lf', sample_spacing_secs=1, n_workers=2)
+        for reader in sources:
+            reader.close()
+        # One for the setup, then one per thread
+        self.assertGreaterEqual(len(sources), 2)
+        self.assertLessEqual(len(sources), 3)
 
 
 @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
@@ -290,7 +356,7 @@ class TestLfpFromAp(_ConverterTest):
         freqs, power = win['fscale'], win['spectral_density'][:, 0]
 
         self.assertAlmostEqual(freqs[-1], 1250, delta=1)
-        np.testing.assert_allclose(win['TRMS'][0, :-1], 200 / np.sqrt(2) * self.s2v, rtol=0.05)
+        np.testing.assert_allclose(win['TRMS'][0], 200 / np.sqrt(2) * self.s2v, rtol=0.05)
         # The LFP peak, and nothing where the 2 kHz sine would alias to
         peak = power[np.argmin(np.abs(freqs - 50))]
         self.assertLess(power[np.argmin(np.abs(freqs - 500))], 1e-4 * peak)

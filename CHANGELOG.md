@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- Uploading to Alyx re-reads the stored alignments first, so an alignment uploaded by someone else
+  since the GUI loaded them is kept, and only replaces earlier alignments of the same user
+  (`mf` no longer matches `mfaulkner`).
 - The original alignment of a probe with channels above 4 mm starts from a range sized to the
   probe (up to 1.5 times the deepest channel) instead of +-6 mm, so reference lines placed above
   6 mm are no longer dropped from the fit. Probes with channels up to 4 mm are unchanged.

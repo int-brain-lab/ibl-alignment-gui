@@ -61,6 +61,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The most shanks the GUI lays out, in two rows of two
+MAX_SHANKS = 4
+
 try:
     import ephysatlas.data
 
@@ -756,6 +759,21 @@ class ProbeHandler(ABC):
     def get_shanks(self, *args):
         """Return shank information."""
 
+    def check_n_shanks(self) -> None:
+        """
+        Check the session has no more shanks than the GUI can display.
+
+        Raises
+        ------
+        ValueError
+            If there are more than MAX_SHANKS shanks.
+        """
+        if len(self.shank_labels) > MAX_SHANKS:
+            raise ValueError(
+                f'This session has {len(self.shank_labels)} shanks, the GUI supports up to '
+                f'{MAX_SHANKS}.'
+            )
+
     @abstractmethod
     def initialise_shanks(self):
         """Initialize shank data."""
@@ -1295,6 +1313,7 @@ class ProbeHandlerLocal(ProbeHandler):
         else:
             self.shank_labels = [f'shank_{iShank + 1}' for iShank in range(self.n_shanks)]
 
+        self.check_n_shanks()
         self.initialise_shanks()
 
         return self.shank_labels
@@ -1407,6 +1426,7 @@ class ProbeHandlerLocalYaml(ProbeHandler):
             self.shank_labels = list(self.probes)
             self.n_shanks = 1
 
+        self.check_n_shanks()
         self.initialise_shanks()
 
         return self.shank_labels

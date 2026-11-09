@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- Opening a folder or yaml session with more than four shanks stops with an error saying the GUI
+  supports up to four, instead of an `IndexError`.
 - A probe in a session yaml without a `datasets:` section takes its datasets from `defaults:`
   instead of failing to load.
 - A folder with no spike sorting, only the SpikeGLX `ap.meta`, opens with the probe layout from the

@@ -1286,7 +1286,10 @@ class ProbeHandlerLocal(ProbeHandler):
         self.geom = make_geometry_loader(self.data_paths)
         self.geom.get_geometry()
 
-        self.n_shanks = self.geom.channels.n_shanks
+        # Shank count comes from the ALF channels object when present, else from the SpikeGLX
+        # meta (e.g. a folder with no spike sorting), as in ProbeHandlerLocalYaml.get_shanks
+        sites = self.geom.channels if self.geom.channels is not None else self.geom.electrodes
+        self.n_shanks = sites.n_shanks
         if self.n_shanks == 1:
             self.shank_labels = ['shank_1']
         else:

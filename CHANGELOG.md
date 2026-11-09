@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- The firing rate, correlation, passive and receptive field images are drawn at the depths their
+  spikes were binned at. Spikes below the lowest site shifted or compressed these images before.
+  Spikes localised below the probe tip (depth < 0) are left out of them.
 - Replotting the probe plot replaces its colour bar instead of adding another one, and an empty
   probe plot no longer keeps the previous colour bar. The same applies to the scale factor colour
   bar on each fit and to the shared colour bars shown with both configurations.

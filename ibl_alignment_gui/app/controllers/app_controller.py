@@ -782,12 +782,15 @@ class AlignmentGUIController:
         """
         Plot slice panels and configure the LUT.
 
+        Only shanks with an alignment are plotted, as the slice shows the track through the
+        histology, which needs the picks.
+
         Parameters
         ----------
         plot_key: str
             The key of the slice plot to display
         data_only: bool
-            Whether the plot can be generated without histology data
+            Passed by the plot menu like the other plot types. Not used, see above
 
         Notes
         -----
@@ -802,16 +805,20 @@ class AlignmentGUIController:
         self.slice_figs = Bunch()
         if self.model.selected_config == 'both':
             results = self._plot_slice_panels(
-                plot_key, data_only=data_only, configs=[self.model.default_config]
+                plot_key, data_only=False, configs=[self.model.default_config]
             )
             self.slice_figs = {res['shank']: res['fig'] for res in results}
             self.plot_channel_panels()
         else:
             results = self._plot_slice_panels(
-                plot_key, data_only=data_only, configs=[self.model.selected_config]
+                plot_key, data_only=False, configs=[self.model.selected_config]
             )
             self.slice_figs = {res['shank']: res['fig'] for res in results}
             self.plot_channel_panels(configs=[self.model.selected_config])
+
+        # No shank has picks, so there is no slice to show
+        if len(results) == 0:
+            return
 
         imgs = [res['img'] for res in results]
         cb = [res['cbar'] for res in results][0]
@@ -2210,7 +2217,7 @@ class AlignmentGUIController:
     @shank_loop
     def set_init_reference_lines(self, items: ShankController, **kwargs) -> None:
         """Find the initial alignment for specified shanks and creates reference lines."""
-        self.model.set_init_alignment()
+        items.model.set_init_alignment()
         feature_prev = items.model.feature_prev
         if np.any(feature_prev):
             self.create_reference_lines(feature_prev[1:-1] * 1e6, items)

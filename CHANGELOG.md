@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - datoviz is only loaded when the 3D features view is opened, not when the GUI starts.
 
 ### Fixed
+- A multi-shank session where some shanks have no picks displays correctly. Those shanks show
+  their ephys plots without a slice, instead of the slice and reference lines failing for every
+  shank.
 - Previous and Next show the reference lines that the fit at that step used, instead of keeping
   the lines of the latest fit. Lines added or moved since the last fit are discarded.
 - Choosing another alignment from the dropdown keeps the current fit in the alignment history, so

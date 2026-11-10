@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The docs give the version tags of the channel- and unit-level models (`0.0.1`, ...) as examples;
+  the alignment model's default release is ibleatools' `ephysatlas.alignment.CHANNEL_MODEL_REVISION`,
+  `0.0.1` since ibleatools 0.13.0.
+
 ## [0.1.0a5] - 2026-11-09
 
 ### Added

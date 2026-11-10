@@ -20,8 +20,9 @@ features of one vintage, and can only be run on features of that vintage: a diff
 lack columns the model needs, or compute them differently. This is why the GUI checks the
 vintage of the features against the model, and refuses rather than running on mismatched features.
 
-A model release has its own tag, which need not be the vintage it was trained on: a `2026_W45`
-release of a model can be trained on `2026_W42` features. The GUI never infers the vintage from the
+A model release has its own tag, which need not be the vintage it was trained on: the channel-level
+and unit-level models are tagged by version (`0.0.1`, `0.1.0`, ...), and their `0.0.1` release is
+trained on `2026_W42` features. The GUI never infers the vintage from the
 tag; it reads it from the `vintage` in the release's `ephysatlas_model.json`.
 
 ## Region decoders

@@ -8,7 +8,7 @@ A model can only run on features of the vintage it was trained on, the `vintage`
 vintage the selected release requires, for example:
 
 ```text
-You have features of vintage 2026_W26, but the selected release 2026_W45 of the model
+You have features of vintage 2026_W26, but the selected release 0.0.1 of the model
 int-brain-lab/ea-encoder-channel requires features of vintage 2026_W42.
 
 You can either:

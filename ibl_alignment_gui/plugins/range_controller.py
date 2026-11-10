@@ -37,6 +37,7 @@ def setup(controller: 'AlignmentGUIController') -> None:
     controller.plugins[PLUGIN_NAME]['plot_scatter_panels'] = range_controller.on_plot_changed
     controller.plugins[PLUGIN_NAME]['plot_line_panels'] = range_controller.on_plot_changed
     controller.plugins[PLUGIN_NAME]['on_view_changed'] = range_controller.disable_sliders
+    controller.plugins[PLUGIN_NAME]['teardown'] = range_controller.teardown
 
     # Add a submenu to the main menu
     action = QtWidgets.QAction(PLUGIN_NAME, controller.view)
@@ -240,7 +241,11 @@ class RangeController:
 
     def setup(self) -> None:
         """Set up the plugin GUI and connect callbacks."""
-        self.view = RangeControllerView._get_or_create(self.title, self.controller)
+        view = RangeControllerView._get_or_create(self.title, self.controller)
+        # The window is already open and connected, _get_or_create has brought it to the front
+        if view is self.view:
+            return
+        self.view = view
         self.view.closed.connect(self.on_close)
         for slider_widget in self.view.sliders.values():
             slider_widget.released.connect(self.on_slider_moved)
@@ -253,9 +258,28 @@ class RangeController:
         """
         Triggered when the plugin window is closed.
 
-        Deactivate the plugin and callbacks.
+        Deactivate the plugin and callbacks, and delete the window so it does not linger hidden.
         """
         self.controller.plugins[PLUGIN_NAME]['activated'] = False
+        self.view.deleteLater()
+        self.view = None
+
+    def teardown(self, _controller: 'AlignmentGUIController') -> None:
+        """
+        Close the window when the session changes.
+
+        Invoked via ``execute_plugins('teardown', controller)`` at the start of a session
+        rebuild. The shank and configuration checkboxes belong to the previous session, so the
+        window is closed rather than left to act on shanks that no longer exist.
+
+        Parameters
+        ----------
+        _controller : AlignmentGUIController
+            The main application controller. Accepted to match the plugin hook signature
+            but unused.
+        """
+        if self.view is not None:
+            self.view.close()
 
     def disable_sliders(self) -> None:
         """Disable sliders when the view is changed to the feature or all predictions view."""

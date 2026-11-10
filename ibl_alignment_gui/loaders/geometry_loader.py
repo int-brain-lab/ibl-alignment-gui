@@ -6,8 +6,15 @@ from typing import Any
 import numpy as np
 import spikeglx
 
-import ibl_alignment_gui.loaders.data_loader as dloader
-import one.alf.io as alfio
+from ibl_alignment_gui.loaders.sources import (
+    AlfReaderLocal,
+    AlfReaderOne,
+    RawSource,
+    RawSourceSpikeGLX,
+    SortingSource,
+    SortingSourceAlf,
+    SortingSourceSI,
+)
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
 from one.alf.exceptions import ALFObjectNotFound
@@ -136,7 +143,8 @@ class ChannelGeometry(Geometry):
     """
     Geometry class using spike sorting channel data.
 
-    Here the sites correspond to the spike sorting channels.
+    Here the sites correspond to the spike sorting channels. The channels are split into shanks
+    by their 'shank' when given, otherwise by the gaps in their x coordinates.
 
     Parameters
     ----------
@@ -148,6 +156,7 @@ class ChannelGeometry(Geometry):
 
     def __init__(self, channels: Bunch[str, np.ndarray], shank_diff: int = 100) -> None:
         self.shank_diff: int = shank_diff
+        self.shank: np.ndarray | None = channels.get('shank')
         chn_x = channels['localCoordinates'][:, 0]
         chn_y = channels['localCoordinates'][:, 1]
         chn_ind = channels['rawInd']
@@ -156,13 +165,15 @@ class ChannelGeometry(Geometry):
 
     def _get_n_shanks(self) -> int:
         """
-        Detect the number of shanks on the probe using the difference in spacing in x coordinates.
+        Detect the number of shanks on the probe from the shanks or the x coordinates.
 
         Returns
         -------
         int
             The number of shanks detected on the probe
         """
+        if self.shank is not None:
+            return np.unique(self.shank).size
         x_coords = np.unique(self.x_coords)
         x_coords_diff = np.diff(x_coords)
         n_shanks = np.sum(x_coords_diff > self.shank_diff) + 1
@@ -170,13 +181,20 @@ class ChannelGeometry(Geometry):
 
     def _get_shank_groups(self) -> Bunch[int, np.ndarray]:
         """
-        Get the channel index per shank using the difference in spacing in x coordinates.
+        Get the channel index per shank from the shanks or the x coordinates.
 
         Returns
         -------
         Bunch
             A bunch containing the sites indices for each shank.
         """
+        if self.shank is not None:
+            # Shank ids can be strings, so the shanks are ordered by their position instead
+            shanks = sorted(
+                np.unique(self.shank), key=lambda sh: np.min(self.x_coords[self.shank == sh])
+            )
+            return Bunch({i: np.where(self.shank == sh)[0] for i, sh in enumerate(shanks)})
+
         x_coords = np.unique(self.x_coords)
         shank_groups = np.split(x_coords, np.where(np.diff(x_coords) > self.shank_diff)[0] + 1)
 
@@ -197,20 +215,23 @@ class ChannelGeometry(Geometry):
         return groups
 
 
-class MetaGeometry(Geometry):
+class ElectrodeGeometry(Geometry):
     """
-    Geometry class using spikeglx ap metadata. Here the sites correspond to the electrode sites.
+    Geometry class using the electrodes of the raw recording.
+
+    Here the sites correspond to the electrode sites.
 
     Parameters
     ----------
-    meta: Bunch
-        A Bunch object containing spikeglx metadata
+    electrodes: dict
+        The geometry of the raw recording in file order, with the x, y and shank of each
+        channel.
     """
 
-    def __init__(self, meta: Bunch[str, Any]) -> None:
-        self.meta = spikeglx.geometry_from_meta(meta, sort=False)
-        elec_x = self.meta['x']
-        elec_y = self.meta['y']
+    def __init__(self, electrodes: dict[str, np.ndarray]) -> None:
+        self.electrodes = electrodes
+        elec_x = self.electrodes['x']
+        elec_y = self.electrodes['y']
 
         chn_ind = np.arange(elec_x.size)
 
@@ -218,20 +239,20 @@ class MetaGeometry(Geometry):
 
     def _get_n_shanks(self) -> int:
         """
-        Detect the number of shanks on the probe using the spikeglx metadata.
+        Detect the number of shanks on the probe using the shank of each electrode.
 
         Returns
         -------
         int
             The number of shanks detected on the probe
         """
-        n_shanks = np.unique(self.meta['shank']).size
+        n_shanks = np.unique(self.electrodes['shank']).size
 
         return n_shanks
 
     def _get_shank_groups(self) -> Bunch[int, np.ndarray]:
         """
-        Get the channel index per shank using the spikeglx metadata.
+        Get the channel index per shank using the shank of each electrode.
 
         Returns
         -------
@@ -239,10 +260,10 @@ class MetaGeometry(Geometry):
             A bunch containing the channel indices for each shank.
         """
         groups = Bunch()
-        shanks = np.unique(self.meta['shank'])
+        shanks = np.unique(self.electrodes['shank'])
 
         for i, sh in enumerate(shanks):
-            groups[i] = np.where(self.meta['shank'] == sh)[0]
+            groups[i] = np.where(self.electrodes['shank'] == sh)[0]
 
         return groups
 
@@ -264,7 +285,7 @@ def find_geometry_mismatches(electrodes: Geometry, channels: Geometry) -> list[s
     Parameters
     ----------
     electrodes : Geometry
-        Geometry built from the ap.meta metadata, split per shank.
+        Geometry built from the electrodes of the raw recording, split per shank.
     channels : Geometry
         Geometry built from the spike sorting channels, split per shank.
 
@@ -303,20 +324,26 @@ def find_geometry_mismatches(electrodes: Geometry, channels: Geometry) -> list[s
 
 class GeometryLoader(ABC):
     """
-    Abstract base class for loading probe geometry from metadata or channels.
+    Abstract base class for loading probe geometry from the raw recording electrodes or channels.
 
-    Subclasses must implement the `load_meta_data` and `load_channels` methods.
+    Subclasses must implement the `load_raw_source` method.
+
+    Parameters
+    ----------
+    sorting : SortingSource
+        The source of the spike sorting channels.
     """
 
-    def __init__(self):
+    def __init__(self, sorting: SortingSource):
+        self.sorting: SortingSource = sorting
         self.electrodes: Geometry | None = None
         self.channels: Geometry | None = None
 
     def get_geometry(self):
-        """Load probe geometry from both the metadata and the channels."""
-        meta = self.load_meta_data()
-        if meta is not None:
-            self.electrodes = MetaGeometry(meta)
+        """Load probe geometry from both the raw recording electrodes and the channels."""
+        raw = self.load_raw_source()
+        if raw is not None:
+            self.electrodes = ElectrodeGeometry(raw.geometry)
             self.electrodes.split_sites_per_shank()
 
         chns = self.load_channels()
@@ -344,12 +371,22 @@ class GeometryLoader(ABC):
                 self.electrodes = None
 
     @abstractmethod
-    def load_meta_data(self) -> Bunch[str, Any] | None:
-        """Load probe metadata from spikeglx ap.meta file."""
+    def load_raw_source(self) -> RawSource | None:
+        """Get the source of the electrodes of the raw recording, or None when there is none."""
 
-    @abstractmethod
-    def load_channels(self, **kwargs) -> Bunch[str, np.ndarray] | None:
-        """Load spike sorting channels data."""
+    def load_channels(self) -> Bunch[str, np.ndarray] | None:
+        """
+        Load spike sorting channels data.
+
+        Returns
+        -------
+        Bunch or None
+            A Bunch containing the channels data, or None if not found (or there is no spike
+            sorting).
+        """
+        chns = self.sorting.load_channels()
+        self.sorting.release()
+        return chns if chns['exists'] else None
 
     def get_sites_for_shank(self, shank_idx: int, sites=None) -> Bunch[str, Any]:
         """
@@ -416,16 +453,18 @@ class GeometryLoaderOne(GeometryLoader):
         self.probe_label: str = insertion['name']
         self.probe_collection: str = probe_collection
 
-        super().__init__()
+        super().__init__(
+            SortingSourceAlf(AlfReaderOne(one, self.eid, collection=self.probe_collection))
+        )
 
-    def load_meta_data(self) -> dict | None:
+    def load_raw_source(self) -> RawSourceSpikeGLX | None:
         """
-        Load probe metadata from spikeglx ap.meta file.
+        Get the electrodes from the spikeglx ap.meta file, downloaded without the raw data.
 
         Returns
         -------
-        dict or None
-            A dict containing the spikeglx AP band metadata, or None if not found.
+        RawSourceSpikeGLX or None
+            The source reading the metadata, or None if there is no ap.meta file.
         """
         try:
             meta_file = self.one.load_dataset(
@@ -434,29 +473,9 @@ class GeometryLoaderOne(GeometryLoader):
                 collection=f'raw_ephys_data/{self.probe_label}',
                 download_only=True,
             )
-            return spikeglx.read_meta_data(meta_file)
         except ALFObjectNotFound:
             return None
-
-    def load_channels(self, **kwargs) -> Bunch[str, Any] | None:
-        """
-        Load spike sorting channels data.
-
-        Returns
-        -------
-        Bunch or None
-            A Bunch containing the channels data, or None if not found.
-        """
-        chns = dloader.DataLoader.load_data(
-            self.one.load_object,
-            self.eid,
-            'channels',
-            collection=self.probe_collection,
-            attribute=['localCoordinates', 'rawInd'],
-            **kwargs,
-        )
-
-        return chns if chns['exists'] else None
+        return RawSourceSpikeGLX(lambda: spikeglx.Reader(meta_file))
 
 
 class GeometryLoaderLocal(GeometryLoader):
@@ -473,43 +492,45 @@ class GeometryLoaderLocal(GeometryLoader):
     def __init__(self, data_paths: DatasetPaths):
         self.spike_path: Path = data_paths.spike_sorting
         self.meta_path: Path = data_paths.raw_ephys
+        reader = AlfReaderLocal(self.spike_path) if self.spike_path is not None else None
 
-        super().__init__()
+        super().__init__(SortingSourceAlf(reader))
 
-    def load_meta_data(self) -> dict | None:
+    def load_raw_source(self) -> RawSourceSpikeGLX | None:
         """
-        Load probe metadata from spikeglx ap.meta file.
+        Get the electrodes from the spikeglx ap.meta file, read without the raw data.
 
         Returns
         -------
-        dict or None
-            A dict containing the spikeglx AP band metadata, or None if not found.
+        RawSourceSpikeGLX or None
+            The source reading the metadata, or None if there is no ap.meta file.
         """
         if self.meta_path is None:
             return None
         meta_file = next(self.meta_path.glob('*.ap.*meta'), None)
-        return spikeglx.read_meta_data(meta_file) if meta_file else None
-
-    def load_channels(self, **kwargs) -> Bunch[str, Any] | None:
-        """
-        Load spike sorting channels data.
-
-        Returns
-        -------
-        Bunch or None
-            A Bunch containing the channels data, or None if not found (or there is no spike
-            sorting).
-        """
-        if self.spike_path is None:
+        if meta_file is None:
             return None
-        chns = dloader.DataLoader.load_data(
-            alfio.load_object,
-            self.spike_path,
-            'channels',
-            attribute=['localCoordinates', 'rawInd'],
-            **kwargs,
-        )
-        return chns if chns['exists'] else None
+        return RawSourceSpikeGLX(lambda: spikeglx.Reader(meta_file))
+
+
+class GeometryLoaderSI(GeometryLoaderLocal):
+    """
+    Geometry loader using a SpikeInterface SortingAnalyzer on the local file system.
+
+    The channels are read from the SortingAnalyzer and the electrodes from the ``raw_ephys``
+    folder. The raw channel of each channel is matched with the probe contact ids saved in the
+    ``processed_ephys`` folder, when there are any.
+
+    Parameters
+    ----------
+    data_paths : DatasetPaths
+        The resolved dataset paths for the probe, with the SortingAnalyzer as the
+        ``spike_sorting``.
+    """
+
+    def __init__(self, data_paths: DatasetPaths):
+        super().__init__(data_paths)
+        self.sorting = SortingSourceSI(self.spike_path, raw_qc_path=data_paths.processed_ephys)
 
 
 def arrange_channels_into_banks(

@@ -8,8 +8,9 @@ can read. The full list of files the GUI understands, and where each one goes, i
 To run the GUI you need three things:
 
 Electrophysiology data
-: Spike sorting output (`spikes.*`, `clusters.*`, `channels.*`), processed electrophysiology
-  (the RMS and power spectrum files, `_iblqc_*`), or both.
+: Spike sorting output (`spikes.*`, `clusters.*`, `channels.*`, or a SpikeInterface
+  `SortingAnalyzer`), processed electrophysiology (the RMS and power spectrum files, `_iblqc_*`),
+  or both.
 
 The position of each channel on the probe
 : So that the GUI can place the electrophysiology along the probe's depth. This comes from the

@@ -782,12 +782,15 @@ class AlignmentGUIController:
         """
         Plot slice panels and configure the LUT.
 
+        Only shanks with an alignment are plotted, as the slice shows the track through the
+        histology, which needs the picks.
+
         Parameters
         ----------
         plot_key: str
             The key of the slice plot to display
         data_only: bool
-            Whether the plot can be generated without histology data
+            Passed by the plot menu like the other plot types. Not used, see above
 
         Notes
         -----
@@ -802,16 +805,20 @@ class AlignmentGUIController:
         self.slice_figs = Bunch()
         if self.model.selected_config == 'both':
             results = self._plot_slice_panels(
-                plot_key, data_only=data_only, configs=[self.model.default_config]
+                plot_key, data_only=False, configs=[self.model.default_config]
             )
             self.slice_figs = {res['shank']: res['fig'] for res in results}
             self.plot_channel_panels()
         else:
             results = self._plot_slice_panels(
-                plot_key, data_only=data_only, configs=[self.model.selected_config]
+                plot_key, data_only=False, configs=[self.model.selected_config]
             )
             self.slice_figs = {res['shank']: res['fig'] for res in results}
             self.plot_channel_panels(configs=[self.model.selected_config])
+
+        # No shank has picks, so there is no slice to show
+        if len(results) == 0:
+            return
 
         imgs = [res['img'] for res in results]
         cb = [res['cbar'] for res in results][0]
@@ -1076,9 +1083,12 @@ class AlignmentGUIController:
                 if cb_default
                 else None
             )
+            fig_cb = getattr(self.shank_items[shank][self.model.default_config].view, fig)
+            # Remove the colorbar of the previous plot before adding the new one
+            for item in [it for it in fig_cb.items if isinstance(it, ColorBar)]:
+                fig_cb.removeItem(item)
             if not cmap:
                 continue
-            fig_cb = getattr(self.shank_items[shank][self.model.default_config].view, fig)
             cbar = ColorBar(cmap, plot_item=fig_cb)
             if cb_default:
                 cbar.set_axis(cb_default.ticks, cb_default.label, loc='top', extent=20)
@@ -1220,6 +1230,8 @@ class AlignmentGUIController:
             self.remove_reference_lines_from_display(shanks=[self.model.selected_shank])
             # Reset arrays that track the reference lines
             self.reset_reference_line_arrays(shanks=[self.model.selected_shank])
+            # Move to a new slot in the alignment history, so the current fit is kept for undo
+            self.reset_feature_and_tracks(shanks=[self.model.selected_shank])
             # Add the reference lines for the selected alignment
             self.set_init_reference_lines(shanks=[self.model.selected_shank])
             # Update the plots
@@ -1610,6 +1622,8 @@ class AlignmentGUIController:
 
         # Add reference lines to the display
         if init:
+            # A new probe starts with its reference lines shown
+            self.show_lines = True
             self.set_init_reference_lines()
         else:
             self.add_reference_lines_to_display()
@@ -1800,6 +1814,7 @@ class AlignmentGUIController:
         arrow is pressed.
         """
         if self.model.next_idx():
+            self.restore_reference_lines()
             self.update_plots(shanks=[self.model.selected_shank])
             self.log_fit()
 
@@ -1810,8 +1825,27 @@ class AlignmentGUIController:
         Called when next button or Shift+left arrow is pressed.
         """
         if self.model.prev_idx():
+            self.restore_reference_lines()
             self.update_plots(shanks=[self.model.selected_shank])
             self.log_fit()
+
+    def restore_reference_lines(self) -> None:
+        """
+        Replace the reference lines of the selected shank with those of the alignment shown.
+
+        Called after moving through the alignment history, so the lines on display are the ones
+        the fit at that step used. Lines added or moved since the last fit are discarded.
+        """
+        shanks = [self.model.selected_shank]
+        self.remove_reference_lines_from_display(shanks=shanks)
+        self.reset_reference_line_arrays(shanks=shanks)
+        self.create_fit_reference_lines(shanks=shanks)
+
+    @shank_loop
+    def create_fit_reference_lines(self, items: ShankController, **kwargs) -> None:
+        """Create reference lines at the positions used by the fit at the current history step."""
+        # The first and last points are the range ends of the alignment, not reference lines
+        self.create_reference_lines(items.model.feature[1:-1] * 1e6, items)
 
     def log_fit(self) -> None:
         """
@@ -1879,6 +1913,10 @@ class AlignmentGUIController:
             The index of the panel that the mouse click event occured
         """
         if event.double():
+            # Show the hidden reference lines, so the new line is not the only one on display
+            if not self.show_lines:
+                self.toggle_reference_lines()
+
             if idx != self.model.selected_idx:
                 self.view.set_selection_dropdown('shank', idx)
                 self.on_shank_selected(idx)
@@ -2179,7 +2217,7 @@ class AlignmentGUIController:
     @shank_loop
     def set_init_reference_lines(self, items: ShankController, **kwargs) -> None:
         """Find the initial alignment for specified shanks and creates reference lines."""
-        self.model.set_init_alignment()
+        items.model.set_init_alignment()
         feature_prev = items.model.feature_prev
         if np.any(feature_prev):
             self.create_reference_lines(feature_prev[1:-1] * 1e6, items)
@@ -2365,7 +2403,13 @@ class AlignmentGUIController:
 
     @shank_loop
     def add_reference_lines_to_display(self, items: ShankController, **kwargs) -> None:
-        """Add previously created reference lines and scatter points to their respective plots."""
+        """
+        Add previously created reference lines and scatter points to their respective plots.
+
+        Does nothing while the reference lines are hidden with Shift+H.
+        """
+        if not self.show_lines:
+            return
         shank = kwargs.get('shank')
         items.add_reference_lines_to_display()
         if shank == self.model.selected_shank:

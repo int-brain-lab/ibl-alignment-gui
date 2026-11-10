@@ -1,4 +1,3 @@
-import logging
 import tempfile
 import unittest
 import uuid
@@ -8,320 +7,147 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
+import one.alf.io as alfio
 from ibl_alignment_gui.loaders import data_loader
 from ibl_alignment_gui.loaders.data_loader import (
     DataLoader,
     DataLoaderLocal,
     DataLoaderOne,
     FeatureLoaderOne,
-    SpikeGLXLoader,
+    RawDataLoader,
     SpikeGLXLoaderLocal,
     SpikeGLXLoaderOne,
+)
+from ibl_alignment_gui.loaders.sources import (
+    EphysQCSource,
+    PassiveSource,
+    RawSource,
+    RawSourceSpikeGLX,
+    SortingSource,
 )
 from ibl_alignment_gui.utils.optional import IBL_EXTRA_HINT, has_ibllib
 from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
-from one.alf.exceptions import ALFObjectNotFound
+from tests.loaders._alf_session import write_session
 
 
 class TestDataLoader(unittest.TestCase):
+    """Test the DataLoader class."""
+
     def setUp(self):
-        self.mock_geometry = Bunch(
-            {
-                'spikes_ind': np.array([0, 1]),
-                'raw_ind': np.array([0, 1]),
-                'unsort': np.array([0, 1]),
-            }
+        self.sorting = MagicMock(spec=SortingSource)
+        self.ephys_qc = MagicMock(spec=EphysQCSource)
+        self.passive = MagicMock(spec=PassiveSource)
+        self.loader = DataLoader(self.sorting, self.ephys_qc, self.passive)
+        self.loader.shank_sites = Bunch(spikes_ind=np.array([0, 1]), raw_ind=np.array([0, 1]))
+
+    @staticmethod
+    def make_spikes(clusters: np.ndarray) -> Bunch:
+        """Spikes with all the attributes the plots need"""
+        n = clusters.size
+        return Bunch(
+            clusters=clusters,
+            times=np.arange(n),
+            depths=np.arange(n),
+            amps=np.ones(n),
+            exists=True,
         )
 
-        self.sample_data = Bunch(
-            {
-                'amps': np.ones((5, 2)),
-                'timestamps': np.arange(5),
-            }
+    def test_get_passive_data_from_source(self):
+        """The RF map, stimuli and gabors come from the passive source"""
+        result = self.loader.get_passive_data()
+        self.assertEqual(
+            result,
+            (
+                self.passive.load_rf_map.return_value,
+                self.passive.load_stims.return_value,
+                self.passive.load_gabor.return_value,
+            ),
         )
 
-        self.eid_or_path = str(uuid.uuid4())
-
-    def _mock_loaders(self, mock_data):
-        """Helper to make a fake DataLoader with abstract methods implemented."""
-
-        class MockDataLoader(DataLoader):
-            def load_passive_data(self, *a, **kw):
-                return mock_data
-
-            def load_raw_passive_data(self, *a, **kw):
-                return mock_data
-
-            def load_ephys_data(self, *a, **kw):
-                return mock_data
-
-            def load_spikes_data(self, *a, **kw):
-                return mock_data
-
-        loader = MockDataLoader()
-        loader.shank_sites = self.mock_geometry
-
-        return loader
-
-    def test_load_data(self):
-        """Test the load_data method"""
-        with self.subTest('Data exists'):
-            func = MagicMock(return_value=self.sample_data)
-            data = DataLoader.load_data(func, self.eid_or_path, 'ephysTimeRmsAP')
-            self.assertTrue(data['exists'])
-
-        with self.subTest('Data does not exist - catches error'):
-            func = MagicMock(side_effect=ALFObjectNotFound)
-            with self.assertLogs('ibl_alignment_gui.loaders.data_loader', level='WARNING') as log:
-                data = DataLoader.load_data(func, self.eid_or_path, 'ephysTimeRmsAP')
-            self.assertFalse(data['exists'])
-            self.assertTrue(any('ephysTimeRmsAP' in msg for msg in log.output))
-
-        with self.subTest('Data does not exist - custom error message'):
-            func = MagicMock(side_effect=ALFObjectNotFound)
-            with self.assertLogs(
-                logging.getLogger('ibl_alignment_gui.loaders.data_loader'), logging.WARNING
-            ) as log:
-                data = DataLoader.load_data(
-                    func, self.eid_or_path, 'ephysTimeRmsAP', raise_message='custom message'
-                )
-
-            self.assertFalse(data['exists'])
-            self.assertTrue(any('custom message' in msg for msg in log.output))
-
-        with self.subTest('Data does not exist - raise error'):
-            func = MagicMock(side_effect=ALFObjectNotFound)
-            with self.assertRaises(ALFObjectNotFound):
-                DataLoader.load_data(func, self.eid_or_path, 'ephysTimeRmsAP', raise_error=True)
-
-    @patch('ibl_alignment_gui.loaders.data_loader.DataLoader.get_spikes_data')
-    @patch('ibl_alignment_gui.loaders.data_loader.DataLoader.get_rms_data')
-    @patch('ibl_alignment_gui.loaders.data_loader.DataLoader.get_psd_data')
-    @patch('ibl_alignment_gui.loaders.data_loader.DataLoader.get_passive_data')
-    def test_get_data(self, mock_passive, mock_psd, mock_rms, mock_spikes):
-        """Test the get_data method"""
-        mock_passive.return_value = (Bunch(exists=True), Bunch(exists=True), Bunch(exists=True))
-        mock_rms.return_value = Bunch(exists=True)
-        mock_psd.return_value = Bunch(exists=True)
-        mock_spikes.return_value = (Bunch(exists=True), Bunch(exists=True), Bunch(exists=True))
-
-        loader = self._mock_loaders(Bunch(exists=True))
-        data = loader.get_data(Bunch({'unsort': np.array([0, 1])}))
-        self.assertIn('spikes', data)
-        self.assertIn('clusters', data)
-        self.assertIn('channels', data)
-        self.assertIn('rms_LF', data)
-        self.assertIn('psd_LF', data)
-        self.assertIn('rf_map', data)
-        self.assertIn('pass_stim', data)
-        self.assertIn('gabor', data)
-
-    def test_get_passive_data(self):
-        """Test the get_passive_data method"""
-        with self.subTest('All passive data exists'):
-            loader = self._mock_loaders(Bunch(exists=True))
-            loader.load_passive_data = MagicMock(
-                return_value=Bunch(
-                    {
-                        'position': np.array([35, -35]),
-                        'contrast': np.array([0.5, 0.5]),
-                        'start': np.array([1, 2]),
-                        'exists': True,
-                    }
-                )
-            )
-            loader.load_raw_passive_data = MagicMock(return_value={'raw': '/tmp/rfmap.bin'})
-
-            with patch('numpy.fromfile', return_value=np.arange(15 * 15 * 2, dtype=np.uint8)):
-                rf_data, stim_data, gabor_data = loader.get_passive_data()
-            self.assertTrue(rf_data['exists'])
-            self.assertTrue(stim_data['exists'])
-            self.assertTrue(gabor_data['exists'])
-
-        with self.subTest('Passive RFM data does not exist'):
-            loader = self._mock_loaders(Bunch(exists=True))
-            loader.load_passive_data = MagicMock(
-                side_effect=[
-                    Bunch(exists=False),
-                    Bunch(exists=True),
-                    Bunch(
-                        {
-                            'position': np.array([35, -35]),
-                            'contrast': np.array([0.5, 0.5]),
-                            'start': np.array([1, 2]),
-                            'exists': True,
-                        }
-                    ),
-                ]
-            )
-            loader.load_raw_passive_data = MagicMock(side_effect=ALFObjectNotFound)
-            with self.assertLogs('ibl_alignment_gui.loaders.data_loader', level='WARNING') as log:
-                rf_data, stim_data, gabor_data = loader.get_passive_data()
-
-            self.assertFalse(rf_data['exists'])
-            self.assertTrue(stim_data['exists'])
-            self.assertTrue(gabor_data['exists'])
-            self.assertTrue(any('passiveRFM' in msg for msg in log.output))
-
-        with self.subTest('Passive Gabor data does not exists'):
-            loader = self._mock_loaders(Bunch(exists=True))
-            loader.load_passive_data = MagicMock(
-                side_effect=[Bunch(exists=True), Bunch(exists=True), Bunch(exists=False)]
-            )
-            loader.load_raw_passive_data = MagicMock(return_value={'raw': '/tmp/fake.bin'})
-            with patch('numpy.fromfile', return_value=np.arange(15 * 15 * 2, dtype=np.uint8)):
-                rf_data, stim_data, gabor_data = loader.get_passive_data()
-            self.assertTrue(rf_data['exists'])
-            self.assertTrue(stim_data['exists'])
-            self.assertFalse(gabor_data['exists'])
-
-        with self.subTest('Passive Gabor data missing keys'):
-            loader = self._mock_loaders(Bunch(exists=True))
-            loader.load_passive_data = MagicMock(
-                side_effect=[Bunch(exists=True), Bunch(exists=True), ALFObjectNotFound]
-            )
-            loader.load_raw_passive_data = MagicMock(return_value={'raw': '/tmp/fake.bin'})
-            with (
-                self.assertLogs('ibl_alignment_gui.loaders.data_loader', level='WARNING') as log,
-                patch('numpy.fromfile', return_value=np.arange(15 * 15 * 2, dtype=np.uint8)),
-            ):
-                rf_data, stim_data, gabor_data = loader.get_passive_data()
-            self.assertTrue(rf_data['exists'])
-            self.assertTrue(stim_data['exists'])
-            self.assertFalse(gabor_data['exists'])
-            self.assertTrue(any('Failed to process' in msg for msg in log.output))
-
-    def test_get_rms_data(self):
-        """Test the get_rms_data method"""
-
-        def _test_rms(test_data, xlabel, band='AP'):
-            loader = self._mock_loaders(test_data)
-            data = loader.get_rms_data(band)
-            self.assertIn('rms', data)
-            self.assertIn('timestamps', data)
-            self.assertTrue(data['xaxis'], xlabel)
-
-        with self.subTest('AP RMS data with rms attribute'):
-            mock_data = Bunch({'rms': np.ones((5, 2)), 'timestamps': np.arange(5), 'exists': True})
-            _test_rms(mock_data, 'Time (s)')
-
-        with self.subTest('LF RMS data with rms attribute'):
-            mock_data = Bunch({'rms': np.ones((5, 2)), 'timestamps': np.arange(5), 'exists': True})
-            _test_rms(mock_data, 'Time (s)', band='LF')
-
-        with self.subTest('AP RMS data with amps attribute'):
-            mock_data = Bunch(
-                {'amps': np.ones((5, 2)), 'timestamps': np.arange(5), 'exists': True}
-            )
-            _test_rms(mock_data, 'Time (s)')
-
-        with self.subTest('AP RMS data without timestamps attribute'):
-            mock_data = Bunch({'rms': np.ones((5, 2)), 'exists': True})
-            _test_rms(mock_data, 'Time samples')
-
-        with self.subTest('No AP RMS data'):
-            mock_data = Bunch(
-                {
-                    'exists': False,
-                }
-            )
-            loader = self._mock_loaders(mock_data)
-            data = loader.get_rms_data('AP')
-            self.assertNotIn('rms', data)
-            self.assertFalse(data['exists'])
-
-    def test_get_psd_data(self):
-        """Test the get_psd_data method"""
-
-        def _test_psd(test_data, band='AP'):
-            loader = self._mock_loaders(test_data)
-            data = loader.get_psd_data(band)
-            self.assertIn('power', data)
-            self.assertIn('freqs', data)
-
-        with self.subTest('LF PSD data with power attribute'):
-            mock_data = Bunch({'power': np.ones((5, 2)), 'freqs': np.arange(5), 'exists': True})
-            _test_psd(mock_data)
-
-        with self.subTest('AP PSD data with power attribute'):
-            mock_data = Bunch({'power': np.ones((5, 2)), 'freqs': np.arange(5), 'exists': True})
-            _test_psd(mock_data, band='AP')
-
-        with self.subTest('LF PSD data with amps attribute'):
-            mock_data = Bunch({'amps': np.ones((5, 2)), 'freqs': np.arange(5), 'exists': True})
-            _test_psd(mock_data, band='AP')
-
-        with self.subTest('No LF PSD data'):
-            mock_data = Bunch(
-                {
-                    'exists': False,
-                }
-            )
-            loader = self._mock_loaders(mock_data)
-            data = loader.get_psd_data('LF')
-            self.assertNotIn('psd', data)
-            self.assertFalse(data['exists'])
-
-    @patch('ibl_alignment_gui.loaders.data_loader.DataLoader.filter_spikes_by_fr')
-    def test_get_spikes_data(self, mock_fr):
-        """Test the get_spikes_data method"""
-        mock_spikes = Bunch(
-            {
-                'clusters': np.array([0, 1, 2]),
-                'times': np.array([0.1, 0.2, 0.3]),
-                'depths': np.array([10.0, 20.0, 30.0]),
-                'amps': np.ones(3),
-                'exists': True,
-            }
+    def test_get_rms_data_on_shank_channels(self):
+        """The RMS of the named object is kept on the shank's channels only"""
+        self.ephys_qc.load_rms.return_value = Bunch(
+            rms=np.arange(30.0).reshape(5, 6),
+            timestamps=np.arange(5),
+            xaxis='Time (s)',
+            exists=True,
         )
+        data = self.loader.get_rms_data('ephysTimeRmsAPMain')
+        self.ephys_qc.load_rms.assert_called_once_with('ephysTimeRmsAPMain')
+        np.testing.assert_array_equal(data['rms'], np.arange(30.0).reshape(5, 6)[:, [0, 1]])
+        np.testing.assert_array_equal(data['timestamps'], np.arange(5))
+        self.assertEqual(data['xaxis'], 'Time (s)')
 
-        mock_clusters = Bunch(
-            {
-                'channels': np.array([0, 1, 2]),
-                'metrics': Bunch(firing_rate=np.array([1.0, 0.0, 2.0])),
-                'exists': True,
-            }
+    def test_get_psd_data_on_shank_channels(self):
+        """The power of the named object is kept on the shank's channels only"""
+        self.ephys_qc.load_psd.return_value = Bunch(
+            power=np.ones((4, 6)), freqs=np.arange(4.0), exists=True
         )
+        data = self.loader.get_psd_data('ephysSpectralDensityLF')
+        self.ephys_qc.load_psd.assert_called_once_with('ephysSpectralDensityLF')
+        self.assertEqual(data['power'].shape, (4, 2))
 
-        mock_channels = Bunch({'rawInd': np.array([0, 1, 2]), 'exists': True})
+    def test_get_rms_data_missing(self):
+        """Missing RMS data is returned unchanged"""
+        self.ephys_qc.load_rms.return_value = Bunch(exists=False)
+        self.assertEqual(self.loader.get_rms_data('ephysTimeRmsAP'), Bunch(exists=False))
 
-        mock_fr.return_value = (mock_spikes, mock_clusters)
+    def test_get_spikes_data_on_shank_channels(self):
+        """Spikes of clusters off the shank's channels are removed"""
+        self.sorting.load_spikes.return_value = self.make_spikes(np.array([0, 1, 2]))
+        self.sorting.load_clusters.return_value = Bunch(channels=np.array([0, 3, 1]), exists=True)
+        self.sorting.load_channels.return_value = Bunch(rawInd=np.arange(4), exists=True)
+        spikes, clusters, channels = self.loader.get_spikes_data()
+        np.testing.assert_array_equal(spikes['clusters'], [0, 2])
+        self.assertIs(clusters, self.sorting.load_clusters.return_value)
+        self.assertIs(channels, self.sorting.load_channels.return_value)
+        # Nothing more is read from the source, so it frees what it kept
+        self.sorting.release.assert_called_once()
 
-        with self.subTest('Spike sorting data exists'):
-            loader = self._mock_loaders(Bunch(exists=True))
-            loader.load_spikes_data = MagicMock(
-                side_effect=[mock_spikes, mock_clusters, mock_channels]
-            )
-            spikes, clusters, channels = loader.get_spikes_data()
-            self.assertTrue(spikes['exists'])
-            self.assertTrue(clusters['exists'])
-            self.assertTrue(channels['exists'])
+    def test_get_spikes_data_rate_filter(self):
+        """With filter set, low firing clusters are removed before the channel filter"""
+        spikes = self.make_spikes(np.array([0]))
+        clusters = Bunch(channels=np.array([0]), exists=True)
+        self.sorting.load_spikes.return_value = spikes
+        self.sorting.load_clusters.return_value = clusters
+        self.sorting.load_channels.return_value = Bunch(rawInd=np.arange(4), exists=True)
+        self.loader.filter = True
+        with patch.object(
+            DataLoader, 'filter_spikes_by_fr', return_value=(spikes, clusters)
+        ) as mock_fr:
+            self.loader.get_spikes_data()
+        mock_fr.assert_called_once_with(spikes, clusters)
 
-        with self.subTest('Spike sorting data exists and filter'):
-            loader = self._mock_loaders(Bunch(exists=True))
-            loader.filter = True
-            loader.load_spikes_data = MagicMock(
-                side_effect=[mock_spikes, mock_clusters, mock_channels]
-            )
-            _ = loader.get_spikes_data()
-            mock_fr.assert_called_once()
+    def test_get_spikes_data_missing(self):
+        """Without spike sorting the missing objects are returned unfiltered"""
+        for load in ('load_spikes', 'load_clusters', 'load_channels'):
+            getattr(self.sorting, load).return_value = Bunch(exists=False)
+        spikes, clusters, channels = self.loader.get_spikes_data()
+        self.assertFalse(spikes['exists'])
+        self.assertFalse(clusters['exists'])
+        self.assertFalse(channels['exists'])
 
-        with self.subTest('Spike sorting data does not exists'):
-            loader = self._mock_loaders(Bunch(exists=False))
-            spikes, clusters, channels = loader.get_spikes_data()
-            self.assertFalse(spikes['exists'])
-            self.assertFalse(clusters['exists'])
-            self.assertFalse(channels['exists'])
+    def test_get_spikes_data_incomplete(self):
+        """Spikes without the attributes the plots need are treated as missing"""
+        # Kilosort output not converted with extract_ephys has spike samples, not times
+        self.sorting.load_spikes.return_value = Bunch(
+            clusters=np.zeros(5, dtype=int), samples=np.arange(5), exists=True
+        )
+        with self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs:
+            spikes, *_ = self.loader.get_spikes_data()
+        self.assertEqual(spikes, {'exists': False})
+        self.assertTrue(
+            any('spikes.depths, spikes.amps, spikes.times' in msg for msg in logs.output)
+        )
 
     def test_filter_spikes_by_chns(self):
-        """Test the filter_spikes_by_chns method"""
+        """Only spikes of clusters on the shank's channels are kept"""
         mock_spikes = Bunch({'clusters': np.array([0, 1, 2, 5, 1, 3, 2]), 'exists': True})
         mock_clusters = Bunch({'channels': np.array([3, 0, 2, 1, 5, 17]), 'exists': True})
         mock_channels = Bunch({'rawInd': np.arange(18), 'exists': True})
 
-        loader = self._mock_loaders(Bunch(exists=True))
-        spikes, clusters, channels = loader.filter_spikes_by_chns(
+        spikes, clusters, channels = self.loader.filter_spikes_by_chns(
             mock_spikes, mock_clusters, mock_channels
         )
         np.testing.assert_array_equal(spikes['clusters'], np.array([1, 1, 3]))
@@ -331,18 +157,23 @@ class TestDataLoader(unittest.TestCase):
         self.assertEqual(mock_channels, channels)
 
     def test_filter_raw_by_chns(self):
-        """Test the filter_raw_by_chns method"""
-        mock_data = Bunch({'rms': np.ones((5, 6)), 'timestamps': np.arange(5), 'exists': True})
-
-        loader = self._mock_loaders(Bunch(exists=True))
-        data = loader.filter_raw_by_chns(mock_data)
-        self.assertEqual(data['rms'].shape[1], 2)
+        """2D data keep the shank's channels; 1D data, labels and the exists flag are kept"""
+        mock_data = Bunch(
+            {
+                'rms': np.ones((5, 6)),
+                'timestamps': np.arange(5),
+                'xaxis': 'Time (s)',
+                'exists': True,
+            }
+        )
+        data = self.loader.filter_raw_by_chns(mock_data)
         np.testing.assert_array_equal(data['rms'], np.ones((5, 2)))
         np.testing.assert_array_equal(data['timestamps'], np.arange(5))
+        self.assertEqual(data['xaxis'], 'Time (s)')
         self.assertTrue(data['exists'])
 
     def test_filter_spikes_by_fr(self):
-        """Test the filter_spikes_by_fr method"""
+        """Low firing clusters are removed and the spikes renumbered"""
         mock_spikes = Bunch(
             {
                 'clusters': np.array([0, 1, 3, 2]),
@@ -388,44 +219,34 @@ class TestDataLoaderOne(unittest.TestCase):
                 'alf/probe00/pykilosort',
             ]
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00/iblsorter'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00/iblsorter'))
 
         with self.subTest('Spike sorting collection other from one'):
             self.mock_one.list_collections.return_value = ['alf/probe00/test_sorter']
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00'))
 
         with self.subTest('Spike sorting collection specified'):
             loader.spike_collection = 'pykilosort'
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00/pykilosort'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00/pykilosort'))
 
             loader.spike_collection = ''
             probe_path = loader.get_spike_sorting_path()
-            self.assertTrue(probe_path, self.session_path.joinpath('alf/probe00'))
+            self.assertEqual(probe_path, self.session_path.joinpath('alf/probe00'))
 
-    def test_loaders(self):
-        """Test the load methods"""
-        mock_data = Bunch({'vals1': np.arange(5), 'vals2': np.ones(5)})
-
-        loader = DataLoaderOne(self.insertion, self.mock_one, 0)
-        self.mock_one.load_object.return_value = mock_data
-
-        data = loader.load_ephys_data('ephysTimeRmsAP')
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
-
-        data = loader.load_passive_data('passiveRFM')
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
-
-        data = loader.load_raw_passive_data('RFMapStim')
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
-
-        data = loader.load_spikes_data('spikes', attributes=['vals1', 'vals2'])
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+    def test_sources_read_probe_collections(self):
+        """Spike sorting, QC and passive data are read from the probe's ONE collections"""
+        self.mock_one.list_collections.return_value = ['alf/probe00/iblsorter']
+        loader = DataLoaderOne(self.insertion, self.mock_one)
+        self.assertEqual(loader.probe_collection, str(Path('alf/probe00/iblsorter')))
+        self.assertEqual(loader.sorting.reader.collection, loader.probe_collection)
+        self.assertEqual(loader.ephys_qc.reader.collection, 'raw_ephys_data/probe00')
+        self.assertIsNone(loader.passive.reader.collection)
+        self.assertIsNone(loader.passive.raw_reader.collection)
+        for reader in (loader.sorting.reader, loader.ephys_qc.reader, loader.passive.reader):
+            self.assertIs(reader.one, self.mock_one)
+            self.assertEqual(reader.eid, self.insertion['session'])
 
 
 class TestDataLoaderLocal(unittest.TestCase):
@@ -451,28 +272,13 @@ class TestDataLoaderLocal(unittest.TestCase):
         self.assertEqual(loader.meta_path, self.collections.raw_ephys)
         self.assertEqual(loader.probe_collection, 'spikes')
 
-    @patch('ibl_alignment_gui.loaders.data_loader.alfio.load_object')
-    def test_loaders(self, mock_data):
-        """Test the load methods"""
-        mock_data.return_value = Bunch({'vals1': np.arange(5), 'vals2': np.ones(5)})
-
+    def test_sources_read_dataset_folders(self):
+        """Spike sorting, QC and passive data are read from their dataset folders"""
         loader = DataLoaderLocal(self.collections)
-
-        data = loader.load_ephys_data('ephysTimeRmsAP')
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
-
-        data = loader.load_passive_data('passiveRFM')
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
-
-        data = loader.load_raw_passive_data('RFMapStim')
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
-
-        data = loader.load_spikes_data('spikes', attributes=['vals1', 'vals2'])
-        self.assertTrue(data.pop('exists'))
-        self.assertTrue(data, mock_data)
+        self.assertEqual(loader.sorting.reader.path, self.collections.spike_sorting)
+        self.assertEqual(loader.ephys_qc.reader.path, self.collections.processed_ephys)
+        self.assertEqual(loader.passive.reader.path, self.collections.task)
+        self.assertEqual(loader.passive.raw_reader.path, self.collections.raw_task)
 
 
 class TestChannelOrder(unittest.TestCase):
@@ -538,163 +344,164 @@ class TestChannelOrder(unittest.TestCase):
         self.assertEqual(loader.objects_without_raw_ind, [])
 
 
-class TestIncompleteSpikes(unittest.TestCase):
-    """Spikes without the attributes the plots need are treated as missing."""
-
-    def test_missing_attributes(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            folder = Path(temp_dir)
-            # Kilosort output not converted with extract_ephys has spike samples, not times
-            np.save(folder.joinpath('spikes.clusters.npy'), np.zeros(5, dtype=int))
-            np.save(folder.joinpath('spikes.samples.npy'), np.arange(5))
-            loader = DataLoaderLocal(DatasetPaths(spike_sorting=folder))
-            loader.shank_sites = Bunch(spikes_ind=np.arange(4), raw_ind=np.arange(4))
-
-            with self.assertLogs('ibl_alignment_gui.loaders.data_loader', 'WARNING') as logs:
-                spikes, *_ = loader.get_spikes_data()
-
-        self.assertEqual(spikes, {'exists': False})
-        self.assertTrue(
-            any('spikes.depths, spikes.amps, spikes.times' in msg for msg in logs.output)
-        )
-
-
 class TestLoadersWithoutDatasets(unittest.TestCase):
     """A session can have no spike sorting, and no raw data."""
 
     def test_no_spike_sorting(self):
         loader = DataLoaderLocal(DatasetPaths(processed_ephys=Path('/proc')))
         self.assertIsNone(loader.probe_collection)
-        self.assertEqual(loader.load_spikes_data('spikes', attributes=['amps']), {'exists': False})
+        self.assertEqual(loader.sorting.load_spikes(), {'exists': False})
 
     def test_no_raw_data(self):
         loader = SpikeGLXLoaderLocal(None)
-        self.assertIsNone(loader.load_meta_data())
-        self.assertIsNone(loader.load_ap_data())
-        self.assertIsNone(loader.load_lf_data())
+        self.assertIsNone(loader.ap)
+        self.assertIsNone(loader.lf)
+        self.assertEqual(loader.load_ap_snippets(), {'exists': False})
+        self.assertEqual(loader.load_lf_snippets(), {'exists': False})
 
 
-class TestSpikeGLXLoader(unittest.TestCase):
+class TestSortByPosition(unittest.TestCase):
+    """Test the sort_by_position function."""
+
+    def test_shank_then_depth(self):
+        """Channels are sorted by shank, then depth, and the header with them"""
+        geometry = {
+            'x': np.zeros(4),
+            'y': np.array([40, 0, 20, 0]),
+            'shank': np.array([0, 1, 0, 0]),
+        }
+        order, h = data_loader.sort_by_position(geometry)
+        np.testing.assert_array_equal(order, [3, 2, 0, 1])
+        np.testing.assert_array_equal(h['y'], [0, 20, 40, 0])
+
+    def test_row_in_file_order(self):
+        """The two channels of a row stay in file order whichever way x points"""
+        y = np.array([0, 0, 20, 20])
+        for name, x in (
+            ('spikeglx', np.array([43, 11, 59, 27])),
+            ('mirrored', np.array([16, 48, 0, 32])),
+        ):
+            with self.subTest(x=name):
+                order, _ = data_loader.sort_by_position({'x': x, 'y': y, 'shank': np.zeros(4)})
+                np.testing.assert_array_equal(order, [0, 1, 2, 3])
+
+
+class TestRawDataLoader(unittest.TestCase):
+    """Test the RawDataLoader class."""
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
 
-        self.mock_spikeglx = MagicMock()
-        self.mock_spikeglx.geometry_from_meta.return_value = Bunch(
-            {'x': np.arange(10), 'y': np.arange(10)}
-        )
-        self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 2000})
-        self.mock_spikeglx.fs = 30000
-        self.mock_spikeglx.n_sync = 1
-        self.mock_spikeglx.__getitem__.return_value = np.ones((30000, 385))
+        self.ap = MagicMock(spec=RawSource)
+        self.ap.fs = 30000
+        self.ap.duration = 2000
+        self.ap.geometry = self.geometry(np.arange(384))
+        self.ap.get_traces.return_value = np.ones((30000, 384))
+        self.loader = RawDataLoader(self.ap, None, self.temp_path)
 
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def _mock_loaders(self, mock_data):
-        """Helper to make a fake DataLoader with abstract methods implemented."""
-
-        class MockDataLoader(SpikeGLXLoader):
-            def load_meta_data(self):
-                return mock_data
-
-            def load_ap_data(self):
-                return mock_data
-
-            def load_lf_data(self):
-                return mock_data
-
-        return MockDataLoader(self.temp_path)
-
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.geometry_from_meta')
-    def test_get_meta_data(self, mock_geom):
-        """Test the get_meta_data method."""
-        with self.subTest('Meta data exists'):
-            mock_geom.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-            loader = self._mock_loaders(Bunch(adc=np.ones(10)))
-            data = loader.get_meta_data()
-            self.assertTrue(data.pop('exists'))
-            self.assertTrue(data, mock_geom.return_value)
-
-        with self.subTest('Meta data does not exist'):
-            loader = self._mock_loaders(None)
-            data = loader.get_meta_data()
-            self.assertFalse(data['exists'])
+    @staticmethod
+    def geometry(rows):
+        """A single column probe with each file channel on the given row"""
+        n = len(rows)
+        return {
+            'x': np.zeros(n),
+            'y': rows * 20.0,
+            'row': rows,
+            'col': np.zeros(n),
+            'shank': np.zeros(n),
+        }
 
     def test_get_time_snippets(self):
-        """Test the get_time_snippets method."""
+        """Snippets are spread over the duration, padded by 200 s in recordings over 500 s"""
         with self.subTest('2000s'):
-            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 2000})
-            loader = self._mock_loaders(None)
-            snippets = loader.get_time_snippets(self.mock_spikeglx)
+            snippets = self.loader.get_time_snippets(self.ap)
             np.testing.assert_array_equal(snippets, np.array([533, 1066, 1599]))
-            snippets = loader.get_time_snippets(self.mock_spikeglx, n=4)
+            snippets = self.loader.get_time_snippets(self.ap, n=4)
             np.testing.assert_array_equal(snippets, np.array([400, 800, 1200, 1600]))
 
         with self.subTest('400s'):
-            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 400})
-            loader = self._mock_loaders(None)
-            snippets = loader.get_time_snippets(self.mock_spikeglx)
+            self.ap.duration = 400
+            snippets = self.loader.get_time_snippets(self.ap)
             np.testing.assert_array_equal(snippets, np.array([133, 266, 399]))
-            snippets = loader.get_time_snippets(self.mock_spikeglx, n=2)
+            snippets = self.loader.get_time_snippets(self.ap, n=2)
             np.testing.assert_array_equal(snippets, np.array([200, 400]))
 
         with self.subTest('snippet ends inside the file'):
             # Without padding the last time point would be the end of the file
-            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 30})
-            loader = self._mock_loaders(None)
-            snippets = loader.get_time_snippets(self.mock_spikeglx, twin=5)
+            self.ap.duration = 30
+            snippets = self.loader.get_time_snippets(self.ap, twin=5)
             np.testing.assert_array_equal(snippets, np.array([10, 20, 25]))
 
         with self.subTest('long recordings unchanged'):
-            self.mock_spikeglx.meta = Bunch({'fileTimeSecs': 2000})
-            loader = self._mock_loaders(None)
-            snippets = loader.get_time_snippets(self.mock_spikeglx, twin=5)
+            self.ap.duration = 2000
+            snippets = self.loader.get_time_snippets(self.ap, twin=5)
             np.testing.assert_array_equal(snippets, np.array([533, 1066, 1599]))
-
-    def _sorted_reader(self, fs):
-        """A reader that returns the channels sorted, each holding its file channel number."""
-        rng = np.random.default_rng(0)
-        order = np.r_[rng.permutation(384), 384]
-        self.mock_spikeglx.fs = fs
-        self.mock_spikeglx.nsync = 1
-        self.mock_spikeglx.raw_channel_order = order
-        traces = np.tile(order[:-1], (fs * 5, 1)).astype(float)
-        self.mock_spikeglx.__getitem__.return_value = traces
-        return order
 
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
     def test_get_ap_snippet(self, mock_destripe, mock_bad_channels):
-        """The sorted channels are destriped, then the snippet and flags are put in file order"""
-        order = self._sorted_reader(30000)
+        """A second of traces is read at t, destriped with the geometry, and 50 ms kept"""
+        mock_bad_channels.return_value = (np.zeros(384), {})
+        mock_destripe.return_value = np.ones((384, 30000))
+
+        snippet, *_ = self.loader._get_ap_snippet(self.ap, t=2, twin=1)
+
+        self.assertEqual(snippet.shape, (1500, 384))
+        self.ap.get_traces.assert_called_once_with(60000, 30000)
+        np.testing.assert_equal(mock_destripe.call_args.kwargs['h'], self.ap.geometry)
+
+    def shuffled_source(self, fs):
+        """A source in file order whose channels are not in depth order, each holding its number"""
+        rows = np.random.default_rng(0).permutation(384)
+        self.ap.fs = fs
+        self.ap.geometry = self.geometry(rows)
+        self.ap.get_traces.return_value = np.tile(np.arange(384.0), (fs * 5, 1))
+        # The file channels from the shallowest to the deepest
+        return np.argsort(rows)
+
+    @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.detect_bad_channels')
+    @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
+    def test_get_ap_snippet_sorted_for_destriping(self, mock_destripe, mock_bad_channels):
+        """Channels are destriped in depth order, then the snippet and flags are in file order"""
+        by_depth = self.shuffled_source(30000)
         mock_destripe.side_effect = lambda raw, **kwargs: raw
-        mock_bad_channels.return_value = (order[:-1], {'xcor_hf': order[:-1]})
+        # Each channel's label and feature is the file channel it was given
+        mock_bad_channels.side_effect = lambda raw, fs, **kwargs: (
+            raw[:, 0],
+            {'xcor_hf': raw[:, 0]},
+        )
 
-        loader = self._mock_loaders(None)
-        snippet, labels, features = loader._get_ap_snippet(self.mock_spikeglx, t=0, twin=1)
+        snippet, labels, features = self.loader._get_ap_snippet(self.ap, t=0, twin=1)
 
+        np.testing.assert_array_equal(mock_bad_channels.call_args.args[0][:, 0], by_depth)
+        np.testing.assert_array_equal(mock_destripe.call_args.args[0][:, 0], by_depth)
+        np.testing.assert_array_equal(mock_destripe.call_args.kwargs['h']['row'], np.arange(384))
         self.assertEqual(snippet.shape, (1500, 384))
         np.testing.assert_array_equal(snippet[0], np.arange(384))
         np.testing.assert_array_equal(labels, np.arange(384))
         np.testing.assert_array_equal(features['xcor_hf'], np.arange(384))
 
     @patch('ibl_alignment_gui.loaders.data_loader.ibldsp.voltage.destripe')
-    def test_get_lf_snippet(self, mock_destripe):
-        """The LF snippet is put in file order after destriping"""
-        self._sorted_reader(2500)
+    def test_get_lf_snippet_sorted_for_destriping(self, mock_destripe):
+        """The LF is destriped in depth order, then the snippet is in file order"""
+        by_depth = self.shuffled_source(2500)
         mock_destripe.side_effect = lambda raw, **kwargs: raw
 
-        loader = self._mock_loaders(None)
-        snippet = loader._get_lf_snippet(self.mock_spikeglx, t=0, twin=3)
+        snippet = self.loader._get_lf_snippet(self.ap, t=0, twin=3)
 
+        np.testing.assert_array_equal(mock_destripe.call_args.args[0][:, 0], by_depth)
+        np.testing.assert_array_equal(mock_destripe.call_args.kwargs['h']['row'], np.arange(384))
         self.assertEqual(snippet.shape, (5000, 384))
         np.testing.assert_array_equal(snippet[0], np.arange(384))
 
-    @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader.get_time_snippets')
-    @patch('ibl_alignment_gui.loaders.data_loader.SpikeGLXLoader._get_ap_snippet')
+    @patch('ibl_alignment_gui.loaders.data_loader.RawDataLoader.get_time_snippets')
+    @patch('ibl_alignment_gui.loaders.data_loader.RawDataLoader._get_ap_snippet')
     def test_load_ap_snippets(self, mock_snippet, mock_times):
-        """Test the load_ap_snippets method"""
+        """Snippets and channel flags are built for each time, then cached"""
         mock_raw = np.random.randn(1500, 384)
         mock_labels = np.zeros(384)
         mock_features = {
@@ -705,51 +512,41 @@ class TestSpikeGLXLoader(unittest.TestCase):
         mock_snippet.return_value = (mock_raw, mock_labels, mock_features)
         mock_times.return_value = np.array([200, 400, 600])
 
-        with self.subTest('No raw data snippets'):
-            loader = self._mock_loaders(None)
-            data = loader.load_ap_snippets()
+        with self.subTest('No raw data'):
+            data = RawDataLoader(None, None, self.temp_path).load_ap_snippets()
             self.assertFalse(data['exists'])
 
         # First time read in data and save to disk
         with self.subTest('Generate raw data snippets'):
-            loader = self._mock_loaders(Bunch({'exists': True, 'fs': 30000}))
-            data = loader.load_ap_snippets()
+            data = self.loader.load_ap_snippets()
             self.assertTrue(data.pop('exists'))
             for t in mock_times.return_value:
-                np.testing.assert_array_equal(data['images'][t], mock_snippet.return_value[0])
-            self.assertTrue(data['fs'], 30000)
-            # Check channel quality metrics
-            self.assertIn('dead_channels', data)
-            self.assertIn('noisy_channels_coherence', data)
-            self.assertIn('noisy_channels_psd', data)
-            self.assertIn('outside_channels', data)
-
-            # Verify structure of quality metrics
+                np.testing.assert_array_equal(data['images'][t], mock_raw)
+            self.assertEqual(data['fs'], 30000)
             for key in [
                 'dead_channels',
                 'noisy_channels_coherence',
                 'noisy_channels_psd',
                 'outside_channels',
             ]:
-                self.assertIn('values', data[key])
-                self.assertIn('lines', data[key])
-                self.assertIn('points', data[key])
-            mock_times.assert_called_once()
+                with self.subTest(key=key):
+                    self.assertEqual(set(data[key]), {'values', 'lines', 'points'})
+            mock_times.assert_called_once_with(self.ap, twin=1)
 
-        # Second time data is loaded from disk so we don't expect the get_time_snippets
-        # to be called
+        # Second time data is loaded from disk, so the recording is not read
         with self.subTest('Load existing raw data snippets'):
             mock_times.reset_mock()
             mock_snippet.reset_mock()
-            _ = loader.load_ap_snippets()
+            _ = self.loader.load_ap_snippets()
             mock_times.assert_not_called()
+            mock_snippet.assert_not_called()
 
         # A cache from before the channels were put in file order is rebuilt
         with self.subTest('Old cache without channel order'):
-            old_cache = loader.load_ap_snippets()
+            old_cache = self.loader.load_ap_snippets()
             old_cache.pop('channel_order')
-            np.save(loader.cached_ap_path, old_cache)
-            data = loader.load_ap_snippets()
+            np.save(self.loader.cached_ap_path, old_cache)
+            data = self.loader.load_ap_snippets()
             mock_times.assert_called_once()
             self.assertEqual(data['channel_order'], 'file')
 
@@ -764,31 +561,22 @@ class TestSpikeGLXLoaderOne(unittest.TestCase):
 
         self.loader = SpikeGLXLoaderOne(self.insertion, self.mock_one)
 
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.read_meta_data')
-    def test_load_meta_data(self, mock_meta):
-        """Test the load_meta_data method"""
-        mock_meta.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-
-        with self.subTest('Meta data exists'):
-            self.mock_one.load_dataset.return_value = self.session_path.joinpath(
-                '_spikeglx.ap.meta'
-            )
-            data = self.loader.load_meta_data()
-            self.assertTrue(data, mock_meta.return_value)
-
-        with self.subTest('Meta data does not exist'):
-            self.mock_one.load_dataset.side_effect = ALFObjectNotFound
-            data = self.loader.load_meta_data()
-            self.assertIsNone(data)
-
     @unittest.skipUnless(has_ibllib(), IBL_EXTRA_HINT)
     @patch('brainbox.io.spikeglx.Streamer')
-    def test_load_ap_data(self, mock_streamer):
-        """Test the load_ap_data method"""
-        self.loader.load_ap_data()
-        mock_streamer.assert_called_with(
-            pid=self.loader.pid, one=self.mock_one, remove_cached=self.loader.force, typ='ap'
-        )
+    def test_sources_stream_when_read(self, mock_streamer):
+        """Each band is streamed through ONE, and only once its data are read"""
+        mock_streamer.assert_not_called()
+        for band in ('ap', 'lf'):
+            with self.subTest(band=band):
+                source = getattr(self.loader, band)
+                self.assertIsInstance(source, RawSourceSpikeGLX)
+                self.assertIs(source.reader, mock_streamer.return_value)
+                mock_streamer.assert_called_with(
+                    pid=self.loader.pid,
+                    one=self.mock_one,
+                    remove_cached=self.loader.force,
+                    typ=band,
+                )
 
 
 class TestSpikeGLXLoaderLocal(unittest.TestCase):
@@ -798,47 +586,55 @@ class TestSpikeGLXLoaderLocal(unittest.TestCase):
         )
         self.loader = SpikeGLXLoaderLocal(self.probe_path.joinpath('meta'))
 
-    @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.read_meta_data')
-    def test_load_meta_data(self, mock_meta):
-        """Test the load_meta_data method"""
-        mock_meta.return_value = Bunch({'x': np.arange(10), 'y': np.arange(10)})
-
-        with (
-            self.subTest('Meta data exists'),
-            patch.object(
-                Path, 'glob', return_value=iter([self.probe_path.joinpath('spikeglx.ap.meta')])
-            ),
-        ):
-            data = self.loader.load_meta_data()
-            self.assertEqual(data, mock_meta.return_value)
-
-        with (
-            self.subTest('Meta data does not exist'),
-            patch.object(Path, 'glob', return_value=iter([])),
-        ):
-            data = self.loader.load_meta_data()
-            self.assertIsNone(data)
-
     @patch('ibl_alignment_gui.loaders.data_loader.spikeglx.Reader')
-    def test_load_ap_data(self, mock_reader):
-        """Test the load_ap_data method"""
-        mock_reader.return_value = Bunch({'fs': 30000})
+    def test_sources_read_bin_files(self, mock_reader):
+        """Each band reads its binary file in the folder, opened only once its data are read"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ap_file = Path(temp_dir).joinpath('test_g0_t0.imec0.ap.cbin')
+            ap_file.touch()
 
-        with (
-            self.subTest('AP data exists'),
-            patch.object(
-                Path, 'glob', return_value=iter([self.probe_path.joinpath('spikeglx.ap.cbin')])
-            ),
-        ):
-            data = self.loader.load_ap_data()
-            self.assertEqual(data, mock_reader.return_value)
+            loader = SpikeGLXLoaderLocal(Path(temp_dir))
+            mock_reader.assert_not_called()
 
-        with (
-            self.subTest('AP data does not exist'),
-            patch.object(Path, 'glob', return_value=iter([])),
-        ):
-            data = self.loader.load_ap_data()
-            self.assertIsNone(data)
+            self.assertIsInstance(loader.ap, RawSourceSpikeGLX)
+            self.assertIs(loader.ap.reader, mock_reader.return_value)
+            mock_reader.assert_called_once_with(ap_file)
+            # There is no LF file
+            self.assertIsNone(loader.lf)
+
+
+class TestSpikeGLXLoaderLocalSnippets(unittest.TestCase):
+    """The snippets are read beside the raw data, else from the processed ephys folder."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.raw = self.root.joinpath('raw')
+        self.processed = self.root.joinpath('processed')
+        self.raw.mkdir()
+        self.processed.mkdir()
+        np.save(self.processed.joinpath(RawDataLoader.AP_SNIPPETS_FILE), {'from': 'processed'})
+
+    def test_processed_without_raw_data(self):
+        """Without raw data or snippets beside it, the processed folder's snippets are read"""
+        for raw in (None, self.raw):
+            with self.subTest(raw=raw):
+                loader = SpikeGLXLoaderLocal(raw, self.processed)
+                self.assertEqual(loader.save_path, self.processed)
+
+    def test_snippets_beside_raw_data_first(self):
+        """Snippets cached beside the raw data are read first"""
+        np.save(self.raw.joinpath(RawDataLoader.LF_SNIPPETS_FILE), {'from': 'raw'})
+        self.assertEqual(SpikeGLXLoaderLocal(self.raw, self.processed).save_path, self.raw)
+
+    def test_raw_data_first(self):
+        """With raw data, its snippets are computed and cached beside it"""
+        self.raw.joinpath('test_g0_t0.imec0.ap.bin').touch()
+        self.assertEqual(SpikeGLXLoaderLocal(self.raw, self.processed).save_path, self.raw)
+
+    def test_no_snippets(self):
+        """Without snippets in the processed folder, nothing changes"""
+        loader = SpikeGLXLoaderLocal(self.raw, self.root.joinpath('empty'))
+        self.assertEqual(loader.save_path, self.raw)
 
 
 class TestFeatureLoaderOneTables(unittest.TestCase):
@@ -934,3 +730,128 @@ class TestFeatureLoaderOneTables(unittest.TestCase):
             self.assertRaises(ConnectionError),
         ):
             self.read()
+
+
+class TestGetData(unittest.TestCase):
+    """The data get_data returns for a session on disk, read locally or through ONE.
+
+    This is what the plots receive; a refactor of the loaders must keep it.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.paths = write_session(self.root)
+        self.shank_sites = Bunch(spikes_ind=np.array([0, 1]), raw_ind=np.array([0, 1]))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _expected(self):
+        """Return the get_data result for the shank on channels 0 and 1"""
+        # Spikes of cluster 1 (channel 2) are off the shank; no cluster is rate filtered
+        keep = np.array([0, 2, 3, 5])
+        frames = np.arange(15 * 15 * 2, dtype=np.uint8)
+        return {
+            'spikes': Bunch(
+                clusters=np.array([0, 1, 2, 0, 1, 2], dtype=np.int32)[keep],
+                times=np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])[keep],
+                depths=np.array([10, 20, 30, 40, 50, 60], dtype=np.float32)[keep],
+                amps=(np.arange(1, 7, dtype=np.float32) * 1e-6)[keep],
+                exists=True,
+            ),
+            'clusters': Bunch(
+                channels=np.array([0, 2, 1]),
+                peakToTrough=np.array([0.1, 0.2, 0.3]),
+                waveforms=np.arange(3 * 5 * 4, dtype=np.float32).reshape(3, 5, 4),
+                metrics=pd.DataFrame({'firing_rate': [1.0, 1.0, 0.001], 'label': [1.0, 0.0, 1.0]}),
+                exists=True,
+            ),
+            'channels': Bunch(
+                rawInd=np.arange(4),
+                localCoordinates=np.c_[np.zeros(4), np.arange(4) * 20.0],
+                exists=True,
+            ),
+            'rms_AP': Bunch(
+                rms=np.arange(12.0).reshape(3, 4)[:, [0, 1]],
+                timestamps=np.array([1.5, 4.5, 7.5]),
+                xaxis='Time (s)',
+                exists=True,
+            ),
+            # Without timestamps the amps are renamed and the x axis is in samples
+            'rms_LF': Bunch(
+                rms=np.arange(12.0, 24.0).reshape(3, 4)[:, [0, 1]],
+                timestamps=np.array([0, 3]),
+                xaxis='Time samples',
+                exists=True,
+            ),
+            'psd_LF': Bunch(
+                power=np.arange(20.0).reshape(5, 4)[:, [0, 1]],
+                freqs=np.arange(5.0),
+                exists=True,
+            ),
+            'rf_map': Bunch(
+                times=np.array([0.0, 1.0]),
+                frames=np.transpose(np.reshape(frames, [15, 15, -1], order='F'), [2, 1, 0]),
+                exists=True,
+            ),
+            'pass_stim': Bunch(valveOn=np.array([2.0, 3.0]), exists=True),
+            'gabor': Bunch(leftGabor=np.array([1.0]), rightGabor=np.array([2.0]), exists=True),
+        }
+
+    def assert_data_equal(self, actual, expected):
+        """Assert both hold the same objects, keys, values and dtypes"""
+        self.assertEqual(set(actual.keys()), set(expected.keys()))
+        for name, obj in expected.items():
+            self.assertEqual(set(actual[name].keys()), set(obj.keys()), name)
+            for key, value in obj.items():
+                with self.subTest(name=name, key=key):
+                    if isinstance(value, pd.DataFrame):
+                        pd.testing.assert_frame_equal(actual[name][key], value)
+                    elif isinstance(value, np.ndarray):
+                        np.testing.assert_array_equal(actual[name][key], value)
+                        self.assertEqual(actual[name][key].dtype, value.dtype)
+                    else:
+                        self.assertEqual(actual[name][key], value)
+
+    def _load_object(self, eid, obj, collection=None, attribute=None, **kwargs):
+        """Serve an object from the session on disk, as ONE would"""
+        folders = {
+            'alf/probe00': self.paths.spike_sorting,
+            'raw_ephys_data/probe00': self.paths.processed_ephys,
+        }
+        if collection is not None:
+            folder = folders[Path(collection).as_posix()]
+        elif obj == 'RFMapStim':
+            folder = self.paths.raw_task
+        else:
+            folder = self.paths.task
+        # ONE ignores attribute=None, while alfio would look for an attribute called None
+        kwargs = {'attribute': attribute} if attribute is not None else {}
+        return alfio.load_object(folder, obj, **kwargs)
+
+    def test_local(self):
+        """DataLoaderLocal returns the session's data for the shank"""
+        data = DataLoaderLocal(self.paths).get_data(self.shank_sites)
+        self.assert_data_equal(data, self._expected())
+
+    def test_one(self):
+        """DataLoaderOne returns the same data as DataLoaderLocal"""
+        # DataLoaderOne sets filter=True before DataLoader.__init__ resets it to False, so ONE
+        # sessions are not rate filtered either
+        one = MagicMock()
+        one.load_object.side_effect = self._load_object
+        insertion = {'id': uuid.uuid4(), 'session': uuid.uuid4(), 'name': 'probe00'}
+        loader = DataLoaderOne(insertion, one, session_path=self.root, spike_collection='')
+        self.assert_data_equal(loader.get_data(self.shank_sites), self._expected())
+
+    def test_missing_datasets(self):
+        """Without QC or passive datasets those objects are missing and the rest still loads"""
+        empty = self.root.joinpath('empty')
+        empty.mkdir()
+        paths = DatasetPaths(spike_sorting=self.paths.spike_sorting, processed_ephys=empty)
+        with self.assertLogs('ibl_alignment_gui.loaders', level='WARNING'):
+            data = DataLoaderLocal(paths).get_data(self.shank_sites)
+        self.assertTrue(data['spikes']['exists'])
+        for key in ('rms_AP', 'rms_LF', 'psd_LF', 'rf_map', 'pass_stim', 'gabor'):
+            self.assertEqual(data[key], Bunch(exists=False), key)

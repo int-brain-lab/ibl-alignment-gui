@@ -184,10 +184,10 @@ class AlignmentLoader(ABC):
         idx : int
             Index in alignment_keys.
         """
-        start_lims = 6000 / 1e6
         if self.alignment_keys[idx] == 'original':
-            self.feature_prev = np.array([-1 * start_lims, start_lims])
-            self.track_prev = np.array([-1 * start_lims, start_lims])
+            # No previous alignment: the alignment handler starts from a range sized to the probe
+            self.feature_prev = None
+            self.track_prev = None
         else:
             self.feature_prev = np.array(self.alignments[self.alignment_keys[idx]][0])
             self.track_prev = np.array(self.alignments[self.alignment_keys[idx]][1])

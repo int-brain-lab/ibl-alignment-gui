@@ -6,9 +6,10 @@ In this tutorial you will take a recording you have spike sorted with
 [brainreg](https://brainglobe.info/documentation/brainreg/index.html), and a probe track you have
 identified with
 [brainreg-segment](https://brainglobe.info/tutorials/segmenting-1d-tracks.html), and turn them
-into a session the GUI can open. You will convert the spike sorting and the probe track, put the
-histology images where the GUI can find them, write a session YAML that ties everything together,
-and launch the GUI with it.
+into a session the GUI can open. The GUI reads your `SortingAnalyzer` as it is; you will extract
+the plots it needs from the raw recording, convert the probe track, put the histology images
+where the GUI can find them, write a session YAML that ties everything together, and launch the
+GUI with it.
 
 ## Before you start
 
@@ -17,21 +18,22 @@ and launch the GUI with it.
 
   | What | From |
   |---|---|
-  | A `SortingAnalyzer` saved to a folder, with its recording attached | SpikeInterface |
-  | The LF band of the recording, for example the SpikeGLX `.lf.bin` and `.lf.meta` files | Your recording system |
+  | A `SortingAnalyzer` saved to a folder or a `.zarr` | SpikeInterface |
+  | The raw recording the analyzer was sorted from, for example the SpikeGLX `.ap.bin`, `.lf.bin` and `.meta` files | Your recording system |
   | A brainreg output folder, registered to the 25 µm Allen mouse atlas (`allen_mouse_25um`) | brainreg |
   | The probe track, identified in atlas space with brainreg-segment | brainreg-segment |
 
-- Have SpikeInterface installed in its own virtual environment, separate from the GUI's, so the
-  two do not interfere:
+- Install the GUI's `spikeinterface` extra, so the GUI can read the analyzer (see
+  {ref}`howto-install-extras`). With the GUI's environment active, in the folder you cloned it
+  into:
 
   ```console
-  uv venv si-env --python 3.12
-  source si-env/bin/activate
-  uv pip install "spikeinterface[full]"
+  uv pip install -e ".[spikeinterface]"
   ```
 
-  On Windows, activate it with `.\si-env\Scripts\activate` instead.
+  Every step of this tutorial runs in this one environment. It must be able to load your
+  analyzer: if you sorted with a newer version of SpikeInterface than it has, upgrade it with
+  `uv pip install -U spikeinterface`.
 
 ## 1. Create a folder for the session
 
@@ -39,66 +41,68 @@ Create a folder called `my_session`, with a subfolder for each kind of data, and
 in the folder that contains it:
 
 ```console
-mkdir -p my_session/spike_sorting my_session/picks my_session/histology my_session/alignment
+mkdir -p my_session/extracted my_session/picks my_session/histology my_session/alignment
 ```
 
 | Folder | Will hold |
 |---|---|
-| `spike_sorting` | The spike sorting, RMS and power spectrum files |
+| `extracted` | The RMS, power spectrum and raw data snippet files |
 | `picks` | The traced probe track |
 | `histology` | The registered histology images |
 | `alignment` | The results the GUI writes |
 
-## 2. Convert the spike sorting
+## 2. Prepare the spike sorting and raw data
 
-SpikeInterface writes the files the GUI reads with `export_to_ibl_gui`.
+The GUI reads the spikes, units and channels from the analyzer. The RMS, power spectrum and raw
+data plots come from the raw recording, which `extract_si_qc` reads once and summarises in a few
+small files.
 
-1. With `si-env` active, save this as `export_spike_sorting.py`, with the two paths at the top
-   set to your own:
+1. Save this as `prepare_ephys.py`, with the two paths at the top set to your own:
 
    ```python
    from pathlib import Path
 
-   import spikeinterface.core as si
+   import spikeinterface as si
    import spikeinterface.extractors as se
-   from spikeinterface.exporters import export_to_ibl_gui
+
+   from ibl_alignment_gui.convertors.extract_si_qc import extract_si_qc
 
    analyzer_folder = Path('/path/to/sorting_analyzer')
    spikeglx_folder = Path('/path/to/spikeglx/recording')
-   out_path = Path('my_session/spike_sorting')
+   out_path = Path('my_session/extracted')
 
-   analyzer = si.load_sorting_analyzer(analyzer_folder)
-
-   # The exporter needs the templates, amplitudes and quality metrics; compute any that are missing
-   for extension in ['random_spikes', 'waveforms', 'templates', 'noise_levels',
-                     'spike_amplitudes', 'quality_metrics']:
+   # The extensions the GUI reads; compute any that are missing
+   analyzer = si.load(analyzer_folder)
+   for extension in ['random_spikes', 'templates', 'spike_amplitudes',
+                     'spike_locations', 'template_metrics', 'quality_metrics']:
        if not analyzer.has_extension(extension):
            analyzer.compute(extension)
 
-   # The LF band, used for the LF RMS and power spectrum plots
-   lfp = se.read_spikeglx(spikeglx_folder, stream_name='imec0.lf')
+   # The raw recording, as read from disk
+   ap = se.read_spikeglx(spikeglx_folder, stream_id='imec0.ap')
+   lf = se.read_spikeglx(spikeglx_folder, stream_id='imec0.lf')
 
-   export_to_ibl_gui(analyzer, output_folder=out_path, lfp_recording=lfp, remove_if_exists=True)
+   extract_si_qc(ap, out_path, lf_recording=lf)
    ```
 
-   If your recording is not from SpikeGLX, read it with the matching SpikeInterface extractor
-   instead.
+   If your recording is not from SpikeGLX, or is from a Neuropixels 2.0 probe without an LF
+   band, read it as shown in {ref}`howto-convert-spikeinterface`.
 
 2. Run it:
 
    ```console
-   python export_spike_sorting.py
+   python prepare_ephys.py
    ```
 
-   It prints its progress as it computes the RMS and power spectra.
+   It shows its progress as it computes the RMS and power spectra, which takes a few minutes.
 
-3. Look in `my_session/spike_sorting`. It holds:
+3. Look in `my_session/extracted`. It holds:
 
    | Files | Used for |
    |---|---|
-   | `spikes.*`, `clusters.*` | The spike sorting plots |
-   | `channels.*` | The position of each channel on the probe |
    | `_iblqc_ephysTimeRms*`, `_iblqc_ephysSpectralDensityLF.*` | The RMS and LF power plots |
+   | `alignment_gui_raw_data_snippets.npy`, `alignment_gui_raw_lf_data_snippets.npy` | The raw data snippets and the bad channel plots |
+   | `_iblqc_ephysChannels.contactIds.npy` | Matching the analyzer's channels to the raw recording's |
 
 ## 3. Convert the probe track
 
@@ -166,7 +170,7 @@ The GUI loads at most one `GR` and one `RD` image. Which is which only sets thei
 ## 5. Write the session YAML
 
 Save this as `my_session/session.yaml`, with `path` set to the full path of `my_session` and
-`raw_ephys` set to your SpikeGLX folder:
+`spike_sorting` set to your analyzer:
 
 ```yaml
 path: /full/path/to/my_session
@@ -175,11 +179,9 @@ probes:
   probe00:
     datasets:
       spike_sorting:
-        path: spike_sorting
+        path: /path/to/sorting_analyzer
       processed_ephys:
-        path: spike_sorting
-      raw_ephys:
-        path: /path/to/spikeglx/recording
+        path: extracted
       picks:
         path: picks
       histology:
@@ -188,10 +190,9 @@ probes:
         path: alignment
 ```
 
-`export_to_ibl_gui` writes the spike sorting and the RMS and power spectrum files to the same
-folder, so `spike_sorting` and `processed_ephys` both point at it. `raw_ephys` is optional: with
-it, the GUI also shows snippets of the raw signal. Every key is described in
-{ref}`ref-session-yaml`.
+The GUI recognises the analyzer from its folder, and reads the extracted files, snippets
+included, from `processed_ephys`, so the raw recording is not needed to open the session. Every
+key is described in {ref}`ref-session-yaml`.
 
 ## 6. Launch the GUI
 
@@ -203,8 +204,10 @@ it, the GUI also shows snippets of the raw signal. Every key is described in
 
 2. Check that everything has loaded:
 
-   - `Image Plots` lists the spike sorting plots, such as `Firing Rate` and `Amplitude`, and the
-     RMS and LF plots
+   - `Image Plots` lists the spike sorting plots, such as `Firing Rate` and `Amplitude`, the RMS
+     and LF plots, and the `Raw ap snippet` and `Raw lf snippet` images
+   - `Line Plots` lists `Dead Channels`, `Noisy Channels Coherence`, `Noisy Channels PSD` and
+     `Outside Channels`
    - `Probe Plots` lists the RMS plots and the five LF power bands
    - the Histology figure shows the regions along your traced track, the same ones
      `convert_track.py` printed
@@ -217,10 +220,14 @@ Your data is now ready to align, in the same way as in {ref}`tutorial-first-alig
 
 You have:
 
-- exported a SpikeInterface sorting to the files the GUI reads
+- extracted the RMS, power spectra and raw data snippets of a SpikeInterface recording, for
+  the GUI to show beside its `SortingAnalyzer`
 - converted a probe track identified with brainreg-segment to `xyz_picks.json`
 - added your registered histology so it shows in the Slice figure
 - written a session YAML and launched the GUI with it
+
+SpikeInterface's `export_to_ibl_gui` is another route, which converts the analyzer to ALF files
+instead (see {ref}`howto-convert-spikeinterface`).
 
 ## Next steps
 

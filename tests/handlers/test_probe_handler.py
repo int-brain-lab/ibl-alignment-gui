@@ -9,12 +9,26 @@ import spikeglx
 
 from ibl_alignment_gui.handlers.probe_handler import (
     ProbeHandler,
+    ProbeHandlerLocal,
     ProbeHandlerLocalYaml,
     ProbeHandlerONE,
     find_features_file,
+    find_sorting_analyzer,
+    make_data_loader,
+    make_geometry_loader,
 )
-from ibl_alignment_gui.loaders.geometry_loader import ChannelGeometry, MetaGeometry
+from ibl_alignment_gui.loaders.data_loader import DataLoaderLocal, DataLoaderSI
+from ibl_alignment_gui.loaders.geometry_loader import (
+    ChannelGeometry,
+    ElectrodeGeometry,
+    GeometryLoaderLocal,
+    GeometryLoaderSI,
+)
+from ibl_alignment_gui.loaders.sources import RAW_CONTACT_IDS_FILE, RawSourceSpikeGLX
+from ibl_alignment_gui.utils.optional import SPIKEINTERFACE_EXTRA_HINT, has_spikeinterface
+from ibl_alignment_gui.utils.parse_yaml import DatasetPaths
 from iblutil.util import Bunch
+from tests.loaders._si_analyzer import write_analyzer, write_shank_analyzers
 
 FIXTURE_PATH = Path(__file__).parents[1].joinpath('fixtures')
 
@@ -139,7 +153,7 @@ class TestChannelOrderNotices(unittest.TestCase):
     def electrodes(np_type):
         """The electrodes of an ap.meta fixture"""
         meta_file = next(FIXTURE_PATH.joinpath(np_type).glob('*.ap.meta'))
-        geom = MetaGeometry(spikeglx.read_meta_data(meta_file))
+        geom = ElectrodeGeometry(RawSourceSpikeGLX(lambda: spikeglx.Reader(meta_file)).geometry)
         geom.split_sites_per_shank()
         return geom
 
@@ -249,6 +263,144 @@ class TestFindFeaturesFile(unittest.TestCase):
         with self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs:
             self.assertIsNone(find_features_file(self.folder))
         self.assertIn('features_a.pqt', logs.output[0])
+
+
+class TestFindSortingAnalyzer(unittest.TestCase):
+    """A data folder's SortingAnalyzer is the folder itself or the one analyzer in it."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def make_analyzer(self, path: Path) -> Path:
+        path.mkdir(exist_ok=True)
+        path.joinpath('spikeinterface_info.json').touch()
+        return path
+
+    def test_none(self):
+        self.folder.joinpath('alf').mkdir()
+        self.assertIsNone(find_sorting_analyzer(self.folder))
+
+    def test_folder_is_analyzer(self):
+        self.make_analyzer(self.folder)
+        self.assertEqual(find_sorting_analyzer(self.folder), self.folder)
+
+    def test_one_in_folder(self):
+        analyzer = self.make_analyzer(self.folder.joinpath('sorting_analyzer'))
+        self.assertEqual(find_sorting_analyzer(self.folder), analyzer)
+
+    def test_several(self):
+        self.make_analyzer(self.folder.joinpath('analyzer_a'))
+        self.make_analyzer(self.folder.joinpath('analyzer_b'))
+        with self.assertLogs('ibl_alignment_gui.handlers.probe_handler', 'WARNING') as logs:
+            self.assertIsNone(find_sorting_analyzer(self.folder))
+        self.assertIn('analyzer_a', logs.output[0])
+
+
+class TestMakeLoaders(unittest.TestCase):
+    """The local loaders are chosen by the format of the spike sorting."""
+
+    def test_alf(self):
+        paths = DatasetPaths(spike_sorting=Path('ks'))
+        self.assertIs(type(make_data_loader(paths)), DataLoaderLocal)
+        self.assertIs(type(make_geometry_loader(paths)), GeometryLoaderLocal)
+
+    @unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+    def test_spikeinterface(self):
+        paths = DatasetPaths(spike_sorting=Path('analyzer'), spike_sorting_format='spikeinterface')
+        data = make_data_loader(paths)
+        geom = make_geometry_loader(paths)
+        self.assertIsInstance(data, DataLoaderSI)
+        self.assertIsInstance(geom, GeometryLoaderSI)
+        self.assertEqual(data.sorting.path, paths.spike_sorting)
+        self.assertEqual(geom.sorting.path, paths.spike_sorting)
+
+
+@unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+class TestProbeHandlerLocalSpikeInterface(unittest.TestCase):
+    """A data folder with a SortingAnalyzer in it is shown without converting it to ALF."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp_dir.name)
+        write_analyzer(self.folder.joinpath('sorting_analyzer'), n_shanks=2)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_shanks_loaded_and_plotted(self):
+        """Each shank of the probe gets its own spikes and plots"""
+        model = ProbeHandlerLocal()
+        self.assertEqual(model.get_shanks(self.folder), ['shank_1', 'shank_2'])
+
+        for label in model.shank_labels:
+            with self.subTest(shank=label):
+                shank = model.get_current_shank(label, model.default_config)
+                shank.load_data()
+                plots = shank.loaders['plots']
+                plots.get_plots()
+
+                spikes = shank.raw_data['spikes']
+                self.assertTrue(spikes['exists'])
+                self.assertGreater(spikes['clusters'].size, 0)
+                # Only the spikes of units on this shank are kept
+                channels = shank.raw_data['clusters']['channels'][spikes['clusters']]
+                np.testing.assert_array_equal(
+                    np.isin(channels, shank.chn_sites['spikes_ind']), True
+                )
+                self.assertTrue(plots.scatter_plots)
+                self.assertTrue(plots.image_plots)
+
+
+@unittest.skipUnless(has_spikeinterface(), SPIKEINTERFACE_EXTRA_HINT)
+class TestProbeHandlerLocalYamlShankAnalyzers(unittest.TestCase):
+    """A multi-shank probe sorted into one SortingAnalyzer per shank, as for sample data 2."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        analyzers, contact_ids = write_shank_analyzers(self.root.joinpath('sorting'))
+
+        # One raw data QC folder for the whole probe, the RMS of each channel its raw index
+        qc = self.root.joinpath('qc')
+        qc.mkdir()
+        n_channels = contact_ids.size
+        np.save(qc.joinpath(RAW_CONTACT_IDS_FILE), contact_ids)
+        np.save(
+            qc.joinpath('_iblqc_ephysTimeRmsAP.rms.npy'), np.tile(np.arange(n_channels), (3, 1))
+        )
+        np.save(qc.joinpath('_iblqc_ephysTimeRmsAP.timestamps.npy'), np.arange(3.0))
+        np.save(qc.joinpath('_iblqc_ephysTimeRmsAP.rawInd.npy'), np.arange(n_channels)[None, :])
+
+        probes = ''.join(
+            f'  probe00{letter}:\n'
+            '    datasets:\n'
+            f'      spike_sorting:\n        path: sorting/{analyzer.name}\n'
+            '      processed_ephys:\n        path: qc\n'
+            f'      output:\n        path: out_{letter}\n'
+            for letter, analyzer in zip('ab', analyzers, strict=True)
+        )
+        self.yaml_file = self.root.joinpath('session.yaml')
+        self.yaml_file.write_text(f'path: {self.root.as_posix()}\n\nprobes:\n{probes}')
+
+    def test_each_shank_shows_its_channels(self):
+        """Each probe entry is a shank, whose RMS is found in the whole probe's QC"""
+        model = ProbeHandlerLocalYaml(self.yaml_file)
+        self.assertEqual(model.get_shanks(None), ['probe00a', 'probe00b'])
+
+        for ishank, label in enumerate(model.shank_labels):
+            with self.subTest(shank=label):
+                shank = model.get_current_shank(label, model.default_config)
+                shank.load_data()
+                self.assertTrue(shank.raw_data['spikes']['exists'])
+                # The columns of the shank's channels, not the first channels of the probe
+                np.testing.assert_array_equal(
+                    np.unique(shank.raw_data['rms_AP']['rms']), np.arange(4) + 4 * ishank
+                )
 
 
 class TestProbeHandlerLocalYaml(unittest.TestCase):

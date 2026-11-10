@@ -1,8 +1,9 @@
 """Helpers for querying optional dependencies.
 
 Some features rely on optional dependency stacks installed via extras: ``ibllib`` (the ``ibl``
-extra, for the online ONE/Alyx mode) and the ``aind``/``boto3`` stack (the ``allen`` extra, for
-the Allen/Code Ocean DocDB mode). The helpers here report whether those stacks are installed
+extra, for the online ONE/Alyx mode), the ``aind``/``boto3`` stack (the ``allen`` extra, for
+the Allen/Code Ocean DocDB mode) and ``spikeinterface`` (the ``spikeinterface`` extra, for
+loading a SortingAnalyzer). The helpers here report whether those stacks are installed
 (without importing them) so the launchers can fail fast with an actionable message; the modules
 that use them import them lazily at the point of use.
 """
@@ -17,6 +18,11 @@ IBL_EXTRA_HINT = (
 ALLEN_EXTRA_HINT = (
     'This feature requires the Allen institute dependencies. Install them with '
     "'pip install ibl_alignment_gui[allen]'."
+)
+
+SPIKEINTERFACE_EXTRA_HINT = (
+    'This feature requires SpikeInterface. Install it with '
+    "'pip install ibl_alignment_gui[spikeinterface]'."
 )
 
 
@@ -44,3 +50,16 @@ def has_allen() -> bool:
         True if ``aind_data_access_api`` is installed, False otherwise.
     """
     return importlib.util.find_spec('aind_data_access_api') is not None
+
+
+def has_spikeinterface() -> bool:
+    """Return whether SpikeInterface is importable.
+
+    Uses ``importlib.util.find_spec`` so the check does not import the heavy dependencies.
+
+    Returns
+    -------
+    bool
+        True if ``spikeinterface`` is installed, False otherwise.
+    """
+    return importlib.util.find_spec('spikeinterface') is not None

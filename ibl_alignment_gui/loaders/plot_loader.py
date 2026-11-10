@@ -601,8 +601,11 @@ class PlotLoader:
         -----
         This method sets the following attributes:
 
+        self.raster_idx : np.ndarray
+            Boolean mask of the spikes used for the spike-based images. Spikes localised below
+            the probe tip (depth < 0) are left out.
         self.chn_min_bc : float
-            Minimum depth boundary including spike depths.
+            Minimum depth boundary including spike depths. The images are binned from here.
         self.chn_max_bc : float
             Maximum depth boundary including spike depths.
         self.fr : np.ndarray
@@ -614,13 +617,19 @@ class PlotLoader:
         self.depths : np.ndarray
             Depth values corresponding to bins.
         """
-        self.chn_min_bc = np.min(np.r_[self.chn_min, self.spike_depths])
-        self.chn_max_bc = np.max(np.r_[self.chn_max, self.spike_depths])
+        # Spikes localised below the probe tip are left out of the spike-based images
+        # Only the mask is kept, not filtered copies of the spike arrays
+        depths = self.spike_depths
+        self.raster_idx = depths >= 0
+        depths = depths[self.raster_idx]
+
+        self.chn_min_bc = np.min(np.r_[self.chn_min, depths])
+        self.chn_max_bc = np.max(np.r_[self.chn_max, depths])
 
         self.fr, self.amp, self.times, self.depths = compute_bincount(
-            self.spike_times,
-            self.spike_depths,
-            self.spike_amps,
+            self.spike_times[self.raster_idx],
+            depths,
+            self.spike_amps[self.raster_idx],
             ylim=[self.chn_min_bc, self.chn_max_bc],
         )
 
@@ -870,7 +879,8 @@ class PlotLoader:
             A dict containing a ImageData object with key 'Firing Rate'.
         """
         xscale = (self.times[-1] - self.times[0]) / self.fr.shape[1]
-        yscale = (self.depths[-1] - self.depths[0]) / self.fr.shape[0]
+        # Each row is one depth bin, starting at the lower limit of the binning
+        yscale = DBIN
         levels = np.nanquantile(np.mean(self.fr.T, axis=0), [0, 1])
 
         img = ImageData(
@@ -878,7 +888,7 @@ class PlotLoader:
             scale=np.array([xscale, yscale]),
             levels=levels,
             default_levels=np.copy(levels),
-            offset=np.array([self.times[0], self.chn_min]),
+            offset=np.array([self.times[0], self.chn_min_bc]),
             xrange=np.array([self.times[0], self.times[-1]]),
             xaxis='Time (s)',
             cmap='binary',
@@ -901,11 +911,11 @@ class PlotLoader:
         dbin = 40
         factor = int(dbin / DBIN)
         bincount = group_bincount(self.fr, factor, axis=0)
-        depths = self.depths[::factor]
 
         corr = np.corrcoef(bincount)
         corr[np.isnan(corr)] = 0
-        scale = (np.max(depths) - np.min(depths)) / corr.shape[0]
+        # Each row and column is one 40 um depth bin, starting at the lower limit of the binning
+        scale = dbin
         levels = np.array([np.min(corr), np.max(corr)])
 
         img = ImageData(
@@ -913,8 +923,8 @@ class PlotLoader:
             scale=np.array([scale, scale]),
             levels=levels,
             default_levels=np.copy(levels),
-            offset=np.array([self.chn_min, self.chn_min]),
-            xrange=np.array([self.chn_min, self.chn_max]),
+            offset=np.array([self.chn_min_bc, self.chn_min_bc]),
+            xrange=np.array([self.chn_min_bc, self.chn_max_bc]),
             cmap='viridis',
             title='Correlation',
             xaxis='Distance from probe tip (um)',
@@ -1098,10 +1108,12 @@ class PlotLoader:
         base_stim = 1
         pre_stim = 0.4
         post_stim = 1
+        d_bin = 20
         stim_events = passive.get_stim_aligned_activity(
             stims,
-            self.spike_times,
-            self.spike_depths,
+            self.spike_times[self.raster_idx],
+            self.spike_depths[self.raster_idx],
+            d_bin=d_bin,
             pre_stim=pre_stim,
             post_stim=post_stim,
             base_stim=base_stim,
@@ -1112,7 +1124,8 @@ class PlotLoader:
         passive_imgs = dict()
         for stim_type, aligned_img in stim_events.items():
             xscale = (post_stim + pre_stim) / aligned_img.shape[1]
-            yscale = (self.chn_max - self.chn_min) / aligned_img.shape[0]
+            # Each row is one depth bin, starting at the lower limit of the binning
+            yscale = d_bin
             levels = np.array([-10, 10])
 
             img = ImageData(
@@ -1120,7 +1133,7 @@ class PlotLoader:
                 scale=np.array([xscale, yscale]),
                 levels=levels,
                 default_levels=np.copy(levels),
-                offset=np.array([-1 * pre_stim, self.chn_min]),
+                offset=np.array([-1 * pre_stim, self.chn_min_bc]),
                 cmap='bwr',
                 xrange=np.array([-1 * pre_stim, post_stim]),
                 xaxis='Time from Stim Onset (s)',
@@ -1550,13 +1563,14 @@ class PlotLoader:
         )
 
         # Compute receptive field map over depth
+        d_bin = 160
         rf_map, _ = passive.get_rf_map_over_depth(
             rf_map_times,
             rf_map_pos,
             rf_stim_frames,
-            self.spike_times,
-            self.spike_depths,
-            d_bin=160,
+            self.spike_times[self.raster_idx],
+            self.spike_depths[self.raster_idx],
+            d_bin=d_bin,
             y_lim=[self.chn_min_bc, self.chn_max_bc],
         )
 
@@ -1566,10 +1580,10 @@ class PlotLoader:
         img['on'] = np.vstack(rfs_svd['on'])
         img['off'] = np.vstack(rfs_svd['off'])
 
-        # Scaling
-        yscale = (self.chn_max - self.chn_min) / img['on'].shape[0]
+        # Scaling, each row is one depth bin starting at the lower limit of the binning
+        yscale = d_bin
         xscale = 1
-        depths = np.linspace(self.chn_min, self.chn_max, len(rfs_svd['on']) + 1)
+        depths = self.chn_min_bc + np.arange(len(rfs_svd['on']) + 1) * d_bin
         levels = np.nanquantile(np.c_[img['on'], img['off']], [0, 1])
 
         data_img = dict()
@@ -1581,7 +1595,7 @@ class PlotLoader:
                     scale=np.array([xscale, yscale]),
                     levels=levels,
                     default_levels=np.copy(levels),
-                    offset=np.array([0, self.chn_min]),
+                    offset=np.array([0, self.chn_min_bc]),
                     cmap='viridis',
                     xrange=np.array([0, 15]),
                     title='rfmap (dB)',

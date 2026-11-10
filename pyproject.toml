@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "ibl_alignment_gui"
-version = "0.1.0a4"
+version = "0.1.0a5"
 description = "Electrophysiology alignment tool"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
@@ -50,6 +50,8 @@ allen = [
   "boto3",
   "antspyx",
 ]
+# SpikeInterface backend: load a SortingAnalyzer directly, without converting it to ALF.
+spikeinterface = ["spikeinterface>=0.105.4"]
 
 [project.urls]
 Changelog = "https://github.com/int-brain-lab/ibl-alignment-gui/blob/main/CHANGELOG.md"

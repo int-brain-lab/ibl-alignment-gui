@@ -70,9 +70,10 @@ jobs:
         run: uv run --no-sync pytest --cov --cov-report=term $PYTEST_DESELECT
 
   test-ibl:
-    # The IBL online mode (ONE/Alyx upload, raw-data streaming) is tested against ibllib, which
-    # is an optional extra; without it these tests are skipped in the job above.
-    name: Test with IBL extra
+    # The IBL online mode (ONE/Alyx upload, raw-data streaming) and the SpikeInterface backend
+    # are tested against ibllib and spikeinterface, which are optional extras; without them these
+    # tests are skipped in the job above.
+    name: Test with IBL and SpikeInterface extras
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -83,6 +84,6 @@ jobs:
       - name: install Qt system libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
       - name: sync dependencies
-        run: uv sync --locked --no-default-groups --group test --extra ibl
+        run: uv sync --locked --no-default-groups --group test --extra ibl --extra spikeinterface
       - name: run tests
         run: uv run --no-sync pytest --cov --cov-report=term $PYTEST_DESELECT

@@ -592,6 +592,10 @@ class GridTabSwitcher(QtWidgets.QWidget):
         self.panels = panels
         self.panel_names = list(names)
 
+        # Only show the row splitters needed for this number of panels. A previous session with
+        # more panels may already have added them to the grid
+        self.top_grid.setVisible(len(self.panels) > 1)
+        self.bottom_grid.setVisible(len(self.panels) > 2)
         if len(self.panels) > 1:
             self.grid_widget.addWidget(self.top_grid)
         if len(self.panels) > 2:
@@ -2350,11 +2354,14 @@ class SliderWidget(QtWidgets.QGroupBox):
         Whether the low and high values are shown in editable text fields.
     reset_button : QtWidgets.QPushButton
         The button to reset the levels.
+    drag_timer : QtCore.QTimer
+        Limits how often `released` is emitted while the slider is dragged.
 
     Signals
     -------
     released : QtCore.Signal(QtWidgets.QWidget, str)
-        Emitted when the slider is released. Returns the slider widget and its type.
+        Emitted when the slider is released, and at most every DRAG_INTERVAL ms while it is
+        dragged. Returns the slider widget and its type.
     reset : QtCore.Signal(QtWidgets.QWidget, str)
         Emitted when the reset button is pressed. Returns the slider widget and its type.
     levels_changed : QtCore.Signal(QtWidgets.QWidget, str)
@@ -2367,6 +2374,8 @@ class SliderWidget(QtWidgets.QGroupBox):
 
     # The prefix displayed in front of each of the values
     FIELDS = {'min': 'Min', 'max': 'Max', 'low': 'Low Val', 'high': 'High Val'}
+    # The minimum time in ms between updates while the slider is dragged
+    DRAG_INTERVAL = 100
 
     def __init__(
         self,
@@ -2393,6 +2402,12 @@ class SliderWidget(QtWidgets.QGroupBox):
         """Create the slider, labels, text fields and buttons."""
         self.slider = QRangeSlider(QtCore.Qt.Horizontal)
         self.slider.sliderReleased.connect(self.slider_released)
+        # While dragging, update at most every DRAG_INTERVAL ms rather than on every mouse move
+        self.drag_timer = QtCore.QTimer(self)
+        self.drag_timer.setSingleShot(True)
+        self.drag_timer.setInterval(self.DRAG_INTERVAL)
+        self.drag_timer.timeout.connect(self.slider_released)
+        self.slider.sliderMoved.connect(self.slider_moved)
         self.slider_labels = Bunch()
         self.slider_edits = Bunch()
         self.slider_labels['min'] = QtWidgets.QLabel('Min')
@@ -2461,8 +2476,15 @@ class SliderWidget(QtWidgets.QGroupBox):
 
         self.setLayout(layout)
 
+    def slider_moved(self) -> None:
+        """Schedule an update while the slider is dragged, unless one is already pending."""
+        if not self.drag_timer.isActive():
+            self.drag_timer.start()
+
     def slider_released(self) -> None:
         """Update the values from the slider positions and emit signal when slider is released."""
+        # A pending drag update is replaced by this one
+        self.drag_timer.stop()
         if self.intervals is not None:
             self.set_slider_values(
                 [self.intervals[self.slider.low()], self.intervals[self.slider.high()]]

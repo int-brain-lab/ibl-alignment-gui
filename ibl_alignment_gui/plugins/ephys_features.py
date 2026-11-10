@@ -393,6 +393,7 @@ class EphysFeatures:
     def __init__(self, title: str, controller: 'AlignmentGUIController'):
         self.controller = controller
         self.title = title
+        self.view: EphysFeatureView | None = None
         # Initialise pagination variables
         self.page_num: int = 0
         self.page_idx: int = 0
@@ -426,7 +427,11 @@ class EphysFeatures:
 
     def setup(self) -> None:
         """Set up the ephys features viewer and connect signals."""
-        self.view = EphysFeatureView._get_or_create(self.title, self.controller, step=self.step)
+        view = EphysFeatureView._get_or_create(self.title, self.controller, step=self.step)
+        # The window is already open and connected, _get_or_create has brought it to the front
+        if view is self.view:
+            return
+        self.view = view
         self.view.closed.connect(self.on_close)
 
         self.view.region_combobox.activated.connect(self.on_region_chosen)
@@ -503,9 +508,11 @@ class EphysFeatures:
         """
         Triggered when the plugin window is closed.
 
-        Deactivate the plugin and callbacks.
+        Deactivate the plugin and callbacks, and delete the window so it does not linger hidden.
         """
         self.controller.plugins[PLUGIN_NAME]['activated'] = False
+        self.view.deleteLater()
+        self.view = None
 
     @property
     def normalised(self) -> bool:
@@ -828,9 +835,17 @@ class EphysFeatures:
         self.load_data(self.current_pids)
         self.view.slider.set_slider_values(self.max_levels)
         self.plot_all(self.current_pids)
+        self.reselect_area()
 
-        if not self.normalised:
-            self.on_area_clicked(None, self.selected_idx)
+    def reselect_area(self) -> None:
+        """
+        Select the probe in the same column after the probes shown have changed.
+
+        If the page now has fewer probes, the last one is selected instead. Only applies in
+        non-normalised mode.
+        """
+        if not self.normalised and len(self.current_pids) > 0:
+            self.on_area_clicked(None, min(self.selected_idx, len(self.current_pids) - 1))
 
     def on_normalise_plots(self) -> None:
         """Normalise all plots to the same color scale."""
@@ -853,7 +868,7 @@ class EphysFeatures:
 
     def on_reset_levels(self) -> None:
         """Reset colour levels to default for the selected probe."""
-        if not self.normalised:
+        if not self.normalised and self.selected_pid is not None:
             selected = self.feature_data[self.plot_name][self.selected_pid]
             selected['levels'] = np.copy(selected['default_levels'])
             self.view.slider.set_slider_values(selected['levels'])
@@ -896,7 +911,7 @@ class EphysFeatures:
             self.levels = self.view.slider.get_slider_values()
             self.view.slider.set_slider_values(self.levels)
             self.plot_features(self.current_pids)
-        else:
+        elif self.selected_pid is not None:
             data = self.feature_data[self.plot_name][self.selected_pid]
             data['levels'] = self.view.slider.get_slider_values()
             self.view.slider.set_slider_values(data['levels'])
@@ -918,6 +933,7 @@ class EphysFeatures:
             self.current_pids = self.get_pids()
             self.load_data(self.current_pids)
             self.plot_all(self.current_pids)
+            self.reselect_area()
 
     def on_prev_page_pressed(self) -> None:
         """
@@ -932,6 +948,7 @@ class EphysFeatures:
             self.current_pids = self.get_pids()
             self.load_data(self.current_pids)
             self.plot_all(self.current_pids)
+            self.reselect_area()
 
     def update_page_label(self) -> None:
         """Update the label showing the current page index."""

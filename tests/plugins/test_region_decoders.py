@@ -1,7 +1,7 @@
 """Tests for the Hugging Face region decoders of the Channel Prediction plugin.
 
 They load the released decoders (``ephysatlas.load_pretrained``, each at its default release in
-``ephysatlas.models.DECODER_VINTAGES``) and run them on a small features fixture, so they are
+``ephysatlas.models.DECODER_VERSIONS``) and run them on a small features fixture, so they are
 skipped when ephysatlas or torch are not installed.
 """
 
@@ -52,7 +52,7 @@ class TestDecode(unittest.TestCase):
     """_decode with the features and run_decoder faked: the steps it reports."""
 
     def setUp(self):
-        self.model = SimpleNamespace(index={'vintage': 'V1'})
+        self.model = SimpleNamespace(index={'data_vintage': 'V1'})
         self.features = self.enterContext(
             patch.object(inference, 'features_for_vintage', return_value='features')
         )
@@ -86,7 +86,7 @@ class TestRunDecoder(unittest.TestCase):
     @staticmethod
     def _model(features: list[str], predict) -> SimpleNamespace:
         return SimpleNamespace(
-            inputs={'features': features}, index={'vintage': 'V1'}, predict=predict
+            inputs={'features': features}, index={'data_vintage': 'V1'}, predict=predict
         )
 
     def test_flat_table(self):
@@ -156,10 +156,10 @@ class TestRegionDecoders(unittest.TestCase):
     def setUpClass(cls):
         # Imported here so the module still imports (and skips) without ephysatlas installed.
         from ephysatlas import load_pretrained  # noqa: PLC0415
-        from ephysatlas.models import DECODER_VINTAGES  # noqa: PLC0415
+        from ephysatlas.models import DECODER_VERSIONS  # noqa: PLC0415
 
         cls.models = {
-            name: load_pretrained(decoder.repo, revision=DECODER_VINTAGES[decoder.repo])
+            name: load_pretrained(decoder.repo, revision=DECODER_VERSIONS[decoder.repo])
             for name, decoder in inference.DECODERS.items()
         }
         cls.controller = _fake_controller(cls.models)
@@ -230,7 +230,7 @@ class TestRegionDecoders(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn(
                     'You have features of vintage 2026_W39, but the selected release of the '
-                    f'model requires features of vintage {model.index["vintage"]}.',
+                    f'model requires features of vintage {model.index["data_vintage"]}.',
                     message,
                 )
                 self.assertIn('trained on features of vintage 2026_W39', message)

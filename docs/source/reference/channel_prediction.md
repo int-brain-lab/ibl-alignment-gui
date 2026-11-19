@@ -17,7 +17,7 @@ Each model is loaded with `ephysatlas.load_pretrained`, from a Hugging Face repo
 tag or from a local release directory holding an `ephysatlas_model.json`. A downloaded release is
 cached in `~/.cache/ephysatlas/models`; a local release takes precedence over the Hub.
 
-A release whose `ephysatlas_model.json` names no `vintage` is refused, because the features to run
+A release whose `ephysatlas_model.json` names no `data_vintage` is refused, because the features to run
 it on are unknown.
 
 ## Menu entries
@@ -54,7 +54,7 @@ The features must be of the model's vintage. A local features file that records 
 only its columns are checked. Missing columns are reported when the model runs. If
 the Alyx table of the model's vintage has no features for the insertion, the model reports it
 instead of running on another vintage's features, and suggests a release of the model trained on
-the session's vintage. The vintage a release was trained on is the `vintage` in its
+the session's vintage. The vintage a release was trained on is the `data_vintage` in its
 `ephysatlas_model.json`, not its release tag.
 
 ## Results

@@ -99,10 +99,10 @@ DECODER_NOTE = (
 
 
 def _default_source(repo: str) -> tuple[str, str]:
-    """Return a decoder's default repository and release tag, from ephysatlas."""
-    from ephysatlas.models import DECODER_VINTAGES  # noqa: PLC0415 - heavy, lazy
+    """Return a decoder's default repository and release tag (model version), from ephysatlas."""
+    from ephysatlas.models import DECODER_VERSIONS  # noqa: PLC0415 - heavy, lazy
 
-    return repo, DECODER_VINTAGES[repo]
+    return repo, DECODER_VERSIONS[repo]
 
 
 def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None]):
@@ -130,7 +130,7 @@ def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None
     logger.info(
         'Loaded region decoder %s %s (%d features, %d classes)',
         model.index.get('model_class'),
-        model.index.get('vintage'),
+        model.index.get('data_vintage'),
         len(model.inputs['features']),
         len(model.config['classes']),
     )
@@ -237,7 +237,7 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
         if not missing:  # not a missing feature: an error in the model, for the safety net
             raise
         raise missing_features_error(
-            missing, model.index.get('vintage'), features_vintage(df), model_release(model)
+            missing, model_vintage(model.index), features_vintage(df), model_release(model)
         ) from exc
     # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
     # that were predicted.

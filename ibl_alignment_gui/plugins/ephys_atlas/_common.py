@@ -189,7 +189,7 @@ NO_FEATURES_MESSAGE = (
 
 
 def model_vintage(index: dict | None) -> str:
-    """Return the feature vintage a model release was trained on (its manifest ``vintage``).
+    """Return the feature vintage a model release was trained on (its manifest ``data_vintage``).
 
     Parameters
     ----------
@@ -206,11 +206,12 @@ def model_vintage(index: dict | None) -> str:
     PredictionError
         If the manifest does not name one.
     """
-    vintage = (index or {}).get('vintage')
+    vintage = (index or {}).get('data_vintage')
     if not vintage:
         raise PredictionError(
             "The model's release does not say which feature vintage it was trained on (no "
-            "'vintage' in its ephysatlas_model.json), so the features to run it on are unknown."
+            "'data_vintage' in its ephysatlas_model.json), so the features to run it on are "
+            'unknown.'
         )
     return vintage
 
@@ -287,10 +288,10 @@ def vintage_error(
     """Return the error for features that do not match the vintage a model was trained on.
 
     The error states the features' vintage and the one the selected release requires (the
-    ``vintage`` in its manifest), then the two ways out: load a release trained on the features'
-    vintage, or re-extract the features with the release's vintage. A release tag names the
-    model, not the features it was trained on (a ``2026_W45`` release can be trained on
-    ``2026_W42`` features), so the error points to the manifest rather than to a tag.
+    ``data_vintage`` in its manifest), then the two ways out: load a release trained on the
+    features' vintage, or re-extract the features with the release's vintage. A release tag names
+    the model (its version, e.g. ``0.0.1``), not the features it was trained on (e.g.
+    ``2026_W42``), so the error points to the manifest rather than to a tag.
 
     Parameters
     ----------
@@ -326,7 +327,7 @@ def vintage_error(
         f'{prefix}{summary}{" " + note if note else ""}\n\n'
         'You can either:\n\n'
         f'1. Load a release of the model trained on {trained_on}: Plugins -> Channel Prediction '
-        f"-> Load ... model. The vintage each release requires is the 'vintage' in its "
+        f"-> Load ... model. The vintage each release requires is the 'data_vintage' in its "
         f'{MANIFEST}{example}.\n\n'
         f'2. Re-extract your features with vintage {vintage}.'
     )

@@ -3,12 +3,12 @@
 
 This guide shows you how to get a model running when it reports that your features don't match it.
 
-A model can only run on features of the vintage it was trained on, the `vintage` in its release's
+A model can only run on features of the vintage it was trained on, the `data_vintage` in its release's
 `ephysatlas_model.json`. The error names the vintage of your features, when they record it, and the
 vintage the selected release requires, for example:
 
 ```text
-You have features of vintage 2026_W26, but the selected release 2026_W45 of the model
+You have features of vintage 2026_W26, but the selected release 0.0.1 of the model
 int-brain-lab/ea-encoder-channel requires features of vintage 2026_W42.
 
 You can either:
@@ -26,7 +26,7 @@ Choose one of:
 
 1. Find the vintage of your features. If the file records it, the error names it.
 2. Find a release of the model trained on that vintage: one whose `ephysatlas_model.json` gives it
-   as `vintage`. The release tag names the model, not its features, so it need not be the vintage.
+   as `data_vintage`. The release tag is the model version, not the vintage of its features.
 3. Load that release from `Plugins → Channel Prediction → Load … model` (see
    {ref}`howto-choose-model-release`).
 
@@ -38,7 +38,7 @@ Choose one of:
 2. Point the session at the new file, and load the session again (see
    {ref}`howto-give-shanks-features`).
 
-A model release whose `ephysatlas_model.json` names no `vintage` cannot be run. Use another release.
+A model release whose `ephysatlas_model.json` names no `data_vintage` cannot be run. Use another release.
 
 ## Related
 

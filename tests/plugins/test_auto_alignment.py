@@ -240,7 +240,7 @@ class TestAlignShank(unittest.TestCase):
 
 def _fake_model(vintage: str | None = '2026_W39') -> SimpleNamespace:
     """An alignment model with two features."""
-    index = {'vintage': vintage} if vintage else {}
+    index = {'data_vintage': vintage} if vintage else {}
     return SimpleNamespace(encoder=SimpleNamespace(index=index), features=['a', 'b'])
 
 

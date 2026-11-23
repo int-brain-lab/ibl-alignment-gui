@@ -87,7 +87,7 @@ class _ModelLoadingTests:
         self.load_error = None  # raised by the fake loader when set
         # Has what both backends read from a loaded model.
         self.model = SimpleNamespace(
-            index={'model_class': 'FakeModel', 'vintage': '2026_W40'},
+            index={'model_class': 'FakeModel', 'data_vintage': '2026_W40'},
             inputs={'features': ['a']},
             config={'classes': [1]},
             conf_model=object(),
@@ -402,7 +402,7 @@ class TestDecoderModelLoading(_LoadingFlowTests, _ModelLoadingTests, unittest.Te
         ephysatlas = types.ModuleType('ephysatlas')
         ephysatlas.load_pretrained = lambda repo, revision=None: self._fake_load(repo, revision)
         models = types.ModuleType('ephysatlas.models')
-        models.DECODER_VINTAGES = {self.default_repo: self.default_revision}
+        models.DECODER_VERSIONS = {self.default_repo: self.default_revision}
         stubs = {'ephysatlas': ephysatlas, 'ephysatlas.models': models}
         self.enterContext(patch.dict(sys.modules, stubs))
 

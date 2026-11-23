@@ -99,10 +99,10 @@ DECODER_NOTE = (
 
 
 def _default_source(repo: str) -> tuple[str, str]:
-    """Return a decoder's default repository and release tag, from ephysatlas."""
-    from ephysatlas.models import DECODER_VINTAGES  # noqa: PLC0415 - heavy, lazy
+    """Return a decoder's default repository and release tag (model version), from ephysatlas."""
+    from ephysatlas.models import DECODER_VERSIONS  # noqa: PLC0415 - heavy, lazy
 
-    return repo, DECODER_VINTAGES[repo]
+    return repo, DECODER_VERSIONS[repo]
 
 
 def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None]):
@@ -120,6 +120,12 @@ def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None
     -------
     RegionClassifier or ProbeTransformerClassifier
         The model returned by ``ephysatlas.load_pretrained``.
+
+    Raises
+    ------
+    PredictionError
+        If the release's manifest has no ``data_vintage`` (a release from before the model
+        versions), refused here as the alignment model is, rather than when it is run.
     """
     from ephysatlas import load_pretrained  # noqa: PLC0415 - heavy, lazy
 
@@ -127,10 +133,11 @@ def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None
     progress(0.1, f'Loading {repo}@{revision} (downloaded on first use)…')
     # A Hub repo id or a local release directory; the manifest picks the model class.
     model = load_pretrained(repo, revision=revision)
+    vintage = model_vintage(model.index)
     logger.info(
         'Loaded region decoder %s %s (%d features, %d classes)',
         model.index.get('model_class'),
-        model.index.get('vintage'),
+        vintage,
         len(model.inputs['features']),
         len(model.config['classes']),
     )
@@ -237,7 +244,7 @@ def run_decoder(model, df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
         if not missing:  # not a missing feature: an error in the model, for the safety net
             raise
         raise missing_features_error(
-            missing, model.index.get('vintage'), features_vintage(df), model_release(model)
+            missing, model_vintage(model.index), features_vintage(df), model_release(model)
         ) from exc
     # The ProbeTransformer drops channels with non-finite features: take the depths of the rows
     # that were predicted.

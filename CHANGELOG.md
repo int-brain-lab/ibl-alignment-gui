@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0a6] - 2026-11-23
+
+### Changed
+- Every model runs on the features of the `data_vintage` in its `ephysatlas_model.json`, with no
+  fallback to the former `vintage`: the releases tagged by vintage (`2026_W39`, ...) can no longer be
+  run. Use release `0.0.1` or later.
+- The region decoders load release `0.0.1` by default (`ephysatlas.models.DECODER_VERSIONS`), as the
+  alignment model already did: a release tag is the model's version, not a feature vintage.
+- Both changes need ibleatools 0.16.0.
+
 ## [0.1.0a5] - 2026-11-09
 
 ### Added

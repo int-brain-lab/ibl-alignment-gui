@@ -247,13 +247,16 @@ class TestGetFeaturesDf(unittest.TestCase):
 
 class TestModelVintage(unittest.TestCase):
     def test_manifest_vintage(self):
-        """The vintage is read from the release's manifest"""
-        self.assertEqual(model_vintage({'vintage': '2026_W39'}), '2026_W39')
+        """The vintage is the release manifest's data_vintage"""
+        self.assertEqual(model_vintage({'data_vintage': '2026_W39'}), '2026_W39')
 
     def test_no_vintage_refused(self):
-        """A release whose manifest names no vintage is refused"""
-        for index in (None, {}, {'vintage': ''}):
-            with self.subTest(index=index), self.assertRaisesRegex(PredictionError, 'vintage'):
+        """A release whose manifest names no data_vintage is refused, with no fallback"""
+        for index in (None, {}, {'data_vintage': ''}, {'vintage': '2026_W39'}):
+            with (
+                self.subTest(index=index),
+                self.assertRaisesRegex(PredictionError, 'data_vintage'),
+            ):
                 model_vintage(index)
 
 
@@ -266,9 +269,10 @@ class TestMissingFeaturesError(unittest.TestCase):
             "Features file is missing required column(s): ['a', 'b']\n\n"
             'The selected release of the model requires features of vintage 2026_W39.\n\n'
             'You can either:\n\n'
-            '1. Load a release of the model trained on the vintage of your features: Plugins -> '
-            'Channel Prediction -> Load ... model. The vintage each release requires is the '
-            "'vintage' in its ephysatlas_model.json.\n\n"
+            '1. Load a release of the model trained on the vintage of your features, if one has '
+            'been published (releases before 0.0.1 cannot be run): Plugins -> Channel Prediction '
+            "-> Load ... model. The vintage each release requires is the 'data_vintage' in its "
+            'ephysatlas_model.json.\n\n'
             '2. Re-extract your features with vintage 2026_W39.',
         )
 

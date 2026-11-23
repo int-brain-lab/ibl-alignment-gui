@@ -33,6 +33,7 @@ from ibl_alignment_gui.app.load_worker import TaskCancelledError
 from ibl_alignment_gui.plugins.ephys_atlas._common import (
     AUTO_ALIGNMENT_CONFIDENCE_KEY,
     AUTO_ALIGNMENT_KEY,
+    NO_DATA_VINTAGE_MESSAGE,
     NO_FEATURES_MESSAGE,
     ModelSpec,
     PredictionError,
@@ -100,11 +101,24 @@ def _load_encoder(source: tuple[str, str], progress) -> ChannelModel:
     -------
     ChannelModel
         The loaded model.
+
+    Raises
+    ------
+    PredictionError
+        If the release's manifest has no ``data_vintage``, as for the releases tagged by vintage
+        (e.g. ``2026_W39``) before the model versions.
     """
     from ephysatlas.alignment import ChannelModel  # noqa: PLC0415 - heavy, lazy
 
     progress(0.1, f'Loading {source[0]}@{source[1]} (downloaded on first use)…')
-    model = ChannelModel(*source)  # ephysatlas.load_pretrained(repo_id, revision=...)
+    try:
+        model = ChannelModel(*source)  # ephysatlas.load_pretrained(repo_id, revision=...)
+    except KeyError as exc:
+        # ChannelModel reads the manifest's data_vintage as it loads, so a release from before the
+        # model versions fails there, before model_vintage can refuse it.
+        if exc.args != ('data_vintage',):
+            raise
+        raise PredictionError(NO_DATA_VINTAGE_MESSAGE) from exc
     progress(0.8, 'Loading the probe-confidence model…')
     _ = model.conf_model
     progress(1.0, 'Model ready')

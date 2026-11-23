@@ -188,6 +188,15 @@ NO_FEATURES_MESSAGE = (
 )
 
 
+MANIFEST = 'ephysatlas_model.json'
+
+NO_DATA_VINTAGE_MESSAGE = (
+    f"The release has no 'data_vintage' in its {MANIFEST}, so the features to run it on are "
+    'unknown. It is a release from before the model versions (e.g. 2026_W39), which cannot be '
+    'run. Load release 0.0.1 or later.'
+)
+
+
 def model_vintage(index: dict | None) -> str:
     """Return the feature vintage a model release was trained on (its manifest ``data_vintage``).
 
@@ -208,11 +217,7 @@ def model_vintage(index: dict | None) -> str:
     """
     vintage = (index or {}).get('data_vintage')
     if not vintage:
-        raise PredictionError(
-            "The model's release does not say which feature vintage it was trained on (no "
-            "'data_vintage' in its ephysatlas_model.json), so the features to run it on are "
-            'unknown.'
-        )
+        raise PredictionError(NO_DATA_VINTAGE_MESSAGE)
     return vintage
 
 
@@ -236,9 +241,6 @@ def features_vintage(df: pd.DataFrame) -> str | None:
     return df.attrs.get('features_version') or None
 
 
-MANIFEST = 'ephysatlas_model.json'
-
-
 def model_release(model) -> tuple[str, str] | None:
     """Return the ``(repo_id_or_directory, revision)`` a model was loaded from, if known.
 
@@ -258,7 +260,7 @@ def model_release(model) -> tuple[str, str] | None:
 
 
 def _release_name(release: tuple[str, str] | None) -> str:
-    """Name the selected release in an error, e.g. 'the selected release 2026_W45 of the model'."""
+    """Name the selected release in an error, e.g. 'the selected release 0.0.1 of the model'."""
     if release is None:
         return 'the selected release of the model'
     repo, revision = release
@@ -289,9 +291,9 @@ def vintage_error(
 
     The error states the features' vintage and the one the selected release requires (the
     ``data_vintage`` in its manifest), then the two ways out: load a release trained on the
-    features' vintage, or re-extract the features with the release's vintage. A release tag names
-    the model (its version, e.g. ``0.0.1``), not the features it was trained on (e.g.
-    ``2026_W42``), so the error points to the manifest rather than to a tag.
+    features' vintage, if one has been published, or re-extract the features with the release's
+    vintage. A release tag names the model (its version, e.g. ``0.0.1``), not the features it was
+    trained on (e.g. ``2026_W42``), so the error points to the manifest rather than to a tag.
 
     Parameters
     ----------
@@ -326,9 +328,9 @@ def vintage_error(
     message = (
         f'{prefix}{summary}{" " + note if note else ""}\n\n'
         'You can either:\n\n'
-        f'1. Load a release of the model trained on {trained_on}: Plugins -> Channel Prediction '
-        f"-> Load ... model. The vintage each release requires is the 'data_vintage' in its "
-        f'{MANIFEST}{example}.\n\n'
+        f'1. Load a release of the model trained on {trained_on}, if one has been published '
+        '(releases before 0.0.1 cannot be run): Plugins -> Channel Prediction -> Load ... model. '
+        f"The vintage each release requires is the 'data_vintage' in its {MANIFEST}{example}.\n\n"
         f'2. Re-extract your features with vintage {vintage}.'
     )
     return PredictionError(message)

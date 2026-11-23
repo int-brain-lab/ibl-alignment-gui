@@ -13,7 +13,8 @@ int-brain-lab/ea-encoder-channel requires features of vintage 2026_W42.
 
 You can either:
 
-1. Load a release of the model trained on features of vintage 2026_W26: ...
+1. Load a release of the model trained on features of vintage 2026_W26, if one has been
+   published (releases before 0.0.1 cannot be run): ...
 
 2. Re-extract your features with vintage 2026_W42.
 ```
@@ -24,9 +25,13 @@ Choose one of:
 
 **Use a model release that matches your features**
 
+This only works if a release of the model, `0.0.1` or later, has been published for the vintage
+of your features. If none has, compute the features again instead.
+
 1. Find the vintage of your features. If the file records it, the error names it.
-2. Find a release of the model trained on that vintage: one whose `ephysatlas_model.json` gives it
-   as `data_vintage`. The release tag is the model version, not the vintage of its features.
+2. Find a release of the model, `0.0.1` or later, trained on that vintage: one whose
+   `ephysatlas_model.json` gives it as `data_vintage`. The release tag is the model version, not
+   the vintage of its features.
 3. Load that release from `Plugins → Channel Prediction → Load … model` (see
    {ref}`howto-choose-model-release`).
 

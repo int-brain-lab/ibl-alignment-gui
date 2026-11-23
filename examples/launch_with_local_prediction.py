@@ -23,9 +23,9 @@ Run with::
 
     python launch_with_local_prediction.py \
         --yaml /path/to/session/alignment_gui_probe00.yaml \
-        --model-dir /path/to/ea-decoder-channel-xgboost/<vintage> \
-        --model-dir /path/to/ea-decoder-channel-transformer/<vintage> \
-        --model-dir /path/to/ea-encoder-channel/<vintage>
+        --model-dir /path/to/ea-decoder-channel-xgboost/<version> \
+        --model-dir /path/to/ea-decoder-channel-transformer/<version> \
+        --model-dir /path/to/ea-encoder-channel/<version>
 
 ``--model-dir`` is a local release directory (it holds ``ephysatlas_model.json``) and can be given
 once per model: the release's manifest ``model_class`` tells which model it is -- the XGBoost or

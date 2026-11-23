@@ -120,6 +120,12 @@ def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None
     -------
     RegionClassifier or ProbeTransformerClassifier
         The model returned by ``ephysatlas.load_pretrained``.
+
+    Raises
+    ------
+    PredictionError
+        If the release's manifest has no ``data_vintage`` (a release from before the model
+        versions), refused here as the alignment model is, rather than when it is run.
     """
     from ephysatlas import load_pretrained  # noqa: PLC0415 - heavy, lazy
 
@@ -127,10 +133,11 @@ def _load_decoder(source: tuple[str, str], progress: Callable[[float, str], None
     progress(0.1, f'Loading {repo}@{revision} (downloaded on first use)…')
     # A Hub repo id or a local release directory; the manifest picks the model class.
     model = load_pretrained(repo, revision=revision)
+    vintage = model_vintage(model.index)
     logger.info(
         'Loaded region decoder %s %s (%d features, %d classes)',
         model.index.get('model_class'),
-        model.index.get('data_vintage'),
+        vintage,
         len(model.inputs['features']),
         len(model.config['classes']),
     )

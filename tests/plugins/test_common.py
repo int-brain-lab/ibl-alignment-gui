@@ -269,9 +269,10 @@ class TestMissingFeaturesError(unittest.TestCase):
             "Features file is missing required column(s): ['a', 'b']\n\n"
             'The selected release of the model requires features of vintage 2026_W39.\n\n'
             'You can either:\n\n'
-            '1. Load a release of the model trained on the vintage of your features: Plugins -> '
-            'Channel Prediction -> Load ... model. The vintage each release requires is the '
-            "'data_vintage' in its ephysatlas_model.json.\n\n"
+            '1. Load a release of the model trained on the vintage of your features, if one has '
+            'been published (releases before 0.0.1 cannot be run): Plugins -> Channel Prediction '
+            "-> Load ... model. The vintage each release requires is the 'data_vintage' in its "
+            'ephysatlas_model.json.\n\n'
             '2. Re-extract your features with vintage 2026_W39.',
         )
 
